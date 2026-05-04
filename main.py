@@ -4,6 +4,8 @@ TinyOne: single-file stdlib-only compiler/VM/JIT implementation.
 
 Language:
     let x = 1 + 2 * 3
+    while x < 10 { let x = x + 1 }
+    fn double(n) { return n * 2 }
     print x
 
 Design constraints:
@@ -12,7 +14,7 @@ Design constraints:
     - Maintainable Python implementation
 
 Runtime model:
-    Source -> tokens -> bytecode -> [peephole] -> [verify] -> VM or locals-JIT.
+    Source -> tokens -> bytecode -> [peephole] -> [verify] -> VM or JIT.
 
 Memory model:
     TinyMemory is an arena of integer slots addressed by Slot handles. Runtime
@@ -20,19 +22,20 @@ Memory model:
     to compile-time symbol interning.
 
 JIT model:
-    Stack depth is resolved at codegen time. Each virtual stack slot maps to a
-    named Python local (_s0, _s1, ...). The emitted function contains only
-    LOAD_FAST/STORE_FAST accesses — no list operations appear in the hot path.
+    Branch-free main programs keep the locals-based path: each virtual stack
+    slot maps to a named Python local (_s0, _s1, ...). Programs with loops or
+    functions use generated Python dispatch code so absolute branch targets and
+    calls remain bytecode-compatible with the VM.
 
 Optimization:
-    PeepholeOptimizer folds PUSH_INT + PUSH_INT + <binop> into a single
-    PUSH_INT, running to convergence. Folding happens before verification and
-    before JIT codegen, reducing both instruction count and emitted locals.
+    PeepholeOptimizer folds PUSH_INT + PUSH_INT + <binop/cmp> into a single
+    PUSH_INT in branch-free chunks, running to convergence. Folding happens
+    before verification and before JIT codegen.
 
 Verification:
-    BytecodeVerifier performs an O(n) static stack-depth check before any
-    execution. Stack imbalance is a compile-time error, not a runtime error.
-    This allows the JIT to omit the runtime stack-balance guard.
+    BytecodeVerifier performs a static control-flow-aware stack-depth check
+    before any execution. Stack imbalance is a compile-time error, not a
+    runtime error.
 """
 
 from __future__ import annotations
@@ -68,14 +71,26 @@ class TokenKind(IntEnum):
     IDENT = 2
     LET = 3
     PRINT = 4
-    PLUS = 5
-    MINUS = 6
-    STAR = 7
-    SLASH = 8
-    EQUAL = 9
-    LPAREN = 10
-    RPAREN = 11
-    EOF = 12
+    FN = 5
+    RETURN = 6
+    WHILE = 7
+    PLUS = 8
+    MINUS = 9
+    STAR = 10
+    SLASH = 11
+    EQUAL = 12
+    EQEQ = 13
+    BANG_EQUAL = 14
+    LT = 15
+    LTE = 16
+    GT = 17
+    GTE = 18
+    LPAREN = 19
+    RPAREN = 20
+    LBRACE = 21
+    RBRACE = 22
+    COMMA = 23
+    EOF = 24
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +103,16 @@ class Token:
 _KEYWORDS: Final[dict[str, TokenKind]] = {
     "let": TokenKind.LET,
     "print": TokenKind.PRINT,
+    "fn": TokenKind.FN,
+    "return": TokenKind.RETURN,
+    "while": TokenKind.WHILE,
+}
+
+_TWO_CHAR_TOKENS: Final[dict[str, TokenKind]] = {
+    "==": TokenKind.EQEQ,
+    "!=": TokenKind.BANG_EQUAL,
+    "<=": TokenKind.LTE,
+    ">=": TokenKind.GTE,
 }
 
 _SINGLE_CHAR_TOKENS: Final[dict[str, TokenKind]] = {
@@ -96,8 +121,13 @@ _SINGLE_CHAR_TOKENS: Final[dict[str, TokenKind]] = {
     "*": TokenKind.STAR,
     "/": TokenKind.SLASH,
     "=": TokenKind.EQUAL,
+    "<": TokenKind.LT,
+    ">": TokenKind.GT,
     "(": TokenKind.LPAREN,
     ")": TokenKind.RPAREN,
+    "{": TokenKind.LBRACE,
+    "}": TokenKind.RBRACE,
+    ",": TokenKind.COMMA,
 }
 
 
@@ -145,6 +175,14 @@ class Lexer:
                 append(Token(_KEYWORDS.get(text, TokenKind.IDENT), text, start))
                 continue
 
+            if pos + 1 < length:
+                pair = source[pos : pos + 2]
+                kind = _TWO_CHAR_TOKENS.get(pair)
+                if kind is not None:
+                    append(Token(kind, pair, pos))
+                    pos += 2
+                    continue
+
             kind = _SINGLE_CHAR_TOKENS.get(ch)
             if kind is None:
                 raise CompileError(f"Unexpected character {ch!r} at position {pos}")
@@ -166,13 +204,33 @@ class Op(IntEnum):
     DIV = 7
     NEG = 8
     PRINT = 9
-    HALT = 10
+    LT = 10
+    LTE = 11
+    GT = 12
+    GTE = 13
+    EQ = 14
+    NE = 15
+    JUMP = 16
+    JUMP_IF_ZERO = 17
+    CALL = 18
+    RETURN = 19
+    HALT = 20
 
 
 @dataclass(frozen=True, slots=True)
 class Instr:
     op: Op
     arg: int = 0
+    arg2: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class Function:
+    name: str
+    param_count: int
+    code: tuple[Instr, ...]
+    slot_count: int
+    names: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,15 +238,33 @@ class Program:
     code: tuple[Instr, ...]
     slot_count: int
     names: tuple[str, ...]
+    functions: tuple[Function, ...] = ()
 
     @property
     def fingerprint(self) -> str:
         hasher = hashlib.blake2b(digest_size=16)
-        for instr in self.code:
+        self._hash_code(hasher, self.code)
+        hasher.update(self.slot_count.to_bytes(8, "little", signed=False))
+        for name in self.names:
+            encoded = name.encode("utf-8")
+            hasher.update(len(encoded).to_bytes(4, "little", signed=False))
+            hasher.update(encoded)
+        hasher.update(len(self.functions).to_bytes(8, "little", signed=False))
+        for function in self.functions:
+            encoded_name = function.name.encode("utf-8")
+            hasher.update(len(encoded_name).to_bytes(4, "little", signed=False))
+            hasher.update(encoded_name)
+            hasher.update(function.param_count.to_bytes(8, "little", signed=False))
+            hasher.update(function.slot_count.to_bytes(8, "little", signed=False))
+            self._hash_code(hasher, function.code)
+        return hasher.hexdigest()
+
+    @staticmethod
+    def _hash_code(hasher: object, code: tuple[Instr, ...]) -> None:
+        for instr in code:
             hasher.update(int(instr.op).to_bytes(2, "little", signed=False))
             hasher.update(int(instr.arg).to_bytes(16, "little", signed=True))
-        hasher.update(self.slot_count.to_bytes(8, "little", signed=False))
-        return hasher.hexdigest()
+            hasher.update(int(instr.arg2).to_bytes(16, "little", signed=True))
 
 
 class SymbolTable:
@@ -227,7 +303,17 @@ class SymbolTable:
 class Compiler:
     """Recursive-descent parser that emits stack-machine bytecode."""
 
-    __slots__ = ("_tokens", "_index", "_current", "_symbols", "_code")
+    __slots__ = (
+        "_tokens",
+        "_index",
+        "_current",
+        "_symbols",
+        "_code",
+        "_function_indexes",
+        "_function_names",
+        "_functions",
+        "_in_function",
+    )
 
     def __init__(self, source: str) -> None:
         self._tokens = Lexer(source).tokenize()
@@ -235,12 +321,24 @@ class Compiler:
         self._current = self._tokens[0]
         self._symbols = SymbolTable()
         self._code: list[Instr] = []
+        self._function_indexes: dict[str, int] = {}
+        self._function_names: list[str] = []
+        self._functions: list[Function | None] = []
+        self._in_function = False
 
     def compile(self) -> Program:
         while self._current.kind != TokenKind.EOF:
-            self._statement()
+            if self._current.kind == TokenKind.FN:
+                self._function_definition()
+            else:
+                self._statement()
         self._emit(Op.HALT)
-        return Program(tuple(self._code), self._symbols.slot_count, self._symbols.names)
+        return Program(
+            tuple(self._code),
+            self._symbols.slot_count,
+            self._symbols.names,
+            self._resolved_functions(),
+        )
 
     def _statement(self) -> None:
         kind = self._current.kind
@@ -250,6 +348,17 @@ class Compiler:
         if kind == TokenKind.PRINT:
             self._print_statement()
             return
+        if kind == TokenKind.WHILE:
+            self._while_statement()
+            return
+        if kind == TokenKind.RETURN:
+            self._return_statement()
+            return
+        if kind == TokenKind.FN:
+            raise CompileError(
+                "Function definitions are only allowed at top level "
+                f"at position {self._current.pos}"
+            )
         raise CompileError(f"Expected statement at position {self._current.pos}")
 
     def _let_statement(self) -> None:
@@ -268,7 +377,106 @@ class Compiler:
         self._expression()
         self._emit(Op.PRINT)
 
+    def _while_statement(self) -> None:
+        self._eat(TokenKind.WHILE)
+        loop_start = len(self._code)
+        self._expression()
+        exit_jump = self._emit_placeholder(Op.JUMP_IF_ZERO)
+        self._block()
+        self._emit(Op.JUMP, loop_start)
+        self._patch(exit_jump, len(self._code))
+
+    def _return_statement(self) -> None:
+        if not self._in_function:
+            raise CompileError(f"Return outside function at position {self._current.pos}")
+        self._eat(TokenKind.RETURN)
+        self._expression()
+        self._emit(Op.RETURN)
+
+    def _function_definition(self) -> None:
+        self._eat(TokenKind.FN)
+        name = self._current.text
+        name_pos = self._current.pos
+        self._eat(TokenKind.IDENT)
+        function_index = self._function_index(name)
+        if self._functions[function_index] is not None:
+            raise CompileError(f"Function {name!r} is already defined at position {name_pos}")
+
+        function_symbols = SymbolTable()
+        self._eat(TokenKind.LPAREN)
+        param_count = 0
+        if self._current.kind != TokenKind.RPAREN:
+            while True:
+                param_name = self._current.text
+                param_pos = self._current.pos
+                self._eat(TokenKind.IDENT)
+                slot = function_symbols.define_or_get(param_name)
+                if int(slot) != param_count:
+                    raise CompileError(
+                        f"Duplicate parameter {param_name!r} at position {param_pos}"
+                    )
+                param_count += 1
+                if self._current.kind != TokenKind.COMMA:
+                    break
+                self._eat(TokenKind.COMMA)
+        self._eat(TokenKind.RPAREN)
+
+        previous_symbols = self._symbols
+        previous_code = self._code
+        previous_in_function = self._in_function
+        self._symbols = function_symbols
+        self._code = []
+        self._in_function = True
+        try:
+            self._block()
+            self._emit(Op.PUSH_INT, 0)
+            self._emit(Op.RETURN)
+            function = Function(
+                name,
+                param_count,
+                tuple(self._code),
+                self._symbols.slot_count,
+                self._symbols.names,
+            )
+        finally:
+            self._symbols = previous_symbols
+            self._code = previous_code
+            self._in_function = previous_in_function
+
+        self._functions[function_index] = function
+        LOGGER.debug(
+            "compiled function",
+            extra={"name": name, "index": function_index, "params": param_count},
+        )
+
+    def _block(self) -> None:
+        self._eat(TokenKind.LBRACE)
+        while self._current.kind != TokenKind.RBRACE:
+            if self._current.kind == TokenKind.EOF:
+                raise CompileError(f"Unterminated block at position {self._current.pos}")
+            self._statement()
+        self._eat(TokenKind.RBRACE)
+
     def _expression(self) -> None:
+        self._comparison()
+
+    def _comparison(self) -> None:
+        self._additive()
+        comparison_ops = {
+            TokenKind.LT: Op.LT,
+            TokenKind.LTE: Op.LTE,
+            TokenKind.GT: Op.GT,
+            TokenKind.GTE: Op.GTE,
+            TokenKind.EQEQ: Op.EQ,
+            TokenKind.BANG_EQUAL: Op.NE,
+        }
+        while self._current.kind in comparison_ops:
+            op = self._current.kind
+            self._eat(op)
+            self._additive()
+            self._emit(comparison_ops[op])
+
+    def _additive(self) -> None:
         self._term()
         while self._current.kind in (TokenKind.PLUS, TokenKind.MINUS):
             op = self._current.kind
@@ -295,8 +503,11 @@ class Compiler:
 
         if kind == TokenKind.IDENT:
             self._eat(TokenKind.IDENT)
-            slot = self._symbols.get(token.text, token.pos)
-            self._emit(Op.LOAD, int(slot))
+            if self._current.kind == TokenKind.LPAREN:
+                self._call_expression(token.text)
+            else:
+                slot = self._symbols.get(token.text, token.pos)
+                self._emit(Op.LOAD, int(slot))
             return
 
         if kind == TokenKind.LPAREN:
@@ -313,16 +524,61 @@ class Compiler:
 
         raise CompileError(f"Expected expression at position {token.pos}")
 
+    def _call_expression(self, name: str) -> None:
+        function_index = self._function_index(name)
+        self._eat(TokenKind.LPAREN)
+        arg_count = 0
+        if self._current.kind != TokenKind.RPAREN:
+            while True:
+                self._expression()
+                arg_count += 1
+                if self._current.kind != TokenKind.COMMA:
+                    break
+                self._eat(TokenKind.COMMA)
+        self._eat(TokenKind.RPAREN)
+        self._emit(Op.CALL, function_index, arg_count)
+
     def _eat(self, kind: TokenKind) -> None:
         if self._current.kind != kind:
             raise CompileError(
-                f"Expected {kind.name}, got {self._current.kind.name} at position {self._current.pos}"
+                f"Expected {kind.name}, got {self._current.kind.name} "
+                f"at position {self._current.pos}"
             )
         self._index += 1
         self._current = self._tokens[self._index]
 
-    def _emit(self, op: Op, arg: int = 0) -> None:
-        self._code.append(Instr(op, arg))
+    def _emit(self, op: Op, arg: int = 0, arg2: int = 0) -> None:
+        self._code.append(Instr(op, arg, arg2))
+
+    def _emit_placeholder(self, op: Op) -> int:
+        index = len(self._code)
+        self._code.append(Instr(op, -1))
+        return index
+
+    def _patch(self, index: int, arg: int) -> None:
+        instr = self._code[index]
+        self._code[index] = Instr(instr.op, arg, instr.arg2)
+
+    def _function_index(self, name: str) -> int:
+        existing = self._function_indexes.get(name)
+        if existing is not None:
+            return existing
+        index = len(self._function_names)
+        self._function_indexes[name] = index
+        self._function_names.append(name)
+        self._functions.append(None)
+        return index
+
+    def _resolved_functions(self) -> tuple[Function, ...]:
+        missing = [
+            self._function_names[index]
+            for index, function in enumerate(self._functions)
+            if function is None
+        ]
+        if missing:
+            joined = ", ".join(repr(name) for name in missing)
+            raise CompileError(f"Undefined function(s): {joined}")
+        return tuple(function for function in self._functions if function is not None)
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +595,12 @@ _STACK_EFFECTS: Final[dict[Op, int]] = {
     Op.DIV: -1,
     Op.NEG: 0,
     Op.PRINT: -1,
-    Op.HALT: 0,
+    Op.LT: -1,
+    Op.LTE: -1,
+    Op.GT: -1,
+    Op.GTE: -1,
+    Op.EQ: -1,
+    Op.NE: -1,
 }
 
 
@@ -347,10 +608,12 @@ class BytecodeVerifier:
     """
     O(n) static stack-depth checker.
 
-    Simulates stack depth changes instruction by instruction without executing
-    anything. Raises CompileError on:
+    Simulates stack depth changes across the reachable control-flow graph
+    without executing anything. Raises CompileError on:
       - negative depth mid-sequence  (stack underflow)
       - non-zero depth at HALT       (stack imbalance)
+      - non-one depth at RETURN      (function stack imbalance)
+      - inconsistent depth at a jump target
       - unrecognised opcode          (compiler/optimizer bug)
 
     By catching structural errors before execution, the VM and JIT can omit
@@ -361,22 +624,169 @@ class BytecodeVerifier:
 
     @classmethod
     def verify(cls, program: Program) -> None:
-        depth = 0
-        for i, instr in enumerate(program.code):
-            effect = _STACK_EFFECTS.get(instr.op)
-            if effect is None:
-                raise CompileError(
-                    f"Verifier: unknown opcode {instr.op!r} at index {i}"
-                )
-            depth += effect
-            if depth < 0:
-                raise CompileError(
-                    f"Verifier: stack underflow at instruction {i} "
-                    f"({instr.op.name}, cumulative depth={depth})"
-                )
-        if depth != 0:
+        cls._verify_chunk(
+            program.code,
+            program.slot_count,
+            program.functions,
+            "main",
+            final_op=Op.HALT,
+        )
+        for index, function in enumerate(program.functions):
+            cls._verify_chunk(
+                function.code,
+                function.slot_count,
+                program.functions,
+                f"function {function.name!r} (index {index})",
+                final_op=Op.RETURN,
+            )
+
+    @classmethod
+    def _verify_chunk(
+        cls,
+        code: tuple[Instr, ...],
+        slot_count: int,
+        functions: tuple[Function, ...],
+        chunk_name: str,
+        *,
+        final_op: Op,
+    ) -> None:
+        if not code:
+            raise CompileError(f"Verifier: {chunk_name} has no bytecode")
+        if code[-1].op != final_op:
             raise CompileError(
-                f"Verifier: stack imbalance at HALT, residual depth={depth}"
+                f"Verifier: {chunk_name} must end with {final_op.name}, got {code[-1].op.name}"
+            )
+
+        depths: dict[int, int] = {}
+        worklist: list[tuple[int, int]] = []
+
+        def enqueue(target: int, depth: int, source_index: int) -> None:
+            if target < 0 or target >= len(code):
+                raise CompileError(
+                    f"Verifier: jump/fallthrough from instruction {source_index} "
+                    f"in {chunk_name} targets invalid instruction {target}"
+                )
+            existing = depths.get(target)
+            if existing is not None:
+                if existing != depth:
+                    raise CompileError(
+                        f"Verifier: inconsistent stack depth at instruction {target} "
+                        f"in {chunk_name}: {existing} vs {depth}"
+                    )
+                return
+            depths[target] = depth
+            worklist.append((target, depth))
+
+        enqueue(0, 0, 0)
+
+        while worklist:
+            i, depth = worklist.pop()
+            instr = code[i]
+            op = instr.op
+            arg = instr.arg
+            arg2 = instr.arg2
+
+            if op == Op.LOAD or op == Op.STORE:
+                cls._verify_slot(arg, slot_count, i, chunk_name)
+
+            effect = _STACK_EFFECTS.get(instr.op)
+            if effect is not None:
+                next_depth = depth + effect
+                if next_depth < 0:
+                    raise CompileError(
+                        f"Verifier: stack underflow at instruction {i} in {chunk_name} "
+                        f"({op.name}, cumulative depth={next_depth})"
+                    )
+                cls._enqueue_next(code, enqueue, i, next_depth, chunk_name)
+                continue
+
+            if op == Op.JUMP:
+                enqueue(arg, depth, i)
+                continue
+
+            if op == Op.JUMP_IF_ZERO:
+                if depth < 1:
+                    raise CompileError(
+                        f"Verifier: stack underflow at instruction {i} in {chunk_name} "
+                        f"({op.name}, cumulative depth={depth - 1})"
+                    )
+                next_depth = depth - 1
+                enqueue(arg, next_depth, i)
+                cls._enqueue_next(code, enqueue, i, next_depth, chunk_name)
+                continue
+
+            if op == Op.CALL:
+                cls._verify_call(arg, arg2, functions, i, chunk_name)
+                next_depth = depth - arg2 + 1
+                if next_depth < 0:
+                    raise CompileError(
+                        f"Verifier: stack underflow at instruction {i} in {chunk_name} "
+                        f"({op.name}, cumulative depth={next_depth})"
+                    )
+                cls._enqueue_next(code, enqueue, i, next_depth, chunk_name)
+                continue
+
+            if op == Op.RETURN:
+                if depth != 1:
+                    raise CompileError(
+                        f"Verifier: RETURN in {chunk_name} requires one value "
+                        f"on the stack, got {depth}"
+                    )
+                continue
+
+            if op == Op.HALT:
+                if depth != 0:
+                    raise CompileError(
+                        f"Verifier: HALT in {chunk_name} requires empty stack, got {depth}"
+                    )
+                continue
+
+            raise CompileError(f"Verifier: unknown opcode {op!r} at index {i} in {chunk_name}")
+
+    @staticmethod
+    def _enqueue_next(
+        code: tuple[Instr, ...],
+        enqueue: Callable[[int, int, int], None],
+        index: int,
+        depth: int,
+        chunk_name: str,
+    ) -> None:
+        target = index + 1
+        if target >= len(code):
+            raise CompileError(
+                f"Verifier: {chunk_name} falls off the end after instruction {index}"
+            )
+        enqueue(target, depth, index)
+
+    @staticmethod
+    def _verify_slot(slot: int, slot_count: int, index: int, chunk_name: str) -> None:
+        if slot < 0 or slot >= slot_count:
+            raise CompileError(
+                f"Verifier: invalid slot {slot} at instruction {index} in {chunk_name}"
+            )
+
+    @staticmethod
+    def _verify_call(
+        function_index: int,
+        arg_count: int,
+        functions: tuple[Function, ...],
+        index: int,
+        chunk_name: str,
+    ) -> None:
+        if function_index < 0 or function_index >= len(functions):
+            raise CompileError(
+                f"Verifier: invalid function index {function_index} at instruction {index} "
+                f"in {chunk_name}"
+            )
+        if arg_count < 0:
+            raise CompileError(
+                f"Verifier: negative argument count at instruction {index} in {chunk_name}"
+            )
+        function = functions[function_index]
+        if arg_count != function.param_count:
+            raise CompileError(
+                f"Function {function.name!r} expects {function.param_count} argument(s), "
+                f"got {arg_count} at instruction {index} in {chunk_name}"
             )
 
 
@@ -384,12 +794,13 @@ class PeepholeOptimizer:
     """
     Constant-folding peephole optimizer over flat bytecode.
 
-    Folds these patterns:
+    Folds these patterns inside branch-free bytecode chunks:
         PUSH_INT a, NEG              ->  PUSH_INT (-a)
         PUSH_INT a, PUSH_INT b, ADD  ->  PUSH_INT (a + b)
         PUSH_INT a, PUSH_INT b, SUB  ->  PUSH_INT (a - b)
         PUSH_INT a, PUSH_INT b, MUL  ->  PUSH_INT (a * b)
         PUSH_INT a, PUSH_INT b, DIV  ->  PUSH_INT (a // b)  [skipped if b==0]
+        PUSH_INT a, PUSH_INT b, <cmp> -> PUSH_INT 0/1
 
     Runs until convergence so cascading folds resolve in one compilation.
     Each pass is O(n); worst-case passes = fold-chain length (bounded by
@@ -401,7 +812,29 @@ class PeepholeOptimizer:
 
     @staticmethod
     def optimize(program: Program) -> Program:
-        code = list(program.code)
+        functions = tuple(
+            Function(
+                function.name,
+                function.param_count,
+                PeepholeOptimizer._optimize_code(function.code),
+                function.slot_count,
+                function.names,
+            )
+            for function in program.functions
+        )
+        return Program(
+            PeepholeOptimizer._optimize_code(program.code),
+            program.slot_count,
+            program.names,
+            functions,
+        )
+
+    @staticmethod
+    def _optimize_code(original_code: tuple[Instr, ...]) -> tuple[Instr, ...]:
+        if any(instr.op in (Op.JUMP, Op.JUMP_IF_ZERO) for instr in original_code):
+            return original_code
+
+        code = list(original_code)
         changed = True
         while changed:
             changed = False
@@ -424,7 +857,8 @@ class PeepholeOptimizer:
                     i + 2 < len(code)
                     and code[i].op == Op.PUSH_INT
                     and code[i + 1].op == Op.PUSH_INT
-                    and code[i + 2].op in (Op.ADD, Op.SUB, Op.MUL, Op.DIV)
+                    and code[i + 2].op
+                    in (Op.ADD, Op.SUB, Op.MUL, Op.DIV, Op.LT, Op.LTE, Op.GT, Op.GTE, Op.EQ, Op.NE)
                 ):
                     a = code[i].arg
                     b = code[i + 1].arg
@@ -442,8 +876,20 @@ class PeepholeOptimizer:
                         result = a - b
                     elif fold_op == Op.MUL:
                         result = a * b
-                    else:  # DIV, b != 0 guaranteed above
+                    elif fold_op == Op.DIV:  # b != 0 guaranteed above
                         result = a // b
+                    elif fold_op == Op.LT:
+                        result = 1 if a < b else 0
+                    elif fold_op == Op.LTE:
+                        result = 1 if a <= b else 0
+                    elif fold_op == Op.GT:
+                        result = 1 if a > b else 0
+                    elif fold_op == Op.GTE:
+                        result = 1 if a >= b else 0
+                    elif fold_op == Op.EQ:
+                        result = 1 if a == b else 0
+                    else:  # NE
+                        result = 1 if a != b else 0
 
                     out.append(Instr(Op.PUSH_INT, result))
                     i += 3
@@ -454,7 +900,7 @@ class PeepholeOptimizer:
                 i += 1
             code = out
 
-        return Program(tuple(code), program.slot_count, program.names)
+        return tuple(code)
 
 
 class TinyMemory:
@@ -522,9 +968,12 @@ class VM:
         self._stdout = stdout
 
     def run(self) -> None:
+        self._run_chunk(self._program.code, self._memory, "main")
+
+    def _run_chunk(
+        self, code: tuple[Instr, ...], memory: TinyMemory, chunk_name: str
+    ) -> int | None:
         stack: list[int] = []
-        code = self._program.code
-        memory = self._memory
         stdout = self._stdout
         pc = 0
 
@@ -533,6 +982,7 @@ class VM:
             pc += 1
             op = instr.op
             arg = instr.arg
+            arg2 = instr.arg2
 
             if op == Op.PUSH_INT:
                 stack.append(arg)
@@ -554,26 +1004,67 @@ class VM:
                 stack[-1] = checked_div(stack[-1], rhs)
             elif op == Op.NEG:
                 stack[-1] = -stack[-1]
+            elif op == Op.LT:
+                rhs = stack.pop()
+                stack[-1] = 1 if stack[-1] < rhs else 0
+            elif op == Op.LTE:
+                rhs = stack.pop()
+                stack[-1] = 1 if stack[-1] <= rhs else 0
+            elif op == Op.GT:
+                rhs = stack.pop()
+                stack[-1] = 1 if stack[-1] > rhs else 0
+            elif op == Op.GTE:
+                rhs = stack.pop()
+                stack[-1] = 1 if stack[-1] >= rhs else 0
+            elif op == Op.EQ:
+                rhs = stack.pop()
+                stack[-1] = 1 if stack[-1] == rhs else 0
+            elif op == Op.NE:
+                rhs = stack.pop()
+                stack[-1] = 1 if stack[-1] != rhs else 0
+            elif op == Op.JUMP:
+                pc = arg
+            elif op == Op.JUMP_IF_ZERO:
+                if stack.pop() == 0:
+                    pc = arg
+            elif op == Op.CALL:
+                stack.append(self._call_function(arg, stack, arg2))
+            elif op == Op.RETURN:
+                return stack.pop()
             elif op == Op.PRINT:
                 print(stack.pop(), file=stdout)
             elif op == Op.HALT:
                 if stack:
-                    raise RuntimeTinyOneError("Internal stack imbalance at halt")
+                    raise RuntimeTinyOneError(
+                        f"Internal stack imbalance at halt in {chunk_name}"
+                    )
                 return
             else:
                 raise RuntimeTinyOneError(f"Unknown opcode {op!r}")
 
+    def _call_function(self, function_index: int, caller_stack: list[int], arg_count: int) -> int:
+        function = self._program.functions[function_index]
+        args = [caller_stack.pop() for _ in range(arg_count)]
+        args.reverse()
+        memory = TinyMemory(function.slot_count)
+        for slot, value in enumerate(args):
+            memory.store(slot, value)
+        result = self._run_chunk(function.code, memory, function.name)
+        if result is None:
+            raise RuntimeTinyOneError(f"Function {function.name!r} returned no value")
+        return result
+
 
 class JitCache:
     """
-    Compiles TinyOne bytecode into a Python function using local variables
-    instead of a simulated stack list.
+    Compiles TinyOne bytecode into generated Python functions.
 
-    The stack is fully resolved at codegen time.  Each virtual stack slot maps
-    to a named Python local (_s0, _s1, ...).  Binary ops fold two locals into
-    the lower slot in place.  The emitted function contains only LOAD_FAST and
-    STORE_FAST opcodes at the CPython bytecode level — no list object is
-    allocated and no list methods are called in the hot path.
+    Branch-free main programs use the original locals-based path: the stack is
+    resolved at codegen time, each virtual stack slot maps to a named Python
+    local (_s0, _s1, ...), and binary ops fold two locals into the lower slot in
+    place. Programs with functions or loops use generated dispatch code so
+    branch targets, function calls, and returns share the exact verified
+    bytecode semantics used by the VM.
 
     Example: `let x = 1 + 2 * 3; print x`
 
@@ -595,9 +1086,6 @@ class JitCache:
         _s0 = memory.load(0)
         stdout.write(str(_s0) + '\\n')
 
-    The stack-imbalance guard at HALT is omitted because BytecodeVerifier
-    guarantees balance at compile time.
-
     Precondition: program has been verified by BytecodeVerifier.
     """
 
@@ -616,6 +1104,7 @@ class JitCache:
         namespace: dict[str, object] = {
             "checked_div": checked_div,
             "RuntimeTinyOneError": RuntimeTinyOneError,
+            "TinyMemory": TinyMemory,
         }
         try:
             compiled = compile(source, f"<tinyone-jit-{key}>", "exec")
@@ -635,12 +1124,21 @@ class JitCache:
         return function
 
     def _build_source(self, program: Program) -> str:
-        """
-        Emit a Python function that executes the program using local variables.
+        if self._can_emit_straightline(program):
+            return self._build_straightline_source(program)
+        return self._build_dispatch_source(program)
 
-        Stack depth is tracked symbolically through sp (stack pointer).  Each
-        virtual stack slot at depth N maps to the local name _sN.  No list
-        object is used: all stack mutations become scalar assignments.
+    @staticmethod
+    def _can_emit_straightline(program: Program) -> bool:
+        if program.functions:
+            return False
+        unsupported = {Op.JUMP, Op.JUMP_IF_ZERO, Op.CALL, Op.RETURN}
+        return not any(instr.op in unsupported for instr in program.code)
+
+    def _build_straightline_source(self, program: Program) -> str:
+        """
+        Emit a Python function that executes branch-free main bytecode using
+        local variables instead of a simulated stack list.
 
         Correctness contract: BytecodeVerifier has already confirmed that sp
         never goes negative and is exactly 0 at HALT.  We assert that contract
@@ -714,6 +1212,18 @@ class JitCache:
                     )
                 lines.append(f"    {slot(sp - 1)} = -{slot(sp - 1)}")
 
+            elif op in (Op.LT, Op.LTE, Op.GT, Op.GTE, Op.EQ, Op.NE):
+                if sp < 2:
+                    raise CompileError(
+                        f"JIT codegen: {op.name} at index {i} requires depth>=2, got {sp} "
+                        "(verifier bug)"
+                    )
+                operator = self._python_comparison_operator(op)
+                lines.append(
+                    f"    {slot(sp - 2)} = 1 if {slot(sp - 2)} {operator} {slot(sp - 1)} else 0"
+                )
+                sp -= 1
+
             elif op == Op.PRINT:
                 if sp < 1:
                     raise CompileError(
@@ -736,6 +1246,200 @@ class JitCache:
             lines.append("    return")
 
         return "\n".join(lines) + "\n"
+
+    def _build_dispatch_source(self, program: Program) -> str:
+        lines = [
+            "def _tinyone_jit(memory, stdout):",
+            "    return _tinyone_main(memory, stdout)",
+            "",
+            "def _tinyone_call(function_index, args, stdout):",
+        ]
+        if not program.functions:
+            lines.append(
+                "    raise RuntimeTinyOneError(f'Invalid function index {function_index}')"
+            )
+        else:
+            for index, function in enumerate(program.functions):
+                prefix = "if" if index == 0 else "elif"
+                lines.append(f"    {prefix} function_index == {index}:")
+                lines.append(f"        return _tinyone_func_{index}(args, stdout)")
+            lines.append(
+                "    raise RuntimeTinyOneError(f'Invalid function index {function_index}')"
+            )
+        lines.append("")
+
+        for index, function in enumerate(program.functions):
+            lines.extend(self._build_dispatch_function(index, function))
+            lines.append("")
+
+        lines.extend(
+            self._build_dispatch_chunk(
+                "_tinyone_main",
+                program.code,
+                program.slot_count,
+                param_count=0,
+                chunk_name="main",
+                use_existing_memory=True,
+            )
+        )
+        return "\n".join(lines) + "\n"
+
+    def _build_dispatch_function(self, index: int, function: Function) -> list[str]:
+        return self._build_dispatch_chunk(
+            f"_tinyone_func_{index}",
+            function.code,
+            function.slot_count,
+            param_count=function.param_count,
+            chunk_name=function.name,
+            use_existing_memory=False,
+        )
+
+    def _build_dispatch_chunk(
+        self,
+        function_name: str,
+        code: tuple[Instr, ...],
+        slot_count: int,
+        *,
+        param_count: int,
+        chunk_name: str,
+        use_existing_memory: bool,
+    ) -> list[str]:
+        if use_existing_memory:
+            lines = [f"def {function_name}(memory, stdout):"]
+        else:
+            lines = [f"def {function_name}(args, stdout):"]
+            lines.append(f"    if len(args) != {param_count}:")
+            lines.append(
+                f"        raise RuntimeTinyOneError(\"Function {chunk_name!r} expects "
+                f"{param_count} argument(s)\")"
+            )
+            lines.append(f"    memory = TinyMemory({slot_count})")
+            for slot in range(param_count):
+                lines.append(f"    memory.store({slot}, args[{slot}])")
+
+        lines.extend(
+            [
+                "    stack = []",
+                "    pc = 0",
+                "    while True:",
+            ]
+        )
+        for index, instr in enumerate(code):
+            lines.append(f"        if pc == {index}:")
+            lines.extend(self._build_dispatch_instr(instr, index))
+        lines.append(
+            f"        raise RuntimeTinyOneError(\"Invalid program counter in {chunk_name}\")"
+        )
+        return lines
+
+    def _build_dispatch_instr(self, instr: Instr, index: int) -> list[str]:
+        op = instr.op
+        arg = instr.arg
+        arg2 = instr.arg2
+        next_pc = index + 1
+
+        if op == Op.PUSH_INT:
+            return [
+                f"            stack.append({arg!r})",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.LOAD:
+            return [
+                f"            stack.append(memory.load({arg}))",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.STORE:
+            return [
+                f"            memory.store({arg}, stack.pop())",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.ADD:
+            return [
+                "            rhs = stack.pop()",
+                "            stack[-1] = stack[-1] + rhs",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.SUB:
+            return [
+                "            rhs = stack.pop()",
+                "            stack[-1] = stack[-1] - rhs",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.MUL:
+            return [
+                "            rhs = stack.pop()",
+                "            stack[-1] = stack[-1] * rhs",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.DIV:
+            return [
+                "            rhs = stack.pop()",
+                "            stack[-1] = checked_div(stack[-1], rhs)",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.NEG:
+            return [
+                "            stack[-1] = -stack[-1]",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op in (Op.LT, Op.LTE, Op.GT, Op.GTE, Op.EQ, Op.NE):
+            operator = self._python_comparison_operator(op)
+            return [
+                "            rhs = stack.pop()",
+                f"            stack[-1] = 1 if stack[-1] {operator} rhs else 0",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.JUMP:
+            return [f"            pc = {arg}", "            continue"]
+        if op == Op.JUMP_IF_ZERO:
+            return [
+                f"            pc = {arg} if stack.pop() == 0 else {next_pc}",
+                "            continue",
+            ]
+        if op == Op.CALL:
+            return [
+                f"            args = [stack.pop() for _ in range({arg2})]",
+                "            args.reverse()",
+                f"            stack.append(_tinyone_call({arg}, args, stdout))",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.RETURN:
+            return ["            return stack.pop()"]
+        if op == Op.PRINT:
+            return [
+                "            stdout.write(str(stack.pop()) + '\\n')",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.HALT:
+            return ["            return"]
+        raise CompileError(f"JIT codegen: cannot emit unknown opcode {op!r}")
+
+    @staticmethod
+    def _python_comparison_operator(op: Op) -> str:
+        if op == Op.LT:
+            return "<"
+        if op == Op.LTE:
+            return "<="
+        if op == Op.GT:
+            return ">"
+        if op == Op.GTE:
+            return ">="
+        if op == Op.EQ:
+            return "=="
+        if op == Op.NE:
+            return "!="
+        raise CompileError(f"JIT codegen: unsupported comparison opcode {op!r}")
 
 
 def compile_source(source: str) -> Program:
