@@ -3,9 +3,15 @@
 TinyOne: single-file stdlib-only compiler/VM/JIT implementation.
 
 Language:
+    import "math.to" as math
+    fn double(n) { return n * 2 }
+    struct Pair { left, right }
     let x = 1 + 2 * 3
     while x < 10 { let x = x + 1 }
-    fn double(n) { return n * 2 }
+    let pair = Pair("left", [1, 2, 3])
+    let mem = buffer(16)
+    print unsafe ptr_load(fieldptr(pair, "left"))
+    print unsafe write8(ptr(mem, 0), 255)
     print x
 
 Design constraints:
@@ -17,9 +23,9 @@ Runtime model:
     Source -> tokens -> bytecode -> [peephole] -> [verify] -> VM or JIT.
 
 Memory model:
-    TinyMemory is an arena of integer slots addressed by Slot handles. Runtime
-    code does not use a Python dict for variable lookup; dict usage is limited
-    to compile-time symbol interning.
+    TinyMemory is a zero-initialized stack frame addressed by Slot handles.
+    Heap-backed strings, arrays, structs, buffers, pointer cells, and raw
+    pointer values live in TinyHeap/TinyRuntimeContext across function calls.
 
 JIT model:
     Branch-free main programs keep the locals-based path: each virtual stack
@@ -42,7 +48,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
+from pathlib import Path
 import sys
 from dataclasses import dataclass
 from enum import IntEnum
@@ -66,31 +74,86 @@ class RuntimeTinyOneError(TinyOneError):
     """Raised for runtime failures."""
 
 
+class SourceMap:
+    """Maps byte offsets to user-facing file/line/column diagnostics."""
+
+    __slots__ = ("filename", "source", "_line_starts")
+
+    def __init__(self, source: str, filename: str = "<source>") -> None:
+        self.filename = filename
+        self.source = source
+        self._line_starts = self._build_line_starts(source)
+
+    @staticmethod
+    def _build_line_starts(source: str) -> tuple[int, ...]:
+        starts = [0]
+        for index, char in enumerate(source):
+            if char == "\n":
+                starts.append(index + 1)
+        return tuple(starts)
+
+    def line_col(self, pos: int) -> tuple[int, int]:
+        pos = max(0, min(pos, len(self.source)))
+        starts = self._line_starts
+        low = 0
+        high = len(starts)
+        while low + 1 < high:
+            mid = (low + high) // 2
+            if starts[mid] <= pos:
+                low = mid
+            else:
+                high = mid
+        return low + 1, pos - starts[low] + 1
+
+    def format(self, message: str, pos: int, end: int | None = None) -> str:
+        line, column = self.line_col(pos)
+        line_start = self._line_starts[line - 1]
+        next_line_start = (
+            self._line_starts[line] if line < len(self._line_starts) else len(self.source)
+        )
+        line_text = self.source[line_start:next_line_start].rstrip("\n")
+        span_end = pos + 1 if end is None else max(pos + 1, end)
+        width = max(1, min(span_end, next_line_start) - pos)
+        caret = " " * (column - 1) + "^" * width
+        return f"{self.filename}:{line}:{column}: {message}\n{line_text}\n{caret}"
+
+
 class TokenKind(IntEnum):
     INT = 1
     IDENT = 2
-    LET = 3
-    PRINT = 4
-    FN = 5
-    RETURN = 6
-    WHILE = 7
-    PLUS = 8
-    MINUS = 9
-    STAR = 10
-    SLASH = 11
-    EQUAL = 12
-    EQEQ = 13
-    BANG_EQUAL = 14
-    LT = 15
-    LTE = 16
-    GT = 17
-    GTE = 18
-    LPAREN = 19
-    RPAREN = 20
-    LBRACE = 21
-    RBRACE = 22
-    COMMA = 23
-    EOF = 24
+    STRING = 3
+    LET = 4
+    PRINT = 5
+    FN = 6
+    RETURN = 7
+    WHILE = 8
+    STRUCT = 9
+    IMPORT = 10
+    EXPORT = 11
+    AS = 12
+    SET = 13
+    UNSAFE = 14
+    PLUS = 15
+    MINUS = 16
+    STAR = 17
+    SLASH = 18
+    EQUAL = 19
+    EQEQ = 20
+    BANG_EQUAL = 21
+    LT = 22
+    LTE = 23
+    GT = 24
+    GTE = 25
+    LPAREN = 26
+    RPAREN = 27
+    LBRACE = 28
+    RBRACE = 29
+    LBRACKET = 30
+    RBRACKET = 31
+    DOT = 32
+    COMMA = 33
+    EOF = 34
+    NULL = 35
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +161,7 @@ class Token:
     kind: TokenKind
     text: str
     pos: int
+    end: int
 
 
 _KEYWORDS: Final[dict[str, TokenKind]] = {
@@ -106,6 +170,13 @@ _KEYWORDS: Final[dict[str, TokenKind]] = {
     "fn": TokenKind.FN,
     "return": TokenKind.RETURN,
     "while": TokenKind.WHILE,
+    "struct": TokenKind.STRUCT,
+    "import": TokenKind.IMPORT,
+    "export": TokenKind.EXPORT,
+    "as": TokenKind.AS,
+    "set": TokenKind.SET,
+    "unsafe": TokenKind.UNSAFE,
+    "null": TokenKind.NULL,
 }
 
 _TWO_CHAR_TOKENS: Final[dict[str, TokenKind]] = {
@@ -127,6 +198,9 @@ _SINGLE_CHAR_TOKENS: Final[dict[str, TokenKind]] = {
     ")": TokenKind.RPAREN,
     "{": TokenKind.LBRACE,
     "}": TokenKind.RBRACE,
+    "[": TokenKind.LBRACKET,
+    "]": TokenKind.RBRACKET,
+    ".": TokenKind.DOT,
     ",": TokenKind.COMMA,
 }
 
@@ -134,12 +208,13 @@ _SINGLE_CHAR_TOKENS: Final[dict[str, TokenKind]] = {
 class Lexer:
     """Hand-written lexer optimized for one pass over the source string."""
 
-    __slots__ = ("_source", "_length", "_pos")
+    __slots__ = ("_source", "_length", "_pos", "_source_map")
 
-    def __init__(self, source: str) -> None:
+    def __init__(self, source: str, filename: str = "<source>") -> None:
         self._source = source
         self._length = len(source)
         self._pos = 0
+        self._source_map = SourceMap(source, filename)
 
     def tokenize(self) -> list[Token]:
         source = self._source
@@ -155,12 +230,47 @@ class Lexer:
                 pos += 1
                 continue
 
+            if ch == "#":
+                pos += 1
+                while pos < length and source[pos] != "\n":
+                    pos += 1
+                continue
+
             if "0" <= ch <= "9":
                 start = pos
                 pos += 1
                 while pos < length and "0" <= source[pos] <= "9":
                     pos += 1
-                append(Token(TokenKind.INT, source[start:pos], start))
+                append(Token(TokenKind.INT, source[start:pos], start, pos))
+                continue
+
+            if ch == '"':
+                start = pos
+                pos += 1
+                chars: list[str] = []
+                while pos < length and source[pos] != '"':
+                    if source[pos] == "\n":
+                        raise self._error("Unterminated string literal", start, pos)
+                    if source[pos] == "\\":
+                        pos += 1
+                        if pos >= length:
+                            raise self._error("Unterminated string escape", start, pos)
+                        escaped = source[pos]
+                        if escaped == "n":
+                            chars.append("\n")
+                        elif escaped == "t":
+                            chars.append("\t")
+                        elif escaped in ('"', "\\"):
+                            chars.append(escaped)
+                        else:
+                            raise self._error(f"Unknown string escape \\{escaped}", pos, pos + 1)
+                    else:
+                        chars.append(source[pos])
+                    pos += 1
+                if pos >= length:
+                    raise self._error("Unterminated string literal", start, pos)
+                pos += 1
+                append(Token(TokenKind.STRING, "".join(chars), start, pos))
                 continue
 
             if ch == "_" or ch.isalpha():
@@ -172,26 +282,29 @@ class Lexer:
                         break
                     pos += 1
                 text = source[start:pos]
-                append(Token(_KEYWORDS.get(text, TokenKind.IDENT), text, start))
+                append(Token(_KEYWORDS.get(text, TokenKind.IDENT), text, start, pos))
                 continue
 
             if pos + 1 < length:
                 pair = source[pos : pos + 2]
                 kind = _TWO_CHAR_TOKENS.get(pair)
                 if kind is not None:
-                    append(Token(kind, pair, pos))
+                    append(Token(kind, pair, pos, pos + 2))
                     pos += 2
                     continue
 
             kind = _SINGLE_CHAR_TOKENS.get(ch)
             if kind is None:
-                raise CompileError(f"Unexpected character {ch!r} at position {pos}")
-            append(Token(kind, ch, pos))
+                raise self._error(f"Unexpected character {ch!r}", pos, pos + 1)
+            append(Token(kind, ch, pos, pos + 1))
             pos += 1
 
-        append(Token(TokenKind.EOF, "", pos))
+        append(Token(TokenKind.EOF, "", pos, pos))
         self._pos = pos
         return tokens
+
+    def _error(self, message: str, pos: int, end: int | None = None) -> CompileError:
+        return CompileError(self._source_map.format(message, pos, end))
 
 
 class Op(IntEnum):
@@ -215,6 +328,35 @@ class Op(IntEnum):
     CALL = 18
     RETURN = 19
     HALT = 20
+    PUSH_STRING = 21
+    MAKE_ARRAY = 22
+    INDEX = 23
+    SET_INDEX = 24
+    MAKE_STRUCT = 25
+    GET_FIELD = 26
+    SET_FIELD = 27
+    BUILTIN = 28
+    PUSH_NULL = 29
+
+
+_COMPARISON_OPS: Final[dict[TokenKind, Op]] = {
+    TokenKind.LT: Op.LT,
+    TokenKind.LTE: Op.LTE,
+    TokenKind.GT: Op.GT,
+    TokenKind.GTE: Op.GTE,
+    TokenKind.EQEQ: Op.EQ,
+    TokenKind.BANG_EQUAL: Op.NE,
+}
+
+_ADDITIVE_OPS: Final[dict[TokenKind, Op]] = {
+    TokenKind.PLUS: Op.ADD,
+    TokenKind.MINUS: Op.SUB,
+}
+
+_TERM_OPS: Final[dict[TokenKind, Op]] = {
+    TokenKind.STAR: Op.MUL,
+    TokenKind.SLASH: Op.DIV,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,11 +376,50 @@ class Function:
 
 
 @dataclass(frozen=True, slots=True)
+class StructDef:
+    name: str
+    fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleImportDef:
+    alias: str
+    path: str
+    module: str
+    resolved: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleDef:
+    name: str
+    path: str
+    imports: tuple[ModuleImportDef, ...] = ()
+    exported_functions: tuple[str, ...] = ()
+    exported_structs: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
+class ModuleInfo:
+    name: str
+    path: str
+    function_exports: dict[str, int]
+    struct_exports: dict[str, int]
+    all_functions: set[str]
+    all_structs: set[str]
+    imports: list[ModuleImportDef]
+    finalized: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Program:
     code: tuple[Instr, ...]
     slot_count: int
     names: tuple[str, ...]
     functions: tuple[Function, ...] = ()
+    strings: tuple[str, ...] = ()
+    structs: tuple[StructDef, ...] = ()
+    fields: tuple[str, ...] = ()
+    modules: tuple[ModuleDef, ...] = ()
 
     @property
     def fingerprint(self) -> str:
@@ -257,6 +438,43 @@ class Program:
             hasher.update(function.param_count.to_bytes(8, "little", signed=False))
             hasher.update(function.slot_count.to_bytes(8, "little", signed=False))
             self._hash_code(hasher, function.code)
+        for text in self.strings:
+            encoded = text.encode("utf-8")
+            hasher.update(len(encoded).to_bytes(8, "little", signed=False))
+            hasher.update(encoded)
+        for struct in self.structs:
+            encoded_name = struct.name.encode("utf-8")
+            hasher.update(len(encoded_name).to_bytes(4, "little", signed=False))
+            hasher.update(encoded_name)
+            hasher.update(len(struct.fields).to_bytes(4, "little", signed=False))
+            for field in struct.fields:
+                encoded_field = field.encode("utf-8")
+                hasher.update(len(encoded_field).to_bytes(4, "little", signed=False))
+                hasher.update(encoded_field)
+        for field in self.fields:
+            encoded = field.encode("utf-8")
+            hasher.update(len(encoded).to_bytes(4, "little", signed=False))
+            hasher.update(encoded)
+        for module in self.modules:
+            encoded_name = module.name.encode("utf-8")
+            encoded_path = module.path.encode("utf-8")
+            hasher.update(len(encoded_name).to_bytes(4, "little", signed=False))
+            hasher.update(encoded_name)
+            hasher.update(len(encoded_path).to_bytes(4, "little", signed=False))
+            hasher.update(encoded_path)
+            for imports in (
+                tuple(item.alias for item in module.imports),
+                tuple(item.path for item in module.imports),
+                tuple(item.module for item in module.imports),
+                tuple(item.resolved for item in module.imports),
+                module.exported_functions,
+                module.exported_structs,
+            ):
+                hasher.update(len(imports).to_bytes(4, "little", signed=False))
+                for item in imports:
+                    encoded_item = item.encode("utf-8")
+                    hasher.update(len(encoded_item).to_bytes(4, "little", signed=False))
+                    hasher.update(encoded_item)
         return hasher.hexdigest()
 
     @staticmethod
@@ -266,30 +484,241 @@ class Program:
             hasher.update(int(instr.arg).to_bytes(16, "little", signed=True))
             hasher.update(int(instr.arg2).to_bytes(16, "little", signed=True))
 
+    def to_artifact(self) -> dict[str, object]:
+        return {
+            "format": "tinyone-bytecode",
+            "version": 1,
+            "code": _encode_code(self.code),
+            "slot_count": self.slot_count,
+            "names": list(self.names),
+            "functions": [
+                {
+                    "name": function.name,
+                    "param_count": function.param_count,
+                    "code": _encode_code(function.code),
+                    "slot_count": function.slot_count,
+                    "names": list(function.names),
+                }
+                for function in self.functions
+            ],
+            "strings": list(self.strings),
+            "structs": [
+                {"name": struct.name, "fields": list(struct.fields)} for struct in self.structs
+            ],
+            "fields": list(self.fields),
+            "modules": [
+                {
+                    "name": module.name,
+                    "path": module.path,
+                    "imports": [
+                        {
+                            "alias": item.alias,
+                            "path": item.path,
+                            "module": item.module,
+                            "resolved": item.resolved,
+                        }
+                        for item in module.imports
+                    ],
+                    "exported_functions": list(module.exported_functions),
+                    "exported_structs": list(module.exported_structs),
+                }
+                for module in self.modules
+            ],
+        }
+
+    @staticmethod
+    def from_artifact(data: object) -> "Program":
+        if not isinstance(data, dict):
+            raise CompileError("Artifact must be a JSON object")
+        if data.get("format") != "tinyone-bytecode" or data.get("version") != 1:
+            raise CompileError("Unsupported TinyOne artifact format")
+        functions = tuple(
+            Function(
+                str(item["name"]),
+                int(item["param_count"]),
+                _decode_code(item["code"]),
+                int(item["slot_count"]),
+                tuple(str(name) for name in item["names"]),
+            )
+            for item in _expect_list(data.get("functions"), "functions")
+        )
+        program = Program(
+            _decode_code(data.get("code")),
+            int(data.get("slot_count", 0)),
+            tuple(str(name) for name in _expect_list(data.get("names"), "names")),
+            functions,
+            tuple(str(text) for text in _expect_list(data.get("strings"), "strings")),
+            tuple(
+                StructDef(
+                    str(item["name"]),
+                    tuple(str(field) for field in _expect_list(item["fields"], "struct fields")),
+                )
+                for item in _expect_list(data.get("structs"), "structs")
+            ),
+            tuple(str(field) for field in _expect_list(data.get("fields"), "fields")),
+            tuple(
+                ModuleDef(
+                    str(item["name"]),
+                    str(item["path"]),
+                    tuple(
+                        ModuleImportDef(
+                            str(import_item["alias"]),
+                            str(import_item["path"]),
+                            str(import_item["module"]),
+                            str(import_item["resolved"]),
+                        )
+                        for import_item in _expect_list(item.get("imports"), "module imports")
+                    ),
+                    tuple(
+                        str(name)
+                        for name in _expect_list(
+                            item.get("exported_functions"), "module function exports"
+                        )
+                    ),
+                    tuple(
+                        str(name)
+                        for name in _expect_list(
+                            item.get("exported_structs"), "module struct exports"
+                        )
+                    ),
+                )
+                for item in _optional_list(data.get("modules"), "modules")
+            ),
+        )
+        BytecodeVerifier.verify(program)
+        return program
+
+
+def _encode_code(code: tuple[Instr, ...]) -> list[dict[str, int | str]]:
+    return [
+        {"op": instr.op.name, "arg": instr.arg, "arg2": instr.arg2}
+        for instr in code
+    ]
+
+
+def _decode_code(data: object) -> tuple[Instr, ...]:
+    return tuple(
+        Instr(Op[str(item["op"])], int(item.get("arg", 0)), int(item.get("arg2", 0)))
+        for item in _expect_list(data, "code")
+    )
+
+
+def _expect_list(value: object, name: str) -> list[object]:
+    if not isinstance(value, list):
+        raise CompileError(f"Artifact field {name!r} must be a list")
+    return value
+
+
+def _optional_list(value: object, name: str) -> list[object]:
+    if value is None:
+        return []
+    return _expect_list(value, name)
+
+
+@dataclass(slots=True)
+class CompilerSharedState:
+    function_indexes: dict[str, int]
+    functions: list[Function]
+    struct_indexes: dict[str, int]
+    structs: list[StructDef]
+    field_indexes: dict[str, int]
+    fields: list[str]
+    string_indexes: dict[str, int]
+    strings: list[str]
+    modules: dict[str, ModuleInfo]
+    loading_modules: set[str]
+    module_defs: list[ModuleDef]
+    module_name_owners: dict[str, str]
+
+    @staticmethod
+    def fresh() -> "CompilerSharedState":
+        return CompilerSharedState({}, [], {}, [], {}, [], {}, [], {}, set(), [], {})
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltinDef:
+    name: str
+    min_args: int
+    max_args: int
+    requires_unsafe: bool = False
+
+
+_BUILTINS: Final[tuple[BuiltinDef, ...]] = (
+    BuiltinDef("len", 1, 1),
+    BuiltinDef("array", 2, 2),
+    BuiltinDef("alloc", 1, 1),
+    BuiltinDef("load", 1, 1),
+    BuiltinDef("store", 2, 2),
+    BuiltinDef("free", 1, 1),
+    BuiltinDef("read", 0, 0),
+    BuiltinDef("read_int", 0, 0),
+    BuiltinDef("read_str", 0, 0),
+    BuiltinDef("to_int", 1, 1),
+    BuiltinDef("ptr", 1, 2),
+    BuiltinDef("fieldptr", 2, 2),
+    BuiltinDef("ptr_addr", 1, 1),
+    BuiltinDef("ptr_at", 1, 1, True),
+    BuiltinDef("ptr_add", 2, 2, True),
+    BuiltinDef("ptr_load", 1, 1, True),
+    BuiltinDef("ptr_store", 2, 2, True),
+    BuiltinDef("ptr_type", 1, 1),
+    BuiltinDef("buffer", 1, 1),
+    BuiltinDef("is_null", 1, 1),
+    BuiltinDef("ptr_eq", 2, 2),
+    BuiltinDef("ptr_ne", 2, 2),
+    BuiltinDef("ptr_base", 1, 1),
+    BuiltinDef("ptr_offset", 1, 1),
+    BuiltinDef("ptr_kind", 1, 1),
+    BuiltinDef("ptr_field", 1, 1),
+    BuiltinDef("read8", 1, 1, True),
+    BuiltinDef("write8", 2, 2, True),
+    BuiltinDef("read16", 1, 1, True),
+    BuiltinDef("write16", 2, 2, True),
+    BuiltinDef("read32", 1, 1, True),
+    BuiltinDef("write32", 2, 2, True),
+    BuiltinDef("cast_ptr", 2, 2),
+)
+_BUILTIN_INDEXES: Final[dict[str, int]] = {
+    builtin.name: index for index, builtin in enumerate(_BUILTINS)
+}
+
 
 class SymbolTable:
-    """Compile-time symbol interner. Runtime uses slots, not names."""
+    """Compile-time lexical scopes. Runtime still uses compact slot indexes."""
 
-    __slots__ = ("_slots", "_names")
+    __slots__ = ("_scopes", "_names")
 
     def __init__(self) -> None:
-        self._slots: dict[str, Slot] = {}
+        self._scopes: list[dict[str, Slot]] = [{}]
         self._names: list[str] = []
 
+    def enter_scope(self) -> None:
+        self._scopes.append({})
+
+    def exit_scope(self) -> None:
+        if len(self._scopes) == 1:
+            raise RuntimeError("cannot exit root symbol scope")
+        self._scopes.pop()
+
     def define_or_get(self, name: str) -> Slot:
-        existing = self._slots.get(name)
-        if existing is not None:
-            return existing
+        for scope in reversed(self._scopes):
+            existing = scope.get(name)
+            if existing is not None:
+                return existing
         slot = Slot(len(self._names))
-        self._slots[name] = slot
+        self._scopes[-1][name] = slot
         self._names.append(name)
         return slot
 
     def get(self, name: str, pos: int) -> Slot:
-        slot = self._slots.get(name)
-        if slot is None:
-            raise CompileError(f"Undefined variable {name!r} at position {pos}")
-        return slot
+        for scope in reversed(self._scopes):
+            slot = scope.get(name)
+            if slot is not None:
+                return slot
+        raise CompileError(f"Undefined variable {name!r}")
+
+    def contains(self, name: str) -> bool:
+        return any(name in scope for scope in self._scopes)
 
     @property
     def slot_count(self) -> int:
@@ -307,38 +736,151 @@ class Compiler:
         "_tokens",
         "_index",
         "_current",
+        "_source_map",
+        "_filename",
+        "_resolver",
+        "_imported",
+        "_module_mode",
+        "_module_name",
+        "_module_info",
+        "_module_imports",
+        "_namespaces",
+        "_accept_imports",
         "_symbols",
         "_code",
+        "_shared",
         "_function_indexes",
-        "_function_names",
         "_functions",
+        "_local_function_indexes",
+        "_struct_indexes",
+        "_structs",
+        "_local_struct_indexes",
+        "_field_indexes",
+        "_fields",
+        "_string_indexes",
+        "_strings",
         "_in_function",
+        "_unsafe_depth",
     )
 
-    def __init__(self, source: str) -> None:
-        self._tokens = Lexer(source).tokenize()
+    def __init__(
+        self,
+        source: str,
+        *,
+        filename: str = "<source>",
+        resolver: Callable[[str, str], tuple[str, str]] | None = None,
+        imported: set[str] | None = None,
+        module_mode: bool = False,
+        module_name: str = "",
+        shared: CompilerSharedState | None = None,
+    ) -> None:
+        self._source_map = SourceMap(source, filename)
+        self._filename = filename
+        self._resolver = resolver
+        self._imported = set() if imported is None else imported
+        self._module_mode = module_mode
+        self._module_name = module_name
+        self._accept_imports = True
+        self._tokens = Lexer(source, filename).tokenize()
         self._index = 0
         self._current = self._tokens[0]
         self._symbols = SymbolTable()
         self._code: list[Instr] = []
-        self._function_indexes: dict[str, int] = {}
-        self._function_names: list[str] = []
-        self._functions: list[Function | None] = []
+        self._shared = CompilerSharedState.fresh() if shared is None else shared
+        self._function_indexes = self._shared.function_indexes
+        self._functions = self._shared.functions
+        self._local_function_indexes: dict[str, int] = {}
+        self._struct_indexes = self._shared.struct_indexes
+        self._structs = self._shared.structs
+        self._local_struct_indexes: dict[str, int] = {}
+        self._field_indexes = self._shared.field_indexes
+        self._fields = self._shared.fields
+        self._string_indexes = self._shared.string_indexes
+        self._strings = self._shared.strings
         self._in_function = False
+        self._unsafe_depth = 0
+        self._module_imports: list[ModuleImportDef] = []
+        self._namespaces: dict[str, ModuleInfo] = {}
+        self._module_info = None
+        if self._module_mode:
+            self._module_info = self._shared.modules.get(filename)
+            if self._module_info is None:
+                module_name_value = _unique_module_name(
+                    self._shared,
+                    self._module_name or _module_name_from_filename(filename),
+                    filename,
+                )
+                self._module_info = ModuleInfo(
+                    module_name_value,
+                    filename,
+                    {},
+                    {},
+                    set(),
+                    set(),
+                    [],
+                )
+                self._shared.modules[filename] = self._module_info
 
     def compile(self) -> Program:
         while self._current.kind != TokenKind.EOF:
-            if self._current.kind == TokenKind.FN:
-                self._function_definition()
+            if self._current.kind == TokenKind.IMPORT:
+                self._import_statement()
+            elif self._current.kind == TokenKind.EXPORT:
+                self._accept_imports = False
+                self._export_declaration()
+            elif self._current.kind == TokenKind.STRUCT:
+                self._accept_imports = False
+                self._struct_definition(exported=False)
+            elif self._current.kind == TokenKind.FN:
+                self._accept_imports = False
+                self._function_definition(exported=False)
             else:
+                if self._module_mode:
+                    raise self._error(
+                        "Imported modules may only contain import, struct, and fn declarations",
+                        self._current,
+                    )
+                self._accept_imports = False
                 self._statement()
         self._emit(Op.HALT)
+        self._finalize_module()
         return Program(
             tuple(self._code),
             self._symbols.slot_count,
             self._symbols.names,
-            self._resolved_functions(),
+            tuple(self._functions),
+            tuple(self._strings),
+            tuple(self._structs),
+            tuple(self._fields),
+            tuple(self._shared.module_defs),
         )
+
+    def _export_declaration(self) -> None:
+        export_token = self._current
+        self._eat(TokenKind.EXPORT)
+        if self._current.kind == TokenKind.STRUCT:
+            self._struct_definition(exported=True)
+            return
+        if self._current.kind == TokenKind.FN:
+            self._function_definition(exported=True)
+            return
+        raise self._error("Expected function or struct declaration after export", export_token)
+
+    def _finalize_module(self) -> None:
+        info = self._module_info
+        if info is None or info.finalized:
+            return
+        info.imports = list(self._module_imports)
+        self._shared.module_defs.append(
+            ModuleDef(
+                info.name,
+                info.path,
+                tuple(info.imports),
+                tuple(sorted(info.function_exports)),
+                tuple(sorted(info.struct_exports)),
+            )
+        )
+        info.finalized = True
 
     def _statement(self) -> None:
         kind = self._current.kind
@@ -354,18 +896,29 @@ class Compiler:
         if kind == TokenKind.RETURN:
             self._return_statement()
             return
+        if kind == TokenKind.SET:
+            self._set_statement()
+            return
         if kind == TokenKind.FN:
-            raise CompileError(
+            raise self._error(
                 "Function definitions are only allowed at top level "
-                f"at position {self._current.pos}"
+                "and before executable statements",
+                self._current,
             )
-        raise CompileError(f"Expected statement at position {self._current.pos}")
+        if kind in (TokenKind.IMPORT, TokenKind.STRUCT, TokenKind.EXPORT):
+            raise self._error(
+                "Imports, exports, and struct definitions are only allowed at top level before statements",
+                self._current,
+            )
+        raise self._error("Expected statement", self._current)
 
     def _let_statement(self) -> None:
         self._eat(TokenKind.LET)
         name = self._current.text
         name_pos = self._current.pos
         self._eat(TokenKind.IDENT)
+        if name in self._namespaces:
+            raise self._error_at(f"Variable {name!r} conflicts with an imported namespace", name_pos)
         self._eat(TokenKind.EQUAL)
         self._expression()
         slot = self._symbols.define_or_get(name)
@@ -388,19 +941,152 @@ class Compiler:
 
     def _return_statement(self) -> None:
         if not self._in_function:
-            raise CompileError(f"Return outside function at position {self._current.pos}")
+            raise self._error("Return outside function", self._current)
         self._eat(TokenKind.RETURN)
         self._expression()
         self._emit(Op.RETURN)
 
-    def _function_definition(self) -> None:
+    def _set_statement(self) -> None:
+        self._eat(TokenKind.SET)
+        name_token = self._current
+        self._eat(TokenKind.IDENT)
+        slot = self._get_slot(name_token)
+        self._emit(Op.LOAD, int(slot))
+
+        if self._current.kind == TokenKind.LBRACKET:
+            self._eat(TokenKind.LBRACKET)
+            self._expression()
+            self._eat(TokenKind.RBRACKET)
+            self._eat(TokenKind.EQUAL)
+            self._expression()
+            self._emit(Op.SET_INDEX)
+            return
+
+        if self._current.kind == TokenKind.DOT:
+            self._eat(TokenKind.DOT)
+            field = self._current.text
+            self._eat(TokenKind.IDENT)
+            field_index = self._intern_field(field)
+            self._eat(TokenKind.EQUAL)
+            self._expression()
+            self._emit(Op.SET_FIELD, field_index)
+            return
+
+        raise self._error("Expected indexed or field assignment target after set", self._current)
+
+    def _import_statement(self) -> None:
+        token = self._current
+        if not self._accept_imports:
+            raise self._error("Imports must appear before declarations and statements", token)
+        self._eat(TokenKind.IMPORT)
+        path_token = self._current
+        self._eat(TokenKind.STRING)
+        if self._current.kind == TokenKind.AS:
+            self._eat(TokenKind.AS)
+            alias_token = self._current
+            alias = alias_token.text
+            self._eat(TokenKind.IDENT)
+        else:
+            alias_token = path_token
+            alias = _default_import_alias(path_token.text)
+        if self._resolver is None:
+            raise self._error("Imports require compiling from a source file", path_token)
+        module_filename, module_source = self._resolver(self._filename, path_token.text)
+        if alias in self._namespaces or self._symbols.contains(alias):
+            raise self._error(f"Import namespace {alias!r} is already defined", alias_token)
+        if alias in _BUILTIN_INDEXES:
+            raise self._error(f"Import namespace {alias!r} conflicts with a builtin", alias_token)
+
+        info = self._shared.modules.get(module_filename)
+        if info is None or not info.finalized:
+            if module_filename in self._shared.loading_modules:
+                raise self._error_at(f"Import cycle involving {module_filename}", path_token.pos)
+            self._shared.loading_modules.add(module_filename)
+            self._imported.add(module_filename)
+            try:
+                module_compiler = Compiler(
+                    module_source,
+                    filename=module_filename,
+                    resolver=self._resolver,
+                    imported=self._imported,
+                    module_mode=True,
+                    module_name=_module_name_from_import(path_token.text, module_filename),
+                    shared=self._shared,
+                )
+                module_compiler.compile()
+            finally:
+                self._shared.loading_modules.discard(module_filename)
+            info = self._shared.modules[module_filename]
+
+        self._namespaces[alias] = info
+        self._module_imports.append(
+            ModuleImportDef(alias, path_token.text, info.name, module_filename)
+        )
+
+    def _struct_definition(self, *, exported: bool) -> None:
+        self._eat(TokenKind.STRUCT)
+        name_token = self._current
+        name = name_token.text
+        self._eat(TokenKind.IDENT)
+        if name in self._namespaces:
+            raise self._error(f"Struct {name!r} conflicts with an imported namespace", name_token)
+        if name in self._local_struct_indexes:
+            raise self._error(f"Struct {name!r} is already defined", name_token)
+        if name in self._local_function_indexes or name in _BUILTIN_INDEXES:
+            raise self._error(f"Struct {name!r} conflicts with an existing callable", name_token)
+
+        fields: list[str] = []
+        seen: set[str] = set()
+        self._eat(TokenKind.LBRACE)
+        if self._current.kind != TokenKind.RBRACE:
+            while True:
+                field_token = self._current
+                field = field_token.text
+                self._eat(TokenKind.IDENT)
+                if field in seen:
+                    raise self._error(f"Duplicate struct field {field!r}", field_token)
+                seen.add(field)
+                fields.append(field)
+                self._intern_field(field)
+                if self._current.kind != TokenKind.COMMA:
+                    break
+                self._eat(TokenKind.COMMA)
+        self._eat(TokenKind.RBRACE)
+
+        full_name = self._qualified_declaration_name(name)
+        if full_name in self._struct_indexes:
+            raise self._error(f"Struct {full_name!r} is already defined", name_token)
+        struct_index = len(self._structs)
+        self._struct_indexes[full_name] = struct_index
+        self._local_struct_indexes[name] = struct_index
+        self._structs.append(StructDef(full_name, tuple(fields)))
+        if self._module_info is not None:
+            self._module_info.all_structs.add(name)
+            if exported:
+                self._module_info.struct_exports[name] = struct_index
+
+    def _function_definition(self, *, exported: bool) -> None:
         self._eat(TokenKind.FN)
         name = self._current.text
         name_pos = self._current.pos
+        name_token = self._current
         self._eat(TokenKind.IDENT)
-        function_index = self._function_index(name)
-        if self._functions[function_index] is not None:
-            raise CompileError(f"Function {name!r} is already defined at position {name_pos}")
+        if name in self._namespaces:
+            raise self._error(f"Function {name!r} conflicts with an imported namespace", name_token)
+        if name in self._local_function_indexes:
+            raise self._error(f"Function {name!r} is already defined", name_token)
+        if name in self._local_struct_indexes or name in _BUILTIN_INDEXES:
+            raise self._error(f"Function {name!r} conflicts with an existing callable", name_token)
+        full_name = self._qualified_declaration_name(name)
+        if full_name in self._function_indexes:
+            raise self._error(f"Function {full_name!r} is already defined", name_token)
+        function_index = len(self._functions)
+        self._function_indexes[full_name] = function_index
+        self._local_function_indexes[name] = function_index
+        if self._module_info is not None:
+            self._module_info.all_functions.add(name)
+            if exported:
+                self._module_info.function_exports[name] = function_index
 
         function_symbols = SymbolTable()
         self._eat(TokenKind.LPAREN)
@@ -409,12 +1095,11 @@ class Compiler:
             while True:
                 param_name = self._current.text
                 param_pos = self._current.pos
+                param_token = self._current
                 self._eat(TokenKind.IDENT)
                 slot = function_symbols.define_or_get(param_name)
                 if int(slot) != param_count:
-                    raise CompileError(
-                        f"Duplicate parameter {param_name!r} at position {param_pos}"
-                    )
+                    raise self._error(f"Duplicate parameter {param_name!r}", param_token)
                 param_count += 1
                 if self._current.kind != TokenKind.COMMA:
                     break
@@ -432,7 +1117,7 @@ class Compiler:
             self._emit(Op.PUSH_INT, 0)
             self._emit(Op.RETURN)
             function = Function(
-                name,
+                full_name,
                 param_count,
                 tuple(self._code),
                 self._symbols.slot_count,
@@ -443,56 +1128,66 @@ class Compiler:
             self._code = previous_code
             self._in_function = previous_in_function
 
-        self._functions[function_index] = function
+        self._functions.append(function)
         LOGGER.debug(
             "compiled function",
             extra={"name": name, "index": function_index, "params": param_count},
         )
 
+    def _qualified_declaration_name(self, name: str) -> str:
+        if self._module_info is None:
+            return name
+        return f"{self._module_info.name}.{name}"
+
     def _block(self) -> None:
         self._eat(TokenKind.LBRACE)
-        while self._current.kind != TokenKind.RBRACE:
-            if self._current.kind == TokenKind.EOF:
-                raise CompileError(f"Unterminated block at position {self._current.pos}")
-            self._statement()
-        self._eat(TokenKind.RBRACE)
+        self._symbols.enter_scope()
+        try:
+            while self._current.kind != TokenKind.RBRACE:
+                if self._current.kind == TokenKind.EOF:
+                    raise self._error("Unterminated block", self._current)
+                self._statement()
+            self._eat(TokenKind.RBRACE)
+        finally:
+            self._symbols.exit_scope()
 
     def _expression(self) -> None:
-        self._comparison()
-
-    def _comparison(self) -> None:
-        self._additive()
-        comparison_ops = {
-            TokenKind.LT: Op.LT,
-            TokenKind.LTE: Op.LTE,
-            TokenKind.GT: Op.GT,
-            TokenKind.GTE: Op.GTE,
-            TokenKind.EQEQ: Op.EQ,
-            TokenKind.BANG_EQUAL: Op.NE,
-        }
-        while self._current.kind in comparison_ops:
-            op = self._current.kind
-            self._eat(op)
-            self._additive()
-            self._emit(comparison_ops[op])
+        self._binary_level(self._additive, _COMPARISON_OPS)
 
     def _additive(self) -> None:
-        self._term()
-        while self._current.kind in (TokenKind.PLUS, TokenKind.MINUS):
-            op = self._current.kind
-            self._eat(op)
-            self._term()
-            self._emit(Op.ADD if op == TokenKind.PLUS else Op.SUB)
+        self._binary_level(self._term, _ADDITIVE_OPS)
 
     def _term(self) -> None:
-        self._factor()
-        while self._current.kind in (TokenKind.STAR, TokenKind.SLASH):
+        self._binary_level(self._factor, _TERM_OPS)
+
+    def _binary_level(
+        self, parse_operand: Callable[[], None], operators: dict[TokenKind, Op]
+    ) -> None:
+        parse_operand()
+        while self._current.kind in operators:
             op = self._current.kind
             self._eat(op)
-            self._factor()
-            self._emit(Op.MUL if op == TokenKind.STAR else Op.DIV)
+            parse_operand()
+            self._emit(operators[op])
 
     def _factor(self) -> None:
+        self._primary()
+        while True:
+            if self._current.kind == TokenKind.LBRACKET:
+                self._eat(TokenKind.LBRACKET)
+                self._expression()
+                self._eat(TokenKind.RBRACKET)
+                self._emit(Op.INDEX)
+                continue
+            if self._current.kind == TokenKind.DOT:
+                self._eat(TokenKind.DOT)
+                field = self._current.text
+                self._eat(TokenKind.IDENT)
+                self._emit(Op.GET_FIELD, self._intern_field(field))
+                continue
+            break
+
+    def _primary(self) -> None:
         token = self._current
         kind = token.kind
 
@@ -501,12 +1196,45 @@ class Compiler:
             self._emit(Op.PUSH_INT, int(token.text))
             return
 
+        if kind == TokenKind.STRING:
+            self._eat(TokenKind.STRING)
+            self._emit(Op.PUSH_STRING, self._intern_string(token.text))
+            return
+
+        if kind == TokenKind.NULL:
+            self._eat(TokenKind.NULL)
+            self._emit(Op.PUSH_NULL)
+            return
+
+        if kind == TokenKind.LBRACKET:
+            self._eat(TokenKind.LBRACKET)
+            count = 0
+            if self._current.kind != TokenKind.RBRACKET:
+                while True:
+                    self._expression()
+                    count += 1
+                    if self._current.kind != TokenKind.COMMA:
+                        break
+                    self._eat(TokenKind.COMMA)
+            self._eat(TokenKind.RBRACKET)
+            self._emit(Op.MAKE_ARRAY, count)
+            return
+
         if kind == TokenKind.IDENT:
+            if self._is_qualified_call():
+                namespace = token.text
+                self._eat(TokenKind.IDENT)
+                self._eat(TokenKind.DOT)
+                member_token = self._current
+                member = member_token.text
+                self._eat(TokenKind.IDENT)
+                self._qualified_call_expression(namespace, member, token.pos, member_token.pos)
+                return
             self._eat(TokenKind.IDENT)
             if self._current.kind == TokenKind.LPAREN:
-                self._call_expression(token.text)
+                self._call_expression(token.text, token.pos)
             else:
-                slot = self._symbols.get(token.text, token.pos)
+                slot = self._get_slot(token)
                 self._emit(Op.LOAD, int(slot))
             return
 
@@ -522,10 +1250,40 @@ class Compiler:
             self._emit(Op.NEG)
             return
 
-        raise CompileError(f"Expected expression at position {token.pos}")
+        if kind == TokenKind.UNSAFE:
+            self._eat(TokenKind.UNSAFE)
+            self._unsafe_depth += 1
+            try:
+                self._factor()
+            finally:
+                self._unsafe_depth -= 1
+            return
 
-    def _call_expression(self, name: str) -> None:
-        function_index = self._function_index(name)
+        raise self._error("Expected expression", token)
+
+    def _is_qualified_call(self) -> bool:
+        return (
+            self._current.kind == TokenKind.IDENT
+            and self._index + 3 < len(self._tokens)
+            and self._tokens[self._index + 1].kind == TokenKind.DOT
+            and self._tokens[self._index + 2].kind == TokenKind.IDENT
+            and self._tokens[self._index + 3].kind == TokenKind.LPAREN
+        )
+
+    def _call_expression(self, name: str, pos: int) -> None:
+        struct_index = self._local_struct_indexes.get(name)
+        if struct_index is not None:
+            self._constructor_call(name, struct_index)
+            return
+
+        builtin_index = _BUILTIN_INDEXES.get(name)
+        if builtin_index is not None:
+            self._builtin_call(name, builtin_index, pos)
+            return
+
+        function_index = self._local_function_indexes.get(name)
+        if function_index is None:
+            raise self._error_at(f"Undefined function or constructor {name!r}", pos)
         self._eat(TokenKind.LPAREN)
         arg_count = 0
         if self._current.kind != TokenKind.RPAREN:
@@ -538,12 +1296,89 @@ class Compiler:
         self._eat(TokenKind.RPAREN)
         self._emit(Op.CALL, function_index, arg_count)
 
+    def _qualified_call_expression(
+        self, namespace: str, member: str, namespace_pos: int, member_pos: int
+    ) -> None:
+        info = self._namespaces.get(namespace)
+        if info is None:
+            raise self._error_at(f"Unknown module namespace {namespace!r}", namespace_pos)
+
+        struct_index = info.struct_exports.get(member)
+        if struct_index is not None:
+            self._constructor_call(f"{namespace}.{member}", struct_index)
+            return
+
+        function_index = info.function_exports.get(member)
+        if function_index is not None:
+            self._eat(TokenKind.LPAREN)
+            arg_count = 0
+            if self._current.kind != TokenKind.RPAREN:
+                while True:
+                    self._expression()
+                    arg_count += 1
+                    if self._current.kind != TokenKind.COMMA:
+                        break
+                    self._eat(TokenKind.COMMA)
+            self._eat(TokenKind.RPAREN)
+            self._emit(Op.CALL, function_index, arg_count)
+            return
+
+        if member in info.all_functions or member in info.all_structs:
+            raise self._error_at(
+                f"Module member {namespace}.{member} is not exported", member_pos
+            )
+        raise self._error_at(f"Module {namespace!r} has no exported member {member!r}", member_pos)
+
+    def _constructor_call(self, name: str, struct_index: int) -> None:
+        struct = self._structs[struct_index]
+        self._eat(TokenKind.LPAREN)
+        arg_count = 0
+        if self._current.kind != TokenKind.RPAREN:
+            while True:
+                self._expression()
+                arg_count += 1
+                if self._current.kind != TokenKind.COMMA:
+                    break
+                self._eat(TokenKind.COMMA)
+        self._eat(TokenKind.RPAREN)
+        if arg_count != len(struct.fields):
+            raise self._error_at(
+                f"Struct {name!r} expects {len(struct.fields)} field value(s), got {arg_count}",
+                self._current.pos,
+            )
+        self._emit(Op.MAKE_STRUCT, struct_index, arg_count)
+
+    def _builtin_call(self, name: str, builtin_index: int, pos: int) -> None:
+        builtin = _BUILTINS[builtin_index]
+        self._eat(TokenKind.LPAREN)
+        arg_count = 0
+        if self._current.kind != TokenKind.RPAREN:
+            while True:
+                self._expression()
+                arg_count += 1
+                if self._current.kind != TokenKind.COMMA:
+                    break
+                self._eat(TokenKind.COMMA)
+        self._eat(TokenKind.RPAREN)
+        if not builtin.min_args <= arg_count <= builtin.max_args:
+            if builtin.min_args == builtin.max_args:
+                expected = str(builtin.min_args)
+            else:
+                expected = f"{builtin.min_args}..{builtin.max_args}"
+            raise self._error_at(
+                f"Builtin {name!r} expects {expected} argument(s), got {arg_count}",
+                self._current.pos,
+            )
+        if builtin.requires_unsafe and self._unsafe_depth <= 0:
+            raise self._error_at(
+                f"Builtin {name!r} requires unsafe dereference syntax",
+                pos,
+            )
+        self._emit(Op.BUILTIN, builtin_index, arg_count)
+
     def _eat(self, kind: TokenKind) -> None:
         if self._current.kind != kind:
-            raise CompileError(
-                f"Expected {kind.name}, got {self._current.kind.name} "
-                f"at position {self._current.pos}"
-            )
+            raise self._error(f"Expected {kind.name}, got {self._current.kind.name}", self._current)
         self._index += 1
         self._current = self._tokens[self._index]
 
@@ -559,26 +1394,35 @@ class Compiler:
         instr = self._code[index]
         self._code[index] = Instr(instr.op, arg, instr.arg2)
 
-    def _function_index(self, name: str) -> int:
-        existing = self._function_indexes.get(name)
+    def _get_slot(self, token: Token) -> Slot:
+        try:
+            return self._symbols.get(token.text, token.pos)
+        except CompileError:
+            raise self._error(f"Undefined variable {token.text!r}", token) from None
+
+    def _intern_string(self, text: str) -> int:
+        existing = self._string_indexes.get(text)
         if existing is not None:
             return existing
-        index = len(self._function_names)
-        self._function_indexes[name] = index
-        self._function_names.append(name)
-        self._functions.append(None)
+        index = len(self._strings)
+        self._string_indexes[text] = index
+        self._strings.append(text)
         return index
 
-    def _resolved_functions(self) -> tuple[Function, ...]:
-        missing = [
-            self._function_names[index]
-            for index, function in enumerate(self._functions)
-            if function is None
-        ]
-        if missing:
-            joined = ", ".join(repr(name) for name in missing)
-            raise CompileError(f"Undefined function(s): {joined}")
-        return tuple(function for function in self._functions if function is not None)
+    def _intern_field(self, name: str) -> int:
+        existing = self._field_indexes.get(name)
+        if existing is not None:
+            return existing
+        index = len(self._fields)
+        self._field_indexes[name] = index
+        self._fields.append(name)
+        return index
+
+    def _error(self, message: str, token: Token) -> CompileError:
+        return CompileError(self._source_map.format(message, token.pos, token.end))
+
+    def _error_at(self, message: str, pos: int) -> CompileError:
+        return CompileError(self._source_map.format(message, pos, pos + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +1431,8 @@ class Compiler:
 # ---------------------------------------------------------------------------
 _STACK_EFFECTS: Final[dict[Op, int]] = {
     Op.PUSH_INT: 1,
+    Op.PUSH_STRING: 1,
+    Op.PUSH_NULL: 1,
     Op.LOAD: 1,
     Op.STORE: -1,
     Op.ADD: -1,
@@ -601,193 +1447,171 @@ _STACK_EFFECTS: Final[dict[Op, int]] = {
     Op.GTE: -1,
     Op.EQ: -1,
     Op.NE: -1,
+    Op.INDEX: -1,
+    Op.GET_FIELD: 0,
+    Op.SET_INDEX: -3,
+    Op.SET_FIELD: -2,
 }
 
 
 class BytecodeVerifier:
-    """
-    O(n) static stack-depth checker.
+    """Tiny CFG stack checker for compiler-generated bytecode."""
 
-    Simulates stack depth changes across the reachable control-flow graph
-    without executing anything. Raises CompileError on:
-      - negative depth mid-sequence  (stack underflow)
-      - non-zero depth at HALT       (stack imbalance)
-      - non-one depth at RETURN      (function stack imbalance)
-      - inconsistent depth at a jump target
-      - unrecognised opcode          (compiler/optimizer bug)
-
-    By catching structural errors before execution, the VM and JIT can omit
-    redundant runtime guards.  The JIT in particular no longer needs the
-    end-of-function stack-imbalance check because it is a compile-time
-    invariant after this pass.
-    """
-
-    @classmethod
-    def verify(cls, program: Program) -> None:
-        cls._verify_chunk(
+    @staticmethod
+    def verify(program: Program) -> None:
+        BytecodeVerifier._verify_chunk(
+            "main",
             program.code,
             program.slot_count,
             program.functions,
-            "main",
-            final_op=Op.HALT,
+            program.strings,
+            program.structs,
+            program.fields,
+            Op.HALT,
         )
         for index, function in enumerate(program.functions):
-            cls._verify_chunk(
+            BytecodeVerifier._verify_chunk(
+                f"function {function.name!r} (index {index})",
                 function.code,
                 function.slot_count,
                 program.functions,
-                f"function {function.name!r} (index {index})",
-                final_op=Op.RETURN,
+                program.strings,
+                program.structs,
+                program.fields,
+                Op.RETURN,
             )
 
-    @classmethod
+    @staticmethod
     def _verify_chunk(
-        cls,
+        chunk_name: str,
         code: tuple[Instr, ...],
         slot_count: int,
         functions: tuple[Function, ...],
-        chunk_name: str,
-        *,
+        strings: tuple[str, ...],
+        structs: tuple[StructDef, ...],
+        fields: tuple[str, ...],
         final_op: Op,
     ) -> None:
-        if not code:
-            raise CompileError(f"Verifier: {chunk_name} has no bytecode")
-        if code[-1].op != final_op:
-            raise CompileError(
-                f"Verifier: {chunk_name} must end with {final_op.name}, got {code[-1].op.name}"
-            )
+        if not code or code[-1].op != final_op:
+            got = "nothing" if not code else code[-1].op.name
+            raise CompileError(f"Verifier: {chunk_name} must end with {final_op.name}, got {got}")
 
-        depths: dict[int, int] = {}
-        worklist: list[tuple[int, int]] = []
+        seen: dict[int, int] = {}
+        todo: list[tuple[int, int]] = []
 
-        def enqueue(target: int, depth: int, source_index: int) -> None:
-            if target < 0 or target >= len(code):
+        def visit(pc: int, depth: int, origin: int) -> None:
+            if pc < 0 or pc >= len(code):
                 raise CompileError(
-                    f"Verifier: jump/fallthrough from instruction {source_index} "
-                    f"in {chunk_name} targets invalid instruction {target}"
+                    f"Verifier: instruction {origin} in {chunk_name} targets {pc}"
                 )
-            existing = depths.get(target)
-            if existing is not None:
-                if existing != depth:
+            old_depth = seen.get(pc)
+            if old_depth is not None:
+                if old_depth != depth:
                     raise CompileError(
-                        f"Verifier: inconsistent stack depth at instruction {target} "
-                        f"in {chunk_name}: {existing} vs {depth}"
+                        f"Verifier: stack depth mismatch at instruction {pc} "
+                        f"in {chunk_name}: {old_depth} vs {depth}"
                     )
                 return
-            depths[target] = depth
-            worklist.append((target, depth))
+            seen[pc] = depth
+            todo.append((pc, depth))
 
-        enqueue(0, 0, 0)
+        def next_depth(pc: int, depth: int, delta: int) -> int:
+            depth += delta
+            if depth < 0:
+                raise CompileError(
+                    f"Verifier: stack underflow at instruction {pc} in {chunk_name}"
+                )
+            return depth
 
-        while worklist:
-            i, depth = worklist.pop()
-            instr = code[i]
-            op = instr.op
-            arg = instr.arg
-            arg2 = instr.arg2
+        visit(0, 0, 0)
+        while todo:
+            pc, depth = todo.pop()
+            instr = code[pc]
+            op, arg, arg2 = instr.op, instr.arg, instr.arg2
 
-            if op == Op.LOAD or op == Op.STORE:
-                cls._verify_slot(arg, slot_count, i, chunk_name)
-
-            effect = _STACK_EFFECTS.get(instr.op)
-            if effect is not None:
-                next_depth = depth + effect
-                if next_depth < 0:
-                    raise CompileError(
-                        f"Verifier: stack underflow at instruction {i} in {chunk_name} "
-                        f"({op.name}, cumulative depth={next_depth})"
-                    )
-                cls._enqueue_next(code, enqueue, i, next_depth, chunk_name)
-                continue
+            if op in (Op.LOAD, Op.STORE) and not 0 <= arg < slot_count:
+                raise CompileError(
+                    f"Verifier: invalid slot {arg} at instruction {pc} in {chunk_name}"
+                )
+            if op == Op.PUSH_STRING and not 0 <= arg < len(strings):
+                raise CompileError(
+                    f"Verifier: invalid string index {arg} at instruction {pc} in {chunk_name}"
+                )
+            if op in (Op.GET_FIELD, Op.SET_FIELD) and not 0 <= arg < len(fields):
+                raise CompileError(
+                    f"Verifier: invalid field index {arg} at instruction {pc} in {chunk_name}"
+                )
 
             if op == Op.JUMP:
-                enqueue(arg, depth, i)
-                continue
-
-            if op == Op.JUMP_IF_ZERO:
-                if depth < 1:
+                visit(arg, depth, pc)
+            elif op == Op.JUMP_IF_ZERO:
+                depth = next_depth(pc, depth, -1)
+                visit(arg, depth, pc)
+                visit(pc + 1, depth, pc)
+            elif op == Op.CALL:
+                if not 0 <= arg < len(functions):
                     raise CompileError(
-                        f"Verifier: stack underflow at instruction {i} in {chunk_name} "
-                        f"({op.name}, cumulative depth={depth - 1})"
+                        f"Verifier: invalid function index {arg} at instruction {pc} "
+                        f"in {chunk_name}"
                     )
-                next_depth = depth - 1
-                enqueue(arg, next_depth, i)
-                cls._enqueue_next(code, enqueue, i, next_depth, chunk_name)
-                continue
-
-            if op == Op.CALL:
-                cls._verify_call(arg, arg2, functions, i, chunk_name)
-                next_depth = depth - arg2 + 1
-                if next_depth < 0:
+                expected = functions[arg].param_count
+                if arg2 != expected:
                     raise CompileError(
-                        f"Verifier: stack underflow at instruction {i} in {chunk_name} "
-                        f"({op.name}, cumulative depth={next_depth})"
+                        f"Function {functions[arg].name!r} expects {expected} argument(s), "
+                        f"got {arg2} at instruction {pc} in {chunk_name}"
                     )
-                cls._enqueue_next(code, enqueue, i, next_depth, chunk_name)
-                continue
-
-            if op == Op.RETURN:
+                visit(pc + 1, next_depth(pc, depth, 1 - arg2), pc)
+            elif op == Op.MAKE_ARRAY:
+                if arg < 0:
+                    raise CompileError(
+                        f"Verifier: negative array arity {arg} at instruction {pc} "
+                        f"in {chunk_name}"
+                    )
+                visit(pc + 1, next_depth(pc, depth, 1 - arg), pc)
+            elif op == Op.MAKE_STRUCT:
+                if not 0 <= arg < len(structs):
+                    raise CompileError(
+                        f"Verifier: invalid struct index {arg} at instruction {pc} "
+                        f"in {chunk_name}"
+                    )
+                expected = len(structs[arg].fields)
+                if arg2 != expected:
+                    raise CompileError(
+                        f"Struct {structs[arg].name!r} expects {expected} field value(s), "
+                        f"got {arg2} at instruction {pc} in {chunk_name}"
+                    )
+                visit(pc + 1, next_depth(pc, depth, 1 - arg2), pc)
+            elif op == Op.BUILTIN:
+                if not 0 <= arg < len(_BUILTINS):
+                    raise CompileError(
+                        f"Verifier: invalid builtin index {arg} at instruction {pc} "
+                        f"in {chunk_name}"
+                    )
+                builtin = _BUILTINS[arg]
+                if not builtin.min_args <= arg2 <= builtin.max_args:
+                    raise CompileError(
+                        f"Builtin {builtin.name!r} expects {builtin.min_args}.."
+                        f"{builtin.max_args} argument(s), got {arg2} at instruction {pc} "
+                        f"in {chunk_name}"
+                    )
+                visit(pc + 1, next_depth(pc, depth, 1 - arg2), pc)
+            elif op == Op.RETURN:
                 if depth != 1:
                     raise CompileError(
-                        f"Verifier: RETURN in {chunk_name} requires one value "
-                        f"on the stack, got {depth}"
+                        f"Verifier: RETURN in {chunk_name} requires one value, got {depth}"
                     )
-                continue
-
-            if op == Op.HALT:
+            elif op == Op.HALT:
                 if depth != 0:
                     raise CompileError(
                         f"Verifier: HALT in {chunk_name} requires empty stack, got {depth}"
                     )
-                continue
-
-            raise CompileError(f"Verifier: unknown opcode {op!r} at index {i} in {chunk_name}")
-
-    @staticmethod
-    def _enqueue_next(
-        code: tuple[Instr, ...],
-        enqueue: Callable[[int, int, int], None],
-        index: int,
-        depth: int,
-        chunk_name: str,
-    ) -> None:
-        target = index + 1
-        if target >= len(code):
-            raise CompileError(
-                f"Verifier: {chunk_name} falls off the end after instruction {index}"
-            )
-        enqueue(target, depth, index)
-
-    @staticmethod
-    def _verify_slot(slot: int, slot_count: int, index: int, chunk_name: str) -> None:
-        if slot < 0 or slot >= slot_count:
-            raise CompileError(
-                f"Verifier: invalid slot {slot} at instruction {index} in {chunk_name}"
-            )
-
-    @staticmethod
-    def _verify_call(
-        function_index: int,
-        arg_count: int,
-        functions: tuple[Function, ...],
-        index: int,
-        chunk_name: str,
-    ) -> None:
-        if function_index < 0 or function_index >= len(functions):
-            raise CompileError(
-                f"Verifier: invalid function index {function_index} at instruction {index} "
-                f"in {chunk_name}"
-            )
-        if arg_count < 0:
-            raise CompileError(
-                f"Verifier: negative argument count at instruction {index} in {chunk_name}"
-            )
-        function = functions[function_index]
-        if arg_count != function.param_count:
-            raise CompileError(
-                f"Function {function.name!r} expects {function.param_count} argument(s), "
-                f"got {arg_count} at instruction {index} in {chunk_name}"
-            )
+            else:
+                effect = _STACK_EFFECTS.get(op)
+                if effect is None:
+                    raise CompileError(
+                        f"Verifier: unknown opcode {op!r} at index {pc} in {chunk_name}"
+                    )
+                visit(pc + 1, next_depth(pc, depth, effect), pc)
 
 
 class PeepholeOptimizer:
@@ -827,6 +1651,10 @@ class PeepholeOptimizer:
             program.slot_count,
             program.names,
             functions,
+            program.strings,
+            program.structs,
+            program.fields,
+            program.modules,
         )
 
     @staticmethod
@@ -903,78 +1731,783 @@ class PeepholeOptimizer:
         return tuple(code)
 
 
+@dataclass(frozen=True, slots=True)
+class HeapRef:
+    address: int
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class RawPointer:
+    address: int
+    kind: str = "object"
+    index: int = 0
+    field: str = ""
+    generation: int = 0
+    cast: str = ""
+
+
+@dataclass(slots=True)
+class HeapObject:
+    kind: str
+    value: object
+    type_name: str = ""
+
+
+Value = int | HeapRef | RawPointer
+
+
+class TinyHeap:
+    """Explicit heap for arrays, structs, strings, and pointer-like cells."""
+
+    __slots__ = ("_objects", "_free", "_generations")
+
+    def __init__(self) -> None:
+        self._objects: list[HeapObject | None] = [None]
+        self._free: list[int] = []
+        self._generations: list[int] = [0]
+
+    def alloc(self, obj: HeapObject) -> HeapRef:
+        if self._free:
+            address = self._free.pop()
+            self._generations[address] += 1
+            self._objects[address] = obj
+        else:
+            address = len(self._objects)
+            self._objects.append(obj)
+            self._generations.append(1)
+        return HeapRef(address, self._generations[address])
+
+    def alloc_string(self, text: str) -> HeapRef:
+        return self.alloc(HeapObject("string", text))
+
+    def alloc_array(self, values: Iterable[Value]) -> HeapRef:
+        return self.alloc(HeapObject("array", list(values)))
+
+    def alloc_buffer(self, size: int) -> HeapRef:
+        return self.alloc(HeapObject("buffer", bytearray(size)))
+
+    def alloc_struct(self, type_name: str, fields: dict[str, Value]) -> HeapRef:
+        return self.alloc(HeapObject("struct", dict(fields), type_name))
+
+    def alloc_cell(self, value: Value) -> HeapRef:
+        return self.alloc(HeapObject("cell", value))
+
+    def get(self, ref: Value) -> HeapObject:
+        if not isinstance(ref, HeapRef):
+            raise RuntimeTinyOneError("Expected heap pointer")
+        return self.get_address(ref.address, ref.generation)
+
+    def ref_at(self, address: int) -> HeapRef:
+        return HeapRef(address, self.current_generation(address))
+
+    def current_generation(self, address: int) -> int:
+        self._current_object(address)
+        return self._generations[address]
+
+    def get_address(self, address: int, generation: int = 0) -> HeapObject:
+        obj = self._current_object(address)
+        if generation != 0 and self._generations[address] != generation:
+            raise RuntimeTinyOneError(f"Stale heap pointer {address}")
+        return obj
+
+    def _current_object(self, address: int) -> HeapObject:
+        if address <= 0 or address >= len(self._objects):
+            raise RuntimeTinyOneError(f"Invalid heap pointer {address}")
+        obj = self._objects[address]
+        if obj is None:
+            raise RuntimeTinyOneError(f"Use after free for heap pointer {address}")
+        return obj
+
+    def free(self, ref: Value) -> None:
+        obj = self.get(ref)
+        address = ref.address
+        self._objects[address] = None
+        self._free.append(address)
+        obj.value = None
+
+
+class TinyRuntimeContext:
+    """Runtime state shared by stack frames: heap plus deterministic input."""
+
+    __slots__ = ("heap", "_inputs", "_input_index")
+
+    def __init__(self, inputs: Iterable[object] | None = None) -> None:
+        self.heap = TinyHeap()
+        self._inputs = [str(value) for value in (inputs or ())]
+        self._input_index = 0
+
+    def read_raw(self) -> str:
+        if self._input_index >= len(self._inputs):
+            raise RuntimeTinyOneError("Input exhausted")
+        value = self._inputs[self._input_index]
+        self._input_index += 1
+        return value
+
+
+def runtime_expect_int(value: Value, operation: str) -> int:
+    if isinstance(value, int):
+        return value
+    raise RuntimeTinyOneError(f"{operation} expects integer operands")
+
+
+def runtime_add(lhs: Value, rhs: Value) -> int:
+    return runtime_expect_int(lhs, "Addition") + runtime_expect_int(rhs, "Addition")
+
+
+def runtime_sub(lhs: Value, rhs: Value) -> int:
+    return runtime_expect_int(lhs, "Subtraction") - runtime_expect_int(rhs, "Subtraction")
+
+
+def runtime_mul(lhs: Value, rhs: Value) -> int:
+    return runtime_expect_int(lhs, "Multiplication") * runtime_expect_int(rhs, "Multiplication")
+
+
+def checked_div(lhs: Value, rhs: Value) -> int:
+    lhs_int = runtime_expect_int(lhs, "Division")
+    rhs_int = runtime_expect_int(rhs, "Division")
+    if rhs_int == 0:
+        raise RuntimeTinyOneError("Division by zero")
+    return lhs_int // rhs_int
+
+
+def runtime_neg(value: Value) -> int:
+    return -runtime_expect_int(value, "Negation")
+
+
+def runtime_compare(op: Op, lhs: Value, rhs: Value) -> int:
+    lhs_int = runtime_expect_int(lhs, op.name)
+    rhs_int = runtime_expect_int(rhs, op.name)
+    if op == Op.LT:
+        return 1 if lhs_int < rhs_int else 0
+    if op == Op.LTE:
+        return 1 if lhs_int <= rhs_int else 0
+    if op == Op.GT:
+        return 1 if lhs_int > rhs_int else 0
+    if op == Op.GTE:
+        return 1 if lhs_int >= rhs_int else 0
+    if op == Op.EQ:
+        return 1 if lhs_int == rhs_int else 0
+    if op == Op.NE:
+        return 1 if lhs_int != rhs_int else 0
+    raise RuntimeTinyOneError(f"Unsupported comparison opcode {op!r}")
+
+
+def runtime_is_false(value: Value) -> bool:
+    return (isinstance(value, int) and value == 0) or runtime_is_null(value)
+
+
+def runtime_make_array(context: TinyRuntimeContext, values: Iterable[Value]) -> HeapRef:
+    return context.heap.alloc_array(values)
+
+
+def runtime_index(context: TinyRuntimeContext, container: Value, index: Value) -> Value:
+    index_int = runtime_expect_int(index, "Index")
+    obj = context.heap.get(container)
+    if obj.kind == "array":
+        values = obj.value
+        if not isinstance(values, list):
+            raise RuntimeTinyOneError("Corrupt array object")
+        if index_int < 0 or index_int >= len(values):
+            raise RuntimeTinyOneError(f"Array index {index_int} out of bounds")
+        return values[index_int]
+    if obj.kind == "string":
+        text = obj.value
+        if not isinstance(text, str):
+            raise RuntimeTinyOneError("Corrupt string object")
+        if index_int < 0 or index_int >= len(text):
+            raise RuntimeTinyOneError(f"String index {index_int} out of bounds")
+        return context.heap.alloc_string(text[index_int])
+    raise RuntimeTinyOneError(f"Cannot index {obj.kind}")
+
+
+def runtime_set_index(
+    context: TinyRuntimeContext, container: Value, index: Value, value: Value
+) -> None:
+    index_int = runtime_expect_int(index, "Index")
+    obj = context.heap.get(container)
+    if obj.kind != "array":
+        raise RuntimeTinyOneError(f"Cannot assign index on {obj.kind}")
+    values = obj.value
+    if not isinstance(values, list):
+        raise RuntimeTinyOneError("Corrupt array object")
+    if index_int < 0 or index_int >= len(values):
+        raise RuntimeTinyOneError(f"Array index {index_int} out of bounds")
+    values[index_int] = value
+
+
+def runtime_make_struct(
+    context: TinyRuntimeContext, type_name: str, field_names: tuple[str, ...], values: Iterable[Value]
+) -> HeapRef:
+    return context.heap.alloc_struct(type_name, dict(zip(field_names, values)))
+
+
+def runtime_get_field(context: TinyRuntimeContext, target: Value, field: str) -> Value:
+    obj = context.heap.get(target)
+    if obj.kind != "struct":
+        raise RuntimeTinyOneError(f"Cannot read field {field!r} from {obj.kind}")
+    fields = obj.value
+    if not isinstance(fields, dict):
+        raise RuntimeTinyOneError("Corrupt struct object")
+    if field not in fields:
+        raise RuntimeTinyOneError(f"Unknown field {field!r} on struct {obj.type_name!r}")
+    return fields[field]
+
+
+def runtime_set_field(
+    context: TinyRuntimeContext, target: Value, field: str, value: Value
+) -> None:
+    obj = context.heap.get(target)
+    if obj.kind != "struct":
+        raise RuntimeTinyOneError(f"Cannot write field {field!r} on {obj.kind}")
+    fields = obj.value
+    if not isinstance(fields, dict):
+        raise RuntimeTinyOneError("Corrupt struct object")
+    if field not in fields:
+        raise RuntimeTinyOneError(f"Unknown field {field!r} on struct {obj.type_name!r}")
+    fields[field] = value
+
+
+def runtime_expect_string(context: TinyRuntimeContext, value: Value, operation: str) -> str:
+    obj = context.heap.get(value)
+    if obj.kind != "string" or not isinstance(obj.value, str):
+        raise RuntimeTinyOneError(f"{operation} expects a string")
+    return obj.value
+
+
+def runtime_null() -> RawPointer:
+    return RawPointer(0, "null")
+
+
+def runtime_is_null(value: Value) -> bool:
+    return isinstance(value, RawPointer) and value.kind == "null" and value.address == 0
+
+
+def runtime_expect_pointer(value: Value, operation: str) -> RawPointer:
+    if not isinstance(value, RawPointer):
+        raise RuntimeTinyOneError(f"{operation} expects a raw pointer")
+    return value
+
+
+def runtime_validate_pointer_base(
+    context: TinyRuntimeContext, pointer: RawPointer, operation: str
+) -> None:
+    if runtime_is_null(pointer):
+        return
+    if pointer.kind in ("object", "array", "buffer", "field"):
+        context.heap.get_address(pointer.address, pointer.generation)
+        return
+    raise RuntimeTinyOneError(f"{operation} got unknown raw pointer kind {pointer.kind!r}")
+
+
+def runtime_pointer_identity(pointer: RawPointer) -> tuple[int, int, str, int, str]:
+    if runtime_is_null(pointer):
+        return (0, 0, "null", 0, "")
+    return (pointer.address, pointer.generation, pointer.kind, pointer.index, pointer.field)
+
+
+def runtime_make_pointer(context: TinyRuntimeContext, args: list[Value]) -> RawPointer:
+    if len(args) == 1:
+        target = args[0]
+        if isinstance(target, RawPointer):
+            return target
+        if not isinstance(target, HeapRef):
+            raise RuntimeTinyOneError("ptr() expects a heap value or pointer")
+        context.heap.get(target)
+        return RawPointer(target.address, generation=target.generation)
+
+    target, index = args
+    if not isinstance(target, HeapRef):
+        raise RuntimeTinyOneError("ptr(value, index) expects an array or buffer heap value")
+    obj = context.heap.get(target)
+    index_int = runtime_expect_int(index, "ptr index")
+    if obj.kind == "array":
+        return RawPointer(target.address, "array", index_int, generation=target.generation)
+    if obj.kind == "buffer":
+        return RawPointer(target.address, "buffer", index_int, generation=target.generation)
+    raise RuntimeTinyOneError("ptr(value, index) expects an array or buffer heap value")
+
+
+def runtime_make_field_pointer(
+    context: TinyRuntimeContext, target: Value, field_value: Value
+) -> RawPointer:
+    if not isinstance(target, HeapRef):
+        raise RuntimeTinyOneError("fieldptr() expects a struct heap value")
+    obj = context.heap.get(target)
+    if obj.kind != "struct":
+        raise RuntimeTinyOneError("fieldptr() expects a struct heap value")
+    field = runtime_expect_string(context, field_value, "fieldptr")
+    fields = obj.value
+    if not isinstance(fields, dict):
+        raise RuntimeTinyOneError("Corrupt struct object")
+    if field not in fields:
+        raise RuntimeTinyOneError(f"Unknown field {field!r} on struct {obj.type_name!r}")
+    return RawPointer(target.address, "field", field=field, generation=target.generation)
+
+
+def runtime_pointer_address(context: TinyRuntimeContext, value: Value) -> int:
+    if isinstance(value, RawPointer):
+        runtime_validate_pointer_base(context, value, "ptr_addr")
+        return value.address
+    if isinstance(value, HeapRef):
+        context.heap.get(value)
+        return value.address
+    raise RuntimeTinyOneError("ptr_addr() expects a heap value or raw pointer")
+
+
+def runtime_pointer_at(context: TinyRuntimeContext, address: Value) -> RawPointer:
+    address_int = runtime_expect_int(address, "ptr_at")
+    generation = context.heap.current_generation(address_int)
+    return RawPointer(address_int, generation=generation)
+
+
+def runtime_pointer_add(context: TinyRuntimeContext, pointer: Value, offset: Value) -> RawPointer:
+    pointer = runtime_expect_pointer(pointer, "ptr_add")
+    runtime_validate_pointer_base(context, pointer, "ptr_add")
+    if runtime_is_null(pointer):
+        raise RuntimeTinyOneError("Cannot apply pointer arithmetic to null")
+    offset_int = runtime_expect_int(offset, "ptr_add")
+    if pointer.kind == "object":
+        if offset_int != 0:
+            raise RuntimeTinyOneError("Object pointer arithmetic requires an array or buffer pointer")
+        return pointer
+    if pointer.kind == "array":
+        return RawPointer(
+            pointer.address,
+            "array",
+            pointer.index + offset_int,
+            generation=pointer.generation,
+            cast=pointer.cast,
+        )
+    if pointer.kind == "buffer":
+        return RawPointer(
+            pointer.address,
+            "buffer",
+            pointer.index + offset_int,
+            generation=pointer.generation,
+            cast=pointer.cast,
+        )
+    if pointer.kind == "field":
+        raise RuntimeTinyOneError("Cannot apply pointer arithmetic to field pointers")
+    raise RuntimeTinyOneError(f"Unknown raw pointer kind {pointer.kind!r}")
+
+
+def runtime_pointer_load(context: TinyRuntimeContext, pointer: Value) -> Value:
+    pointer = runtime_expect_pointer(pointer, "ptr_load")
+    if runtime_is_null(pointer):
+        raise RuntimeTinyOneError("Cannot load through null")
+    if pointer.kind == "object":
+        obj = context.heap.get_address(pointer.address, pointer.generation)
+        if obj.kind == "cell":
+            return obj.value if isinstance(obj.value, (int, HeapRef, RawPointer)) else 0
+        return context.heap.ref_at(pointer.address)
+    if pointer.kind == "array":
+        obj = context.heap.get_address(pointer.address, pointer.generation)
+        if obj.kind != "array":
+            raise RuntimeTinyOneError("Array pointer no longer points at an array")
+        values = obj.value
+        if not isinstance(values, list):
+            raise RuntimeTinyOneError("Corrupt array object")
+        if pointer.index < 0 or pointer.index >= len(values):
+            raise RuntimeTinyOneError(f"Array pointer index {pointer.index} out of bounds")
+        return values[pointer.index]
+    if pointer.kind == "buffer":
+        raise RuntimeTinyOneError("Use read8/read16/read32 for buffer pointers")
+    if pointer.kind == "field":
+        obj = context.heap.get_address(pointer.address, pointer.generation)
+        if obj.kind != "struct":
+            raise RuntimeTinyOneError("Field pointer no longer points at a struct")
+        fields = obj.value
+        if not isinstance(fields, dict):
+            raise RuntimeTinyOneError("Corrupt struct object")
+        if pointer.field not in fields:
+            raise RuntimeTinyOneError(f"Unknown field {pointer.field!r} on struct {obj.type_name!r}")
+        return fields[pointer.field]
+    raise RuntimeTinyOneError(f"Unknown raw pointer kind {pointer.kind!r}")
+
+
+def runtime_pointer_store(context: TinyRuntimeContext, pointer: Value, value: Value) -> Value:
+    pointer = runtime_expect_pointer(pointer, "ptr_store")
+    if runtime_is_null(pointer):
+        raise RuntimeTinyOneError("Cannot store through null")
+    if pointer.kind == "object":
+        obj = context.heap.get_address(pointer.address, pointer.generation)
+        if obj.kind != "cell":
+            raise RuntimeTinyOneError(
+                "Object raw pointers can only store through pointer cells; "
+                "use array or field pointers for aggregates"
+            )
+        obj.value = value
+        return value
+    if pointer.kind == "array":
+        obj = context.heap.get_address(pointer.address, pointer.generation)
+        if obj.kind != "array":
+            raise RuntimeTinyOneError("Array pointer no longer points at an array")
+        values = obj.value
+        if not isinstance(values, list):
+            raise RuntimeTinyOneError("Corrupt array object")
+        if pointer.index < 0 or pointer.index >= len(values):
+            raise RuntimeTinyOneError(f"Array pointer index {pointer.index} out of bounds")
+        values[pointer.index] = value
+        return value
+    if pointer.kind == "buffer":
+        raise RuntimeTinyOneError("Use write8/write16/write32 for buffer pointers")
+    if pointer.kind == "field":
+        obj = context.heap.get_address(pointer.address, pointer.generation)
+        if obj.kind != "struct":
+            raise RuntimeTinyOneError("Field pointer no longer points at a struct")
+        fields = obj.value
+        if not isinstance(fields, dict):
+            raise RuntimeTinyOneError("Corrupt struct object")
+        if pointer.field not in fields:
+            raise RuntimeTinyOneError(f"Unknown field {pointer.field!r} on struct {obj.type_name!r}")
+        fields[pointer.field] = value
+        return value
+    raise RuntimeTinyOneError(f"Unknown raw pointer kind {pointer.kind!r}")
+
+
+def runtime_pointer_type(context: TinyRuntimeContext, pointer: Value) -> HeapRef:
+    pointer = runtime_expect_pointer(pointer, "ptr_type")
+    runtime_validate_pointer_base(context, pointer, "ptr_type")
+    return context.heap.alloc_string(pointer.cast or pointer.kind)
+
+
+def runtime_pointer_base(context: TinyRuntimeContext, pointer: Value) -> int:
+    pointer = runtime_expect_pointer(pointer, "ptr_base")
+    runtime_validate_pointer_base(context, pointer, "ptr_base")
+    return pointer.address
+
+
+def runtime_pointer_offset(context: TinyRuntimeContext, pointer: Value) -> int:
+    pointer = runtime_expect_pointer(pointer, "ptr_offset")
+    runtime_validate_pointer_base(context, pointer, "ptr_offset")
+    if pointer.kind in ("array", "buffer"):
+        return pointer.index
+    return 0
+
+
+def runtime_pointer_kind(context: TinyRuntimeContext, pointer: Value) -> HeapRef:
+    pointer = runtime_expect_pointer(pointer, "ptr_kind")
+    runtime_validate_pointer_base(context, pointer, "ptr_kind")
+    return context.heap.alloc_string(pointer.kind)
+
+
+def runtime_pointer_field(context: TinyRuntimeContext, pointer: Value) -> HeapRef:
+    pointer = runtime_expect_pointer(pointer, "ptr_field")
+    runtime_validate_pointer_base(context, pointer, "ptr_field")
+    return context.heap.alloc_string(pointer.field if pointer.kind == "field" else "")
+
+
+def runtime_pointer_eq(context: TinyRuntimeContext, lhs: Value, rhs: Value) -> int:
+    lhs_pointer = runtime_expect_pointer(lhs, "ptr_eq")
+    rhs_pointer = runtime_expect_pointer(rhs, "ptr_eq")
+    runtime_validate_pointer_base(context, lhs_pointer, "ptr_eq")
+    runtime_validate_pointer_base(context, rhs_pointer, "ptr_eq")
+    return (
+        1
+        if runtime_pointer_identity(lhs_pointer) == runtime_pointer_identity(rhs_pointer)
+        else 0
+    )
+
+
+def runtime_pointer_ne(context: TinyRuntimeContext, lhs: Value, rhs: Value) -> int:
+    return 0 if runtime_pointer_eq(context, lhs, rhs) else 1
+
+
+def runtime_cast_pointer(context: TinyRuntimeContext, pointer: Value, type_value: Value) -> RawPointer:
+    pointer = runtime_expect_pointer(pointer, "cast_ptr")
+    runtime_validate_pointer_base(context, pointer, "cast_ptr")
+    type_name = runtime_expect_string(context, type_value, "cast_ptr")
+    if type_name not in ("u8", "u16", "u32", "i8", "i16", "i32"):
+        raise RuntimeTinyOneError(f"Unsupported pointer cast {type_name!r}")
+    return RawPointer(
+        pointer.address,
+        pointer.kind,
+        pointer.index,
+        pointer.field,
+        pointer.generation,
+        type_name,
+    )
+
+
+def runtime_make_buffer(context: TinyRuntimeContext, size: Value) -> HeapRef:
+    size_int = runtime_expect_int(size, "buffer")
+    if size_int < 0:
+        raise RuntimeTinyOneError("buffer() size must be non-negative")
+    return context.heap.alloc_buffer(size_int)
+
+
+def runtime_expect_buffer_pointer(
+    context: TinyRuntimeContext, pointer: Value, operation: str
+) -> tuple[bytearray, int]:
+    pointer = runtime_expect_pointer(pointer, operation)
+    if runtime_is_null(pointer):
+        raise RuntimeTinyOneError(f"{operation} cannot use null")
+    if pointer.kind != "buffer":
+        raise RuntimeTinyOneError(f"{operation} expects a buffer pointer")
+    obj = context.heap.get_address(pointer.address, pointer.generation)
+    if obj.kind != "buffer":
+        raise RuntimeTinyOneError("Buffer pointer no longer points at a buffer")
+    data = obj.value
+    if not isinstance(data, bytearray):
+        raise RuntimeTinyOneError("Corrupt buffer object")
+    return data, pointer.index
+
+
+def runtime_read_uint(context: TinyRuntimeContext, pointer: Value, width: int, operation: str) -> int:
+    data, offset = runtime_expect_buffer_pointer(context, pointer, operation)
+    if offset < 0 or offset + width > len(data):
+        raise RuntimeTinyOneError(f"{operation} out of bounds at byte offset {offset}")
+    return int.from_bytes(data[offset : offset + width], "little", signed=False)
+
+
+def runtime_write_uint(
+    context: TinyRuntimeContext, pointer: Value, value: Value, width: int, operation: str
+) -> int:
+    data, offset = runtime_expect_buffer_pointer(context, pointer, operation)
+    value_int = runtime_expect_int(value, operation)
+    max_value = (1 << (width * 8)) - 1
+    if value_int < 0 or value_int > max_value:
+        raise RuntimeTinyOneError(f"{operation} value must be in range 0..{max_value}")
+    if offset < 0 or offset + width > len(data):
+        raise RuntimeTinyOneError(f"{operation} out of bounds at byte offset {offset}")
+    data[offset : offset + width] = value_int.to_bytes(width, "little", signed=False)
+    return value_int
+
+
+def runtime_call_builtin(
+    context: TinyRuntimeContext, builtin_index: int, args: list[Value]
+) -> Value:
+    try:
+        builtin = _BUILTINS[builtin_index]
+    except IndexError as error:
+        raise RuntimeTinyOneError(f"Invalid builtin index {builtin_index}") from error
+    if not builtin.min_args <= len(args) <= builtin.max_args:
+        raise RuntimeTinyOneError(
+            f"Builtin {builtin.name!r} expects {builtin.min_args}..{builtin.max_args} "
+            f"argument(s), got {len(args)}"
+        )
+    name = builtin.name
+    if name == "len":
+        obj = context.heap.get(args[0])
+        if obj.kind in ("array", "string", "buffer"):
+            return len(obj.value) if isinstance(obj.value, (list, str, bytearray)) else 0
+        if obj.kind == "struct":
+            return len(obj.value) if isinstance(obj.value, dict) else 0
+        raise RuntimeTinyOneError(f"len() does not support {obj.kind}")
+    if name == "array":
+        count = runtime_expect_int(args[0], "array")
+        if count < 0:
+            raise RuntimeTinyOneError("array() length must be non-negative")
+        return context.heap.alloc_array([args[1]] * count)
+    if name == "alloc":
+        return context.heap.alloc_cell(args[0])
+    if name == "load":
+        obj = context.heap.get(args[0])
+        if obj.kind != "cell":
+            raise RuntimeTinyOneError("load() expects a pointer cell")
+        return obj.value if isinstance(obj.value, (int, HeapRef, RawPointer)) else 0
+    if name == "store":
+        obj = context.heap.get(args[0])
+        if obj.kind != "cell":
+            raise RuntimeTinyOneError("store() expects a pointer cell")
+        obj.value = args[1]
+        return args[1]
+    if name == "free":
+        context.heap.free(args[0])
+        return 0
+    if name == "read":
+        raw = context.read_raw()
+        return int(raw) if _looks_like_int(raw) else context.heap.alloc_string(raw)
+    if name == "read_int":
+        raw = context.read_raw()
+        if not _looks_like_int(raw):
+            raise RuntimeTinyOneError(f"read_int() expected integer input, got {raw!r}")
+        return int(raw)
+    if name == "read_str":
+        return context.heap.alloc_string(context.read_raw())
+    if name == "to_int":
+        value = args[0]
+        if isinstance(value, int):
+            return value
+        obj = context.heap.get(value)
+        if obj.kind != "string" or not isinstance(obj.value, str) or not _looks_like_int(obj.value):
+            raise RuntimeTinyOneError("to_int() expects an integer or numeric string")
+        return int(obj.value)
+    if name == "ptr":
+        return runtime_make_pointer(context, args)
+    if name == "fieldptr":
+        return runtime_make_field_pointer(context, args[0], args[1])
+    if name == "ptr_addr":
+        return runtime_pointer_address(context, args[0])
+    if name == "ptr_at":
+        return runtime_pointer_at(context, args[0])
+    if name == "ptr_add":
+        return runtime_pointer_add(context, args[0], args[1])
+    if name == "ptr_load":
+        return runtime_pointer_load(context, args[0])
+    if name == "ptr_store":
+        return runtime_pointer_store(context, args[0], args[1])
+    if name == "ptr_type":
+        return runtime_pointer_type(context, args[0])
+    if name == "buffer":
+        return runtime_make_buffer(context, args[0])
+    if name == "is_null":
+        pointer = runtime_expect_pointer(args[0], "is_null")
+        runtime_validate_pointer_base(context, pointer, "is_null")
+        return 1 if runtime_is_null(pointer) else 0
+    if name == "ptr_eq":
+        return runtime_pointer_eq(context, args[0], args[1])
+    if name == "ptr_ne":
+        return runtime_pointer_ne(context, args[0], args[1])
+    if name == "ptr_base":
+        return runtime_pointer_base(context, args[0])
+    if name == "ptr_offset":
+        return runtime_pointer_offset(context, args[0])
+    if name == "ptr_kind":
+        return runtime_pointer_kind(context, args[0])
+    if name == "ptr_field":
+        return runtime_pointer_field(context, args[0])
+    if name == "read8":
+        return runtime_read_uint(context, args[0], 1, "read8")
+    if name == "write8":
+        return runtime_write_uint(context, args[0], args[1], 1, "write8")
+    if name == "read16":
+        return runtime_read_uint(context, args[0], 2, "read16")
+    if name == "write16":
+        return runtime_write_uint(context, args[0], args[1], 2, "write16")
+    if name == "read32":
+        return runtime_read_uint(context, args[0], 4, "read32")
+    if name == "write32":
+        return runtime_write_uint(context, args[0], args[1], 4, "write32")
+    if name == "cast_ptr":
+        return runtime_cast_pointer(context, args[0], args[1])
+    raise RuntimeTinyOneError(f"Unknown builtin {name!r}")
+
+
+def _looks_like_int(text: str) -> bool:
+    if not text:
+        return False
+    if text[0] in "+-":
+        return len(text) > 1 and text[1:].isdigit()
+    return text.isdigit()
+
+
+def runtime_format(context: TinyRuntimeContext, value: Value) -> str:
+    return _runtime_format(context, value, set())
+
+
+def _runtime_format(context: TinyRuntimeContext, value: Value, seen: set[int]) -> str:
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, RawPointer):
+        suffix = f":{value.cast}" if value.cast else ""
+        if runtime_is_null(value):
+            return "null"
+        if value.kind == "array":
+            return f"ptr(array@{value.address}[{value.index}]{suffix})"
+        if value.kind == "buffer":
+            return f"ptr(buffer@{value.address}+{value.index}{suffix})"
+        if value.kind == "field":
+            return f"ptr(field@{value.address}.{value.field}{suffix})"
+        return f"ptr({value.kind}@{value.address}{suffix})"
+    obj = context.heap.get(value)
+    if value.address in seen:
+        return f"&{value.address}<cycle>"
+    seen.add(value.address)
+    try:
+        if obj.kind == "string":
+            return str(obj.value)
+        if obj.kind == "array":
+            values = obj.value
+            if not isinstance(values, list):
+                raise RuntimeTinyOneError("Corrupt array object")
+            return "[" + ", ".join(_runtime_format(context, item, seen) for item in values) + "]"
+        if obj.kind == "buffer":
+            data = obj.value
+            if not isinstance(data, bytearray):
+                raise RuntimeTinyOneError("Corrupt buffer object")
+            return "buffer[" + " ".join(f"{byte:02x}" for byte in data) + "]"
+        if obj.kind == "struct":
+            fields = obj.value
+            if not isinstance(fields, dict):
+                raise RuntimeTinyOneError("Corrupt struct object")
+            rendered = ", ".join(
+                f"{name}: {_runtime_format(context, field_value, seen)}"
+                for name, field_value in fields.items()
+            )
+            return f"{obj.type_name}{{{rendered}}}"
+        if obj.kind == "cell":
+            inner = obj.value if isinstance(obj.value, (int, HeapRef, RawPointer)) else 0
+            return f"&{value.address}({_runtime_format(context, inner, seen)})"
+        raise RuntimeTinyOneError(f"Cannot format heap object {obj.kind!r}")
+    finally:
+        seen.remove(value.address)
+
+
+def runtime_print(context: TinyRuntimeContext, stdout: TextIO, value: Value) -> None:
+    print(runtime_format(context, value), file=stdout)
+
+
 class TinyMemory:
     """
-    Arena-backed integer slot storage.
+    Zero-initialized stack-frame slot storage.
 
-    This is independent from the language-level Python dict model used by the
-    original interpreter. Values are addressed by integer handles. The storage
-    is still backed by Python objects because pure stdlib Python cannot bypass
-    CPython's allocator safely.
+    Values are addressed by integer handles. Undefined control-flow paths read
+    as 0, which keeps the runtime model simple and predictable.
     """
 
-    __slots__ = ("_values", "_initialized")
+    __slots__ = ("_values",)
 
     def __init__(self, slot_count: int) -> None:
         if slot_count < 0:
             raise ValueError("slot_count must be non-negative")
-        self._values: list[int] = [0] * slot_count
-        self._initialized: bytearray = bytearray(slot_count)
+        self._values = [0] * slot_count
 
     def reset(self) -> None:
         self._values[:] = [0] * len(self._values)
-        self._initialized[:] = b"\x00" * len(self._initialized)
 
-    def load(self, slot: int) -> int:
+    def load(self, slot: int) -> Value:
         self._check_slot(slot)
-        if self._initialized[slot] == 0:
-            raise RuntimeTinyOneError(f"Read from uninitialized slot {slot}")
         return self._values[slot]
 
-    def store(self, slot: int, value: int) -> None:
+    def store(self, slot: int, value: Value) -> None:
         self._check_slot(slot)
-        if not isinstance(value, int):
-            raise RuntimeTinyOneError(
-                f"Memory accepts int values only, got {type(value).__name__}"
-            )
         self._values[slot] = value
-        self._initialized[slot] = 1
 
-    def snapshot(self) -> tuple[int | None, ...]:
-        return tuple(
-            value if self._initialized[index] else None
-            for index, value in enumerate(self._values)
-        )
+    def snapshot(self) -> tuple[Value, ...]:
+        return tuple(self._values)
 
     def _check_slot(self, slot: int) -> None:
         if slot < 0 or slot >= len(self._values):
             raise RuntimeTinyOneError(f"Invalid memory slot {slot}")
 
-
-def checked_div(lhs: int, rhs: int) -> int:
-    if rhs == 0:
-        raise RuntimeTinyOneError("Division by zero")
-    return lhs // rhs
-
-
 class VM:
     """Portable bytecode interpreter."""
 
-    __slots__ = ("_program", "_memory", "_stdout")
+    __slots__ = ("_program", "_memory", "_stdout", "_context")
 
-    def __init__(self, program: Program, memory: TinyMemory, stdout: TextIO) -> None:
+    def __init__(
+        self,
+        program: Program,
+        memory: TinyMemory,
+        stdout: TextIO,
+        context: TinyRuntimeContext | None = None,
+    ) -> None:
         self._program = program
         self._memory = memory
         self._stdout = stdout
+        self._context = TinyRuntimeContext() if context is None else context
 
     def run(self) -> None:
         self._run_chunk(self._program.code, self._memory, "main")
 
     def _run_chunk(
         self, code: tuple[Instr, ...], memory: TinyMemory, chunk_name: str
-    ) -> int | None:
-        stack: list[int] = []
+    ) -> Value | None:
+        stack: list[Value] = []
         stdout = self._stdout
+        context = self._context
         pc = 0
 
         while True:
@@ -986,53 +2519,70 @@ class VM:
 
             if op == Op.PUSH_INT:
                 stack.append(arg)
+            elif op == Op.PUSH_NULL:
+                stack.append(runtime_null())
+            elif op == Op.PUSH_STRING:
+                stack.append(context.heap.alloc_string(self._program.strings[arg]))
             elif op == Op.LOAD:
                 stack.append(memory.load(arg))
             elif op == Op.STORE:
                 memory.store(arg, stack.pop())
             elif op == Op.ADD:
                 rhs = stack.pop()
-                stack[-1] += rhs
+                stack[-1] = runtime_add(stack[-1], rhs)
             elif op == Op.SUB:
                 rhs = stack.pop()
-                stack[-1] -= rhs
+                stack[-1] = runtime_sub(stack[-1], rhs)
             elif op == Op.MUL:
                 rhs = stack.pop()
-                stack[-1] *= rhs
+                stack[-1] = runtime_mul(stack[-1], rhs)
             elif op == Op.DIV:
                 rhs = stack.pop()
                 stack[-1] = checked_div(stack[-1], rhs)
             elif op == Op.NEG:
-                stack[-1] = -stack[-1]
-            elif op == Op.LT:
+                stack[-1] = runtime_neg(stack[-1])
+            elif op in (Op.LT, Op.LTE, Op.GT, Op.GTE, Op.EQ, Op.NE):
                 rhs = stack.pop()
-                stack[-1] = 1 if stack[-1] < rhs else 0
-            elif op == Op.LTE:
-                rhs = stack.pop()
-                stack[-1] = 1 if stack[-1] <= rhs else 0
-            elif op == Op.GT:
-                rhs = stack.pop()
-                stack[-1] = 1 if stack[-1] > rhs else 0
-            elif op == Op.GTE:
-                rhs = stack.pop()
-                stack[-1] = 1 if stack[-1] >= rhs else 0
-            elif op == Op.EQ:
-                rhs = stack.pop()
-                stack[-1] = 1 if stack[-1] == rhs else 0
-            elif op == Op.NE:
-                rhs = stack.pop()
-                stack[-1] = 1 if stack[-1] != rhs else 0
+                stack[-1] = runtime_compare(op, stack[-1], rhs)
             elif op == Op.JUMP:
                 pc = arg
             elif op == Op.JUMP_IF_ZERO:
-                if stack.pop() == 0:
+                if runtime_is_false(stack.pop()):
                     pc = arg
             elif op == Op.CALL:
                 stack.append(self._call_function(arg, stack, arg2))
+            elif op == Op.MAKE_ARRAY:
+                values = [stack.pop() for _ in range(arg)]
+                values.reverse()
+                stack.append(runtime_make_array(context, values))
+            elif op == Op.INDEX:
+                index = stack.pop()
+                container = stack.pop()
+                stack.append(runtime_index(context, container, index))
+            elif op == Op.SET_INDEX:
+                value = stack.pop()
+                index = stack.pop()
+                container = stack.pop()
+                runtime_set_index(context, container, index, value)
+            elif op == Op.MAKE_STRUCT:
+                values = [stack.pop() for _ in range(arg2)]
+                values.reverse()
+                struct = self._program.structs[arg]
+                stack.append(runtime_make_struct(context, struct.name, struct.fields, values))
+            elif op == Op.GET_FIELD:
+                stack[-1] = runtime_get_field(context, stack[-1], self._program.fields[arg])
+            elif op == Op.SET_FIELD:
+                value = stack.pop()
+                target = stack.pop()
+                runtime_set_field(context, target, self._program.fields[arg], value)
+            elif op == Op.BUILTIN:
+                args = [stack.pop() for _ in range(arg2)]
+                args.reverse()
+                stack.append(runtime_call_builtin(context, arg, args))
             elif op == Op.RETURN:
                 return stack.pop()
             elif op == Op.PRINT:
-                print(stack.pop(), file=stdout)
+                runtime_print(context, stdout, stack.pop())
             elif op == Op.HALT:
                 if stack:
                     raise RuntimeTinyOneError(
@@ -1042,7 +2592,9 @@ class VM:
             else:
                 raise RuntimeTinyOneError(f"Unknown opcode {op!r}")
 
-    def _call_function(self, function_index: int, caller_stack: list[int], arg_count: int) -> int:
+    def _call_function(
+        self, function_index: int, caller_stack: list[Value], arg_count: int
+    ) -> Value:
         function = self._program.functions[function_index]
         args = [caller_stack.pop() for _ in range(arg_count)]
         args.reverse()
@@ -1092,9 +2644,13 @@ class JitCache:
     __slots__ = ("_cache",)
 
     def __init__(self) -> None:
-        self._cache: dict[str, Callable[[TinyMemory, TextIO], None]] = {}
+        self._cache: dict[
+            str, Callable[[TinyMemory, TextIO, TinyRuntimeContext | None], None]
+        ] = {}
 
-    def compile(self, program: Program) -> Callable[[TinyMemory, TextIO], None]:
+    def compile(
+        self, program: Program
+    ) -> Callable[[TinyMemory, TextIO, TinyRuntimeContext | None], None]:
         key = program.fingerprint
         cached = self._cache.get(key)
         if cached is not None:
@@ -1105,6 +2661,23 @@ class JitCache:
             "checked_div": checked_div,
             "RuntimeTinyOneError": RuntimeTinyOneError,
             "TinyMemory": TinyMemory,
+            "TinyRuntimeContext": TinyRuntimeContext,
+            "runtime_add": runtime_add,
+            "runtime_sub": runtime_sub,
+            "runtime_mul": runtime_mul,
+            "runtime_neg": runtime_neg,
+            "runtime_compare": runtime_compare,
+            "runtime_is_false": runtime_is_false,
+            "runtime_make_array": runtime_make_array,
+            "runtime_index": runtime_index,
+            "runtime_set_index": runtime_set_index,
+            "runtime_make_struct": runtime_make_struct,
+            "runtime_get_field": runtime_get_field,
+            "runtime_set_field": runtime_set_field,
+            "runtime_call_builtin": runtime_call_builtin,
+            "runtime_print": runtime_print,
+            "runtime_null": runtime_null,
+            "Op": Op,
         }
         try:
             compiled = compile(source, f"<tinyone-jit-{key}>", "exec")
@@ -1144,7 +2717,11 @@ class JitCache:
         never goes negative and is exactly 0 at HALT.  We assert that contract
         here defensively during codegen.
         """
-        lines = ["def _tinyone_jit(memory, stdout):"]
+        lines = [
+            "def _tinyone_jit(memory, stdout, context=None):",
+            "    if context is None:",
+            "        context = TinyRuntimeContext()",
+        ]
         sp = 0
 
         def slot(depth: int) -> str:
@@ -1156,6 +2733,14 @@ class JitCache:
 
             if op == Op.PUSH_INT:
                 lines.append(f"    {slot(sp)} = {arg!r}")
+                sp += 1
+
+            elif op == Op.PUSH_NULL:
+                lines.append(f"    {slot(sp)} = runtime_null()")
+                sp += 1
+
+            elif op == Op.PUSH_STRING:
+                lines.append(f"    {slot(sp)} = context.heap.alloc_string({program.strings[arg]!r})")
                 sp += 1
 
             elif op == Op.LOAD:
@@ -1176,7 +2761,9 @@ class JitCache:
                         f"JIT codegen: ADD at index {i} requires depth>=2, got {sp} (verifier bug)"
                     )
                 # lhs = slot(sp-2), rhs = slot(sp-1), result -> slot(sp-2)
-                lines.append(f"    {slot(sp - 2)} = {slot(sp - 2)} + {slot(sp - 1)}")
+                lines.append(
+                    f"    {slot(sp - 2)} = runtime_add({slot(sp - 2)}, {slot(sp - 1)})"
+                )
                 sp -= 1
 
             elif op == Op.SUB:
@@ -1184,7 +2771,9 @@ class JitCache:
                     raise CompileError(
                         f"JIT codegen: SUB at index {i} requires depth>=2, got {sp} (verifier bug)"
                     )
-                lines.append(f"    {slot(sp - 2)} = {slot(sp - 2)} - {slot(sp - 1)}")
+                lines.append(
+                    f"    {slot(sp - 2)} = runtime_sub({slot(sp - 2)}, {slot(sp - 1)})"
+                )
                 sp -= 1
 
             elif op == Op.MUL:
@@ -1192,7 +2781,9 @@ class JitCache:
                     raise CompileError(
                         f"JIT codegen: MUL at index {i} requires depth>=2, got {sp} (verifier bug)"
                     )
-                lines.append(f"    {slot(sp - 2)} = {slot(sp - 2)} * {slot(sp - 1)}")
+                lines.append(
+                    f"    {slot(sp - 2)} = runtime_mul({slot(sp - 2)}, {slot(sp - 1)})"
+                )
                 sp -= 1
 
             elif op == Op.DIV:
@@ -1210,7 +2801,7 @@ class JitCache:
                     raise CompileError(
                         f"JIT codegen: NEG at index {i} with empty stack (verifier bug)"
                     )
-                lines.append(f"    {slot(sp - 1)} = -{slot(sp - 1)}")
+                lines.append(f"    {slot(sp - 1)} = runtime_neg({slot(sp - 1)})")
 
             elif op in (Op.LT, Op.LTE, Op.GT, Op.GTE, Op.EQ, Op.NE):
                 if sp < 2:
@@ -1218,18 +2809,103 @@ class JitCache:
                         f"JIT codegen: {op.name} at index {i} requires depth>=2, got {sp} "
                         "(verifier bug)"
                     )
-                operator = self._python_comparison_operator(op)
                 lines.append(
-                    f"    {slot(sp - 2)} = 1 if {slot(sp - 2)} {operator} {slot(sp - 1)} else 0"
+                    f"    {slot(sp - 2)} = runtime_compare(Op.{op.name}, "
+                    f"{slot(sp - 2)}, {slot(sp - 1)})"
                 )
                 sp -= 1
+
+            elif op == Op.MAKE_ARRAY:
+                if sp < arg:
+                    raise CompileError(
+                        f"JIT codegen: MAKE_ARRAY at index {i} requires depth>={arg}, got {sp} "
+                        "(verifier bug)"
+                    )
+                values = ", ".join(slot(depth) for depth in range(sp - arg, sp))
+                lines.append(
+                    f"    {slot(sp - arg)} = runtime_make_array(context, [{values}])"
+                )
+                sp = sp - arg + 1
+
+            elif op == Op.INDEX:
+                if sp < 2:
+                    raise CompileError(
+                        f"JIT codegen: INDEX at index {i} requires depth>=2, got {sp} "
+                        "(verifier bug)"
+                    )
+                lines.append(
+                    f"    {slot(sp - 2)} = runtime_index(context, {slot(sp - 2)}, {slot(sp - 1)})"
+                )
+                sp -= 1
+
+            elif op == Op.SET_INDEX:
+                if sp < 3:
+                    raise CompileError(
+                        f"JIT codegen: SET_INDEX at index {i} requires depth>=3, got {sp} "
+                        "(verifier bug)"
+                    )
+                lines.append(
+                    f"    runtime_set_index(context, {slot(sp - 3)}, {slot(sp - 2)}, "
+                    f"{slot(sp - 1)})"
+                )
+                sp -= 3
+
+            elif op == Op.MAKE_STRUCT:
+                if sp < instr.arg2:
+                    raise CompileError(
+                        f"JIT codegen: MAKE_STRUCT at index {i} requires depth>={instr.arg2}, "
+                        f"got {sp} (verifier bug)"
+                    )
+                struct = program.structs[arg]
+                values = ", ".join(slot(depth) for depth in range(sp - instr.arg2, sp))
+                lines.append(
+                    f"    {slot(sp - instr.arg2)} = runtime_make_struct("
+                    f"context, {struct.name!r}, {struct.fields!r}, [{values}])"
+                )
+                sp = sp - instr.arg2 + 1
+
+            elif op == Op.GET_FIELD:
+                if sp < 1:
+                    raise CompileError(
+                        f"JIT codegen: GET_FIELD at index {i} with empty stack "
+                        "(verifier bug)"
+                    )
+                lines.append(
+                    f"    {slot(sp - 1)} = runtime_get_field("
+                    f"context, {slot(sp - 1)}, {program.fields[arg]!r})"
+                )
+
+            elif op == Op.SET_FIELD:
+                if sp < 2:
+                    raise CompileError(
+                        f"JIT codegen: SET_FIELD at index {i} requires depth>=2, got {sp} "
+                        "(verifier bug)"
+                    )
+                lines.append(
+                    f"    runtime_set_field(context, {slot(sp - 2)}, "
+                    f"{program.fields[arg]!r}, {slot(sp - 1)})"
+                )
+                sp -= 2
+
+            elif op == Op.BUILTIN:
+                if sp < instr.arg2:
+                    raise CompileError(
+                        f"JIT codegen: BUILTIN at index {i} requires depth>={instr.arg2}, "
+                        f"got {sp} (verifier bug)"
+                    )
+                args = ", ".join(slot(depth) for depth in range(sp - instr.arg2, sp))
+                lines.append(
+                    f"    {slot(sp - instr.arg2)} = runtime_call_builtin("
+                    f"context, {arg}, [{args}])"
+                )
+                sp = sp - instr.arg2 + 1
 
             elif op == Op.PRINT:
                 if sp < 1:
                     raise CompileError(
                         f"JIT codegen: PRINT at index {i} with empty stack (verifier bug)"
                     )
-                lines.append(f"    stdout.write(str({slot(sp - 1)}) + '\\n')")
+                lines.append(f"    runtime_print(context, stdout, {slot(sp - 1)})")
                 sp -= 1
 
             elif op == Op.HALT:
@@ -1249,10 +2925,12 @@ class JitCache:
 
     def _build_dispatch_source(self, program: Program) -> str:
         lines = [
-            "def _tinyone_jit(memory, stdout):",
-            "    return _tinyone_main(memory, stdout)",
+            "def _tinyone_jit(memory, stdout, context=None):",
+            "    if context is None:",
+            "        context = TinyRuntimeContext()",
+            "    return _tinyone_main(memory, stdout, context)",
             "",
-            "def _tinyone_call(function_index, args, stdout):",
+            "def _tinyone_call(function_index, args, stdout, context):",
         ]
         if not program.functions:
             lines.append(
@@ -1262,14 +2940,14 @@ class JitCache:
             for index, function in enumerate(program.functions):
                 prefix = "if" if index == 0 else "elif"
                 lines.append(f"    {prefix} function_index == {index}:")
-                lines.append(f"        return _tinyone_func_{index}(args, stdout)")
+                lines.append(f"        return _tinyone_func_{index}(args, stdout, context)")
             lines.append(
                 "    raise RuntimeTinyOneError(f'Invalid function index {function_index}')"
             )
         lines.append("")
 
         for index, function in enumerate(program.functions):
-            lines.extend(self._build_dispatch_function(index, function))
+            lines.extend(self._build_dispatch_function(index, function, program))
             lines.append("")
 
         lines.extend(
@@ -1277,6 +2955,7 @@ class JitCache:
                 "_tinyone_main",
                 program.code,
                 program.slot_count,
+                program=program,
                 param_count=0,
                 chunk_name="main",
                 use_existing_memory=True,
@@ -1284,11 +2963,14 @@ class JitCache:
         )
         return "\n".join(lines) + "\n"
 
-    def _build_dispatch_function(self, index: int, function: Function) -> list[str]:
+    def _build_dispatch_function(
+        self, index: int, function: Function, program: Program
+    ) -> list[str]:
         return self._build_dispatch_chunk(
             f"_tinyone_func_{index}",
             function.code,
             function.slot_count,
+            program=program,
             param_count=function.param_count,
             chunk_name=function.name,
             use_existing_memory=False,
@@ -1300,14 +2982,15 @@ class JitCache:
         code: tuple[Instr, ...],
         slot_count: int,
         *,
+        program: Program | None,
         param_count: int,
         chunk_name: str,
         use_existing_memory: bool,
     ) -> list[str]:
         if use_existing_memory:
-            lines = [f"def {function_name}(memory, stdout):"]
+            lines = [f"def {function_name}(memory, stdout, context):"]
         else:
-            lines = [f"def {function_name}(args, stdout):"]
+            lines = [f"def {function_name}(args, stdout, context):"]
             lines.append(f"    if len(args) != {param_count}:")
             lines.append(
                 f"        raise RuntimeTinyOneError(\"Function {chunk_name!r} expects "
@@ -1326,13 +3009,18 @@ class JitCache:
         )
         for index, instr in enumerate(code):
             lines.append(f"        if pc == {index}:")
-            lines.extend(self._build_dispatch_instr(instr, index))
+            lines.extend(self._build_dispatch_instr(instr, index, program))
         lines.append(
             f"        raise RuntimeTinyOneError(\"Invalid program counter in {chunk_name}\")"
         )
         return lines
 
-    def _build_dispatch_instr(self, instr: Instr, index: int) -> list[str]:
+    def _build_dispatch_instr(
+        self,
+        instr: Instr,
+        index: int,
+        program: Program | None = None,
+    ) -> list[str]:
         op = instr.op
         arg = instr.arg
         arg2 = instr.arg2
@@ -1341,6 +3029,20 @@ class JitCache:
         if op == Op.PUSH_INT:
             return [
                 f"            stack.append({arg!r})",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.PUSH_NULL:
+            return [
+                "            stack.append(runtime_null())",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.PUSH_STRING:
+            if program is None:
+                raise CompileError("JIT codegen: missing program metadata for string literal")
+            return [
+                f"            stack.append(context.heap.alloc_string({program.strings[arg]!r}))",
                 f"            pc = {next_pc}",
                 "            continue",
             ]
@@ -1359,21 +3061,21 @@ class JitCache:
         if op == Op.ADD:
             return [
                 "            rhs = stack.pop()",
-                "            stack[-1] = stack[-1] + rhs",
+                "            stack[-1] = runtime_add(stack[-1], rhs)",
                 f"            pc = {next_pc}",
                 "            continue",
             ]
         if op == Op.SUB:
             return [
                 "            rhs = stack.pop()",
-                "            stack[-1] = stack[-1] - rhs",
+                "            stack[-1] = runtime_sub(stack[-1], rhs)",
                 f"            pc = {next_pc}",
                 "            continue",
             ]
         if op == Op.MUL:
             return [
                 "            rhs = stack.pop()",
-                "            stack[-1] = stack[-1] * rhs",
+                "            stack[-1] = runtime_mul(stack[-1], rhs)",
                 f"            pc = {next_pc}",
                 "            continue",
             ]
@@ -1386,15 +3088,14 @@ class JitCache:
             ]
         if op == Op.NEG:
             return [
-                "            stack[-1] = -stack[-1]",
+                "            stack[-1] = runtime_neg(stack[-1])",
                 f"            pc = {next_pc}",
                 "            continue",
             ]
         if op in (Op.LT, Op.LTE, Op.GT, Op.GTE, Op.EQ, Op.NE):
-            operator = self._python_comparison_operator(op)
             return [
                 "            rhs = stack.pop()",
-                f"            stack[-1] = 1 if stack[-1] {operator} rhs else 0",
+                f"            stack[-1] = runtime_compare(Op.{op.name}, stack[-1], rhs)",
                 f"            pc = {next_pc}",
                 "            continue",
             ]
@@ -1402,14 +3103,78 @@ class JitCache:
             return [f"            pc = {arg}", "            continue"]
         if op == Op.JUMP_IF_ZERO:
             return [
-                f"            pc = {arg} if stack.pop() == 0 else {next_pc}",
+                f"            pc = {arg} if runtime_is_false(stack.pop()) else {next_pc}",
                 "            continue",
             ]
         if op == Op.CALL:
             return [
                 f"            args = [stack.pop() for _ in range({arg2})]",
                 "            args.reverse()",
-                f"            stack.append(_tinyone_call({arg}, args, stdout))",
+                f"            stack.append(_tinyone_call({arg}, args, stdout, context))",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.MAKE_ARRAY:
+            return [
+                f"            values = [stack.pop() for _ in range({arg})]",
+                "            values.reverse()",
+                "            stack.append(runtime_make_array(context, values))",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.INDEX:
+            return [
+                "            index = stack.pop()",
+                "            container = stack.pop()",
+                "            stack.append(runtime_index(context, container, index))",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.SET_INDEX:
+            return [
+                "            value = stack.pop()",
+                "            index = stack.pop()",
+                "            container = stack.pop()",
+                "            runtime_set_index(context, container, index, value)",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.MAKE_STRUCT:
+            if program is None:
+                raise CompileError("JIT codegen: missing program metadata for struct")
+            struct = program.structs[arg]
+            return [
+                f"            values = [stack.pop() for _ in range({arg2})]",
+                "            values.reverse()",
+                f"            stack.append(runtime_make_struct(context, {struct.name!r}, "
+                f"{struct.fields!r}, values))",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.GET_FIELD:
+            if program is None:
+                raise CompileError("JIT codegen: missing program metadata for field read")
+            return [
+                f"            stack[-1] = runtime_get_field(context, stack[-1], "
+                f"{program.fields[arg]!r})",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.SET_FIELD:
+            if program is None:
+                raise CompileError("JIT codegen: missing program metadata for field write")
+            return [
+                "            value = stack.pop()",
+                "            target = stack.pop()",
+                f"            runtime_set_field(context, target, {program.fields[arg]!r}, value)",
+                f"            pc = {next_pc}",
+                "            continue",
+            ]
+        if op == Op.BUILTIN:
+            return [
+                f"            args = [stack.pop() for _ in range({arg2})]",
+                "            args.reverse()",
+                f"            stack.append(runtime_call_builtin(context, {arg}, args))",
                 f"            pc = {next_pc}",
                 "            continue",
             ]
@@ -1417,7 +3182,7 @@ class JitCache:
             return ["            return stack.pop()"]
         if op == Op.PRINT:
             return [
-                "            stdout.write(str(stack.pop()) + '\\n')",
+                "            runtime_print(context, stdout, stack.pop())",
                 f"            pc = {next_pc}",
                 "            continue",
             ]
@@ -1442,7 +3207,7 @@ class JitCache:
         raise CompileError(f"JIT codegen: unsupported comparison opcode {op!r}")
 
 
-def compile_source(source: str) -> Program:
+def compile_source(source: str, *, filename: str = "<source>") -> Program:
     """
     Full compilation pipeline:
         Compiler  ->  PeepholeOptimizer  ->  BytecodeVerifier  ->  Program
@@ -1450,7 +3215,7 @@ def compile_source(source: str) -> Program:
     The returned Program is optimized and verified.  VM and JIT both receive
     the same bytecode, guaranteeing semantic equivalence.
     """
-    program = Compiler(source).compile()
+    program = Compiler(source, filename=filename).compile()
     program = PeepholeOptimizer.optimize(program)
     BytecodeVerifier.verify(program)
     LOGGER.debug(
@@ -1460,18 +3225,157 @@ def compile_source(source: str) -> Program:
     return program
 
 
-def run_source(source: str, *, mode: str, stdout: TextIO) -> TinyMemory:
-    program = compile_source(source)
+def _module_name_from_filename(filename: str) -> str:
+    return _sanitize_identifier(Path(filename).stem or "module")
+
+
+def _module_name_from_import(import_path: str, filename: str) -> str:
+    if _looks_like_module_key(import_path):
+        return _sanitize_identifier(import_path)
+    return _module_name_from_filename(filename)
+
+
+def _unique_module_name(shared: CompilerSharedState, base_name: str, filename: str) -> str:
+    existing_owner = shared.module_name_owners.get(base_name)
+    if existing_owner is None or existing_owner == filename:
+        shared.module_name_owners[base_name] = filename
+        return base_name
+    suffix = hashlib.blake2b(filename.encode("utf-8"), digest_size=4).hexdigest()
+    name = f"{base_name}_{suffix}"
+    while name in shared.module_name_owners and shared.module_name_owners[name] != filename:
+        suffix = hashlib.blake2b(f"{filename}:{suffix}".encode("utf-8"), digest_size=4).hexdigest()
+        name = f"{base_name}_{suffix}"
+    shared.module_name_owners[name] = filename
+    return name
+
+
+def _default_import_alias(import_path: str) -> str:
+    if _looks_like_module_key(import_path):
+        return _sanitize_identifier(import_path)
+    return _sanitize_identifier(Path(import_path).stem or "module")
+
+
+def _looks_like_module_key(import_path: str) -> bool:
+    return (
+        "/" not in import_path
+        and "\\" not in import_path
+        and not import_path.startswith(".")
+        and "." not in import_path
+    )
+
+
+def _sanitize_identifier(text: str) -> str:
+    chars = [char if char == "_" or char.isalnum() else "_" for char in text]
+    sanitized = "".join(chars).strip("_")
+    if not sanitized or sanitized[0].isdigit():
+        sanitized = f"module_{sanitized}"
+    return sanitized
+
+
+def _resolve_manifest_import(base: Path, import_path: str) -> Path | None:
+    if not _looks_like_module_key(import_path):
+        return None
+    for directory in (base, *base.parents):
+        manifest_path = directory / "tinyone.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except OSError as error:
+            raise CompileError(f"Package manifest read error: {error}") from error
+        except json.JSONDecodeError as error:
+            raise CompileError(f"Package manifest JSON error: {error}") from error
+        modules = data.get("modules") if isinstance(data, dict) else None
+        if not isinstance(modules, dict):
+            raise CompileError(f"Package manifest {manifest_path} must contain a modules object")
+        target = modules.get(import_path)
+        if target is None:
+            continue
+        if not isinstance(target, str):
+            raise CompileError(
+                f"Package manifest module {import_path!r} in {manifest_path} must be a string"
+            )
+        return (directory / target).resolve()
+    return None
+
+
+def _resolve_import(from_filename: str, import_path: str) -> tuple[str, str]:
+    base = Path(from_filename).resolve().parent
+    path = _resolve_manifest_import(base, import_path)
+    if path is None:
+        path = (base / import_path).resolve()
+    try:
+        return str(path), path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise CompileError(f"Import error: {error}") from error
+
+
+def compile_file(path: str | Path) -> Program:
+    source_path = Path(path).resolve()
+    try:
+        source = source_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise CompileError(f"File error: {error}") from error
+    imported = {str(source_path)}
+    program = Compiler(
+        source,
+        filename=str(source_path),
+        resolver=_resolve_import,
+        imported=imported,
+    ).compile()
+    program = PeepholeOptimizer.optimize(program)
+    BytecodeVerifier.verify(program)
+    return program
+
+
+def load_artifact(path: str | Path) -> Program:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as error:
+        raise CompileError(f"Artifact read error: {error}") from error
+    except json.JSONDecodeError as error:
+        raise CompileError(f"Artifact JSON error: {error}") from error
+    return Program.from_artifact(data)
+
+
+def write_artifact(program: Program, path: str | Path) -> None:
+    try:
+        Path(path).write_text(
+            json.dumps(program.to_artifact(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as error:
+        raise CompileError(f"Artifact write error: {error}") from error
+
+
+def run_program(
+    program: Program,
+    *,
+    mode: str,
+    stdout: TextIO,
+    inputs: Iterable[object] | None = None,
+) -> TinyMemory:
     memory = TinyMemory(program.slot_count)
+    context = TinyRuntimeContext(inputs)
 
     if mode == "vm":
-        VM(program, memory, stdout).run()
+        VM(program, memory, stdout, context).run()
     elif mode == "jit":
-        JitCache().compile(program)(memory, stdout)
+        JitCache().compile(program)(memory, stdout, context)
     else:
         raise ValueError(f"Unsupported mode {mode!r}")
 
     return memory
+
+
+def run_source(
+    source: str,
+    *,
+    mode: str,
+    stdout: TextIO,
+    inputs: Iterable[object] | None = None,
+) -> TinyMemory:
+    return run_program(compile_source(source), mode=mode, stdout=stdout, inputs=inputs)
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -1483,12 +3387,26 @@ def _configure_logging(verbose: bool) -> None:
 
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="TinyOne compiler/VM/JIT")
-    parser.add_argument("path", help="TinyOne source file")
+    parser.add_argument("path", nargs="?", help="TinyOne source file")
     parser.add_argument(
         "--mode",
         choices=("jit", "vm"),
         default="jit",
         help="execution backend; jit compiles bytecode into Python locals",
+    )
+    parser.add_argument("--check", action="store_true", help="compile and verify without running")
+    parser.add_argument("--emit-bytecode", metavar="PATH", help="write a JSON bytecode artifact")
+    parser.add_argument("--run-bytecode", metavar="PATH", help="run a JSON bytecode artifact")
+    parser.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        help="append one deterministic input value for read/read_int/read_str",
+    )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="append stdin lines to the deterministic input queue",
     )
     parser.add_argument("--verbose", action="store_true", help="enable debug logging")
     return parser.parse_args(list(argv))
@@ -1499,13 +3417,23 @@ def main(argv: list[str]) -> int:
     _configure_logging(args.verbose)
 
     try:
-        with open(args.path, "r", encoding="utf-8") as file:
-            source = file.read()
-        run_source(source, mode=args.mode, stdout=sys.stdout)
+        inputs = list(args.input)
+        if args.stdin:
+            inputs.extend(line.rstrip("\n") for line in sys.stdin)
+
+        if args.run_bytecode is not None:
+            program = load_artifact(args.run_bytecode)
+        else:
+            if args.path is None:
+                print("File error: a source path is required", file=sys.stderr)
+                return 1
+            program = compile_file(args.path)
+
+        if args.emit_bytecode is not None:
+            write_artifact(program, args.emit_bytecode)
+        if not args.check:
+            run_program(program, mode=args.mode, stdout=sys.stdout, inputs=inputs)
         return 0
-    except OSError as error:
-        print(f"File error: {error}", file=sys.stderr)
-        return 1
     except TinyOneError as error:
         print(f"TinyOne error: {error}", file=sys.stderr)
         return 1
