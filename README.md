@@ -4,8 +4,23 @@ TinyOne is a tiny systems-language sketch implemented in Rust. It includes a
 lexer, recursive-descent compiler, bytecode optimizer, verifier, portable VM,
 heap/runtime model, bytecode artifact support, and CLI.
 
-The Python implementation is kept under `Python/` as a behavior reference during
-the migration. The runnable implementation now lives under `Rust/`.
+The Python implementation is maintained under `Python/` as a compile-less,
+near-portable TinyOne runtime and language implementation. The primary
+production implementation currently lives under `Rust/`.
+
+Future maintained implementations are planned for Go and C++.
+
+## Compatibility Notice
+
+The Rust and Python implementations are designed to remain behaviorally aligned
+through the shared TinyOne VM model and runtime semantics. Minor implementation
+differences and edge-case inconsistencies may still exist between runtimes.
+
+The VM architecture is specifically designed to reduce behavioral divergence
+across implementations, but exact parity is not yet guaranteed in all cases.
+
+If you encounter compatibility issues, runtime inconsistencies, or unexpected
+edge-case behavior between implementations, please report them on [GitHub](https://github.com/ConnerAdamsMaine/TinyOne):
 
 ## Features
 
@@ -46,9 +61,31 @@ the migration. The runnable implementation now lives under `Rust/`.
   `Rust/tests/`
 - Python reference tests and benchmark harness under `Python/Tests/`
 
+## Project Goals
+
+TinyOne exists for several reasons:
+
+1. To demonstrate that programming languages and runtime systems do not need to
+   be optimistically overengineered to remain useful, understandable, or
+   extensible.
+
+2. To serve as a practical educational project for studying low-level language
+   implementation, VM architecture, memory models, compiler pipelines, runtime
+   verification, and systems design.
+
+3. To act as an architectural foundation and experimentation platform for a
+   future AI-focused language and runtime ecosystem designed around portable,
+   customizable compute kernels across AMD and NVIDIA hardware.
+
+The future AI-oriented language project is not part of TinyOne itself yet.
+Additional details and announcements will be published through the TinyOne
+GitHub repository in the future.
+
 ## Requirements
 
 - Rust toolchain with Cargo
+or
+- Python 3.10 or newer
 
 ## Quick Start
 
