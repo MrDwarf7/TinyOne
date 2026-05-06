@@ -153,6 +153,27 @@ Arguments:
 TinyOne exits with status `0` on success and status `1` for file, compile, or
 runtime errors.
 
+## Release/Audit Hash Tool
+
+`hash.py` hashes files or deterministic directory trees for release manifests:
+
+```sh
+./hash.py README.md
+./hash.py --tree . --exclude manifest.json --format json > manifest.json
+./hash.py --expected DIGEST README.md
+./hash.py --check manifest.json
+```
+
+Tree mode excludes `.git`, `Rust/target`, `__pycache__`, `.mypy_cache`,
+`.agents`, and `.codex` by default. Add repeatable `--exclude PATTERN` entries
+for local artifacts or use `--no-default-excludes` when a fully explicit tree is
+needed. `--include SUFFIX` can still narrow tree hashing to source-like files.
+When writing a manifest inside the hashed tree, exclude the manifest path.
+
+Verification exits with status `0` when every entry matches, status `1` when a
+digest or tree file count mismatches, and status `2` for usage, manifest, file,
+or hashing errors.
+
 ## Language
 
 TinyOne has integers, strings, heap-backed aggregates, top-level statements,
