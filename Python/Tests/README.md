@@ -3,19 +3,19 @@
 Run correctness tests:
 
 ```sh
-python3 -m unittest discover -s Tests -p 'test_*.py'
+python3 -m unittest discover -s Python/Tests -p 'test_*.py'
 ```
 
 Run the benchmark suite:
 
 ```sh
-python3 Tests/bench_vm_jit.py
+python3 Python/Tests/bench_vm_jit.py
 ```
 
 For a fast smoke run:
 
 ```sh
-python3 Tests/bench_vm_jit.py --quick --repeats 1
+python3 Python/Tests/bench_vm_jit.py --quick --repeats 1
 ```
 
 The correctness suite pins VM/JIT parity across straight-line code, loop

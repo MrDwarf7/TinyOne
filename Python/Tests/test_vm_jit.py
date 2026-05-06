@@ -7,11 +7,11 @@ import unittest
 from io import StringIO
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from main import (  # noqa: E402
+from Python.main import (  # noqa: E402
     BytecodeVerifier,
     CompileError,
     Function,

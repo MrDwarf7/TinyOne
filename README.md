@@ -1,17 +1,15 @@
 # TinyOne
 
-TinyOne is a tiny systems-language sketch implemented as a single Python file. It
-includes a lexer, recursive-descent compiler, bytecode optimizer, verifier,
-portable VM, and a generated-Python JIT backend.
+TinyOne is a tiny systems-language sketch implemented in Rust. It includes a
+lexer, recursive-descent compiler, bytecode optimizer, verifier, portable VM,
+heap/runtime model, bytecode artifact support, and CLI.
 
-The project is intentionally small and dependency-free. It is useful as a
-readable example of how a minimal language runtime can move from source text to
-verified bytecode and then execute through more than one backend.
+The Python implementation is kept under `Python/` as a behavior reference during
+the migration. The runnable implementation now lives under `Rust/`.
 
 ## Features
 
-- Single-file implementation in `main.py`
-- Python standard library only
+- Rust implementation in `Rust/src/lib.rs` and `Rust/src/main.rs`
 - Integer arithmetic with precedence and parentheses
 - String literals
 - Heap-backed arrays, structs, buffers, and pointer cells
@@ -20,7 +18,9 @@ verified bytecode and then execute through more than one backend.
 - Top-level `fn` functions with parameters, calls, and `return`
 - Top-level `struct` definitions
 - Namespaced source-file `import` declarations with `export` visibility
+- `if`/`else` conditionals
 - `while` loops with brace-delimited bodies
+- `break` and `continue` loop control
 - Comparison expressions that produce `0` or `1`
 - Stack-machine bytecode compiler
 - Peephole constant folding before execution
@@ -35,18 +35,20 @@ verified bytecode and then execute through more than one backend.
   `fieldptr`, `ptr_addr`, `ptr_at`, `ptr_add`, `ptr_load`, `ptr_store`,
   `ptr_type`, `is_null`, `ptr_eq`, `ptr_ne`, `ptr_base`, `ptr_offset`,
   `ptr_kind`, `ptr_field`, `buffer`, `read8`, `write8`, `read16`, `write16`,
-  `read32`, `write32`, and `cast_ptr`
+  `read32`, `write32`, `cast_ptr`, `push`, and `pop`
 - Deterministic input queues through CLI flags or stdin
 - JSON bytecode artifact emission and execution with module dependency metadata
-- Two execution backends:
-  - `jit`, the default, emits generated Python functions
-  - `vm`, a portable bytecode interpreter
-- Dependency-free tests and VM/JIT benchmark harness under `Tests/`
+- `jit` and `vm` CLI modes. The Rust `jit` mode now compiles verified TinyOne
+  bytecode into a lower-level adaptive bytecode tier, caches it by program
+  fingerprint, and quickens hot loop paths in-place.
+- Rust benchmark runner with correctness preflight and timing table
+- Rust unit tests under `Rust/src/lib.rs` and integration tests under
+  `Rust/tests/`
+- Python reference tests and benchmark harness under `Python/Tests/`
 
 ## Requirements
 
-- Python 3.10 or newer
-- No package installation step
+- Rust toolchain with Cargo
 
 ## Quick Start
 
@@ -62,10 +64,10 @@ print x
 print y
 ```
 
-Run it with the default JIT backend:
+Run it with the default adaptive `jit` mode:
 
 ```sh
-python3 main.py example.tinyone
+cargo run --manifest-path Rust/Cargo.toml -- example.tinyone
 ```
 
 Expected output:
@@ -78,31 +80,34 @@ Expected output:
 Run the same program through the VM backend:
 
 ```sh
-python3 main.py --mode vm example.tinyone
+cargo run --manifest-path Rust/Cargo.toml -- --mode vm example.tinyone
 ```
 
 Enable compiler/runtime debug logging:
 
 ```sh
-python3 main.py --verbose example.tinyone
+cargo run --manifest-path Rust/Cargo.toml -- --verbose example.tinyone
 ```
 
 ## Command Line
 
 ```text
-usage: main.py [-h] [--mode {jit,vm}] [--check]
-               [--emit-bytecode PATH] [--run-bytecode PATH]
-               [--input INPUT] [--stdin] [--verbose]
+usage: tinyone [--mode {jit,vm}] [--check]
+               [--emit-bytecode PATH] [--emit-jit PATH]
+               [--run-bytecode PATH]
+               [--input VALUE] [--stdin] [--verbose]
                [path]
 ```
 
 Arguments:
 
 - `path`: TinyOne source file to execute
-- `--mode jit`: compile bytecode into a generated Python function
+- `--mode jit`: compile verified bytecode to the adaptive JIT bytecode tier and
+  execute it
 - `--mode vm`: execute bytecode with the portable VM
 - `--check`: compile and verify without running
 - `--emit-bytecode PATH`: write a JSON bytecode artifact after compilation
+- `--emit-jit PATH`: write the lowered adaptive-JIT listing after compilation
 - `--run-bytecode PATH`: execute a previously emitted JSON artifact
 - `--input VALUE`: append one deterministic input item for `read*` builtins
 - `--stdin`: append stdin lines to the deterministic input queue
@@ -125,15 +130,21 @@ let name = expression
 print expression
 set name[index] = expression
 set name.field = expression
+if expression { statements }
+if expression { statements } else { statements }
 while expression { statements }
+break
+continue
 return expression
 ```
 
 `let` defines or updates a variable slot. Variables must be defined before they
 are read, and slots start at `0` inside the current stack frame. Block-local
 names are hidden after the block, while assignments to outer visible names keep
-using the outer slot. `while` repeats while its expression is non-zero. `return`
-is only valid inside a function.
+using the outer slot. `if` runs its first block when the expression is non-zero;
+the optional `else` block runs otherwise. `while` repeats while its expression
+is non-zero. `break` exits the innermost loop, `continue` jumps back to that
+loop's condition, and `return` is only valid inside a function.
 
 ### Imports
 
@@ -234,11 +245,17 @@ objects, not inline copies.
 let values = [10, 20, 30]
 set values[1] = 99
 print values[1]
+print push(values, 40)
+print pop(values)
 
 let word = "tiny"
 print len(word)
 print word[0]
 ```
+
+`push(array, value)` mutates an array and returns its new length. `pop(array)`
+removes and returns the last value, and reports a runtime error for an empty
+array.
 
 Pointer cells are created through the standard library. They model explicit
 allocation, load/store, and free.
@@ -351,6 +368,8 @@ unsafe write16(ptr, value)
 unsafe read32(ptr)
 unsafe write32(ptr, value)
 cast_ptr(ptr, type_name)
+push(array, value)
+pop(array)
 ```
 
 `read()` consumes one deterministic input item and returns an integer when the
@@ -453,83 +472,81 @@ string literals, struct definitions, field metadata, and module dependency
 metadata.
 
 ```sh
-python3 main.py --check --emit-bytecode program.tobc.json program.to
-python3 main.py --run-bytecode program.tobc.json
+cargo run --manifest-path Rust/Cargo.toml -- --check --emit-bytecode program.tobc.json program.to
+cargo run --manifest-path Rust/Cargo.toml -- --run-bytecode program.tobc.json
 ```
 
 Artifacts are verified again before execution.
 
 ## JIT Backend
 
-The JIT backend does not generate machine code. It emits and compiles a Python
-function specialized for the verified TinyOne bytecode.
+The Rust JIT backend does not emit machine code yet. It compiles verified
+TinyOne bytecode into a lowered internal bytecode with decoded operands,
+separate compiled chunks for functions, and a fingerprint-keyed cache.
 
-For branch-free main programs, the JIT maps virtual stack positions to Python
-locals named `_s0`, `_s1`, and so on. Programs with functions or loops still go
-through generated Python code, but use a small generated dispatch loop so branch
-targets and function calls execute with the same semantics as the VM.
+During execution, the JIT records backward branches. Once a loop back-edge is
+hot, the compiled chunk is quickened in-place: arithmetic, comparison, and jump
+operations inside that hot range are rewritten to faster specialized forms such
+as `add.int`, `cmp.int.lt`, and `jmp.hot`. `--emit-jit PATH` writes the lowered
+listing before execution so the compiled form can be inspected.
 
 ## VM Backend
 
 The VM backend interprets the same optimized and verified bytecode. It is
-simpler, easier to debug, and useful for checking behavior against the JIT
-backend.
+simpler, easier to debug, and useful for checking behavior against the adaptive
+JIT backend.
 
 ## Tests and Benchmarks
 
 Run the correctness suite:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Tests -p 'test_*.py'
+cargo test --manifest-path Rust/Cargo.toml
 ```
 
-The tests cover VM/JIT parity for straight-line code, loop dispatch, function
-call/return dispatch, nested control-flow transfers, heap arrays, structs,
-strings, buffers, pointer cells, raw pointers, null checks, pointer metadata,
-stale pointer rejection, deterministic input, namespaced imports, export
-visibility, manifest resolution, artifact round trips, line/column diagnostics,
-lexical block scope, runtime errors, JIT cache reuse, and verifier rejection for
-malformed bytecode.
+The Rust tests cover VM/adaptive-JIT parity for straight-line code, loops,
+conditionals, function calls, nested control flow, runtime errors, memory slot
+behavior, heap arrays, dynamic array storage, structs, strings, buffers, pointer
+cells, raw pointers, null checks, pointer metadata, stale pointer rejection,
+deterministic input, namespaced imports, export visibility, package manifest
+resolution, artifact round trips, diagnostics, lexical scopes, hot-loop
+quickening, JIT listing emission, cache reuse, and verifier failures. The
+broader Python reference suite remains under `Python/Tests/` while the migration
+continues.
 
 Run the benchmark suite:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 Tests/bench_vm_jit.py
+cargo run --release --manifest-path Rust/Cargo.toml --bin tinyone-bench
 ```
 
 For a fast smoke timing run:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 Tests/bench_vm_jit.py --quick --repeats 1
+cargo run --release --manifest-path Rust/Cargo.toml --bin tinyone-bench -- --quick --repeats 1
 ```
 
-The benchmark harness measures memory allocation/load/store/reset/snapshot,
-lexer/compiler/optimizer/verifier stages, program fingerprinting, cold and hot
-JIT compilation, VM execution, JIT execution, full compile-and-run APIs,
-function calls, heap/struct workloads, input-backed standard-library calls, and
-control-transfer opcodes. TinyOne has no OS interrupt subsystem; the
-`control_interrupts` benchmarks stress the runtime's interrupt-like bytecode
-transfers: `JUMP`, `JUMP_IF_ZERO`, `CALL`, `RETURN`, and `HALT`.
+The Rust benchmark runner prints correctness checks first, then timing rows for
+memory allocation/load/store/reset/snapshot, lexer/compiler/optimizer/verifier
+stages, program fingerprinting, artifact round trips, adaptive-JIT codegen and
+cache hits, VM execution, JIT execution, full compile-and-run APIs, function
+calls, heap/struct workloads, input-backed standard-library calls, and
+control-transfer opcodes.
 
 ## Programmatic Use
 
-`main.py` can also be imported directly:
+The Rust crate exposes `compile_source`, `compile_file`, `run_source`,
+`run_program`, `load_artifact`, and `write_artifact` from `tinyone`.
 
-```python
-from io import StringIO
-from main import compile_source, run_source
-
-program = compile_source("fn add(a, b) { return a + b } print add(40, 2)")
-
-stdout = StringIO()
-memory = run_source(
+```rust
+let mut stdout = Vec::new();
+tinyone::run_source(
     "fn add(a, b) { return a + b } print add(40, 2)",
-    mode="jit",
-    stdout=stdout,
-)
-
-assert stdout.getvalue() == "42\n"
-assert memory.snapshot() == ()
+    "jit",
+    &mut stdout,
+    Vec::new(),
+)?;
+assert_eq!(String::from_utf8(stdout).unwrap(), "42\n");
 ```
 
 ## Current Limitations
@@ -549,13 +566,24 @@ assert memory.snapshot() == ()
 
 ```text
 .
-├── Tests/
-│   ├── README.md
-│   ├── bench_vm_jit.py
-│   └── test_vm_jit.py
+├── Python/
+│   ├── main.py
+│   └── Tests/
+│       ├── README.md
+│       ├── bench_vm_jit.py
+│       └── test_vm_jit.py
+├── Rust/
+│   ├── Cargo.toml
+│   ├── src/
+│   │   ├── bin/
+│   │   │   └── tinyone-bench.rs
+│   │   ├── lib.rs
+│   │   └── main.rs
+│   └── tests/
+│       └── runtime_parity.rs
 ├── README.md
-└── main.py
 ```
 
-`main.py` contains the complete implementation and CLI entrypoint. `Tests/`
-contains the stdlib-only correctness tests and benchmark harness.
+`Rust/src/lib.rs` contains the compiler, verifier, bytecode runtime, heap, and
+public API. `Rust/src/main.rs` contains the CLI entrypoint. `Python/` keeps the
+previous implementation and tests as a reference corpus.
