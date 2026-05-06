@@ -4,8 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tinyone::{
     BytecodeVerifier, Function, Instr, JitCache, Op, Program, RuntimeValue, StructDef, TinyMemory,
-    TinyOneError, compile_file, compile_source, load_artifact, run_program, write_artifact,
-    write_jit_listing,
+    TinyOneError, compile_file, compile_source, load_artifact, run_program, run_program_report,
+    write_artifact, write_jit_listing,
 };
 
 fn run_compiled(
@@ -385,7 +385,7 @@ fn pointer_cells_and_deterministic_input_match() {
     print load(ptr)
     print store(ptr, load(ptr) + 5)
     print load(ptr)
-    let done = free(ptr)
+    let done = unsafe free(ptr)
     "#;
     let program = compile_source(source).expect("source should compile");
 
@@ -394,6 +394,27 @@ fn pointer_cells_and_deterministic_input_match() {
             run_compiled(&program, mode, vec!["37"]).expect("program should run");
         assert_eq!("37\n42\n42\n", stdout);
         assert_eq!(3, memory.len());
+    }
+}
+
+#[test]
+fn manual_free_requires_unsafe_and_keeps_failures_contained() {
+    assert_error_contains(
+        compile_source("let values = [1] let ignored = free(values)"),
+        "requires unsafe",
+    );
+
+    let program = compile_source(
+        r#"
+        let values = [1]
+        let ignored = unsafe free(values)
+        print values[0]
+        "#,
+    )
+    .expect("source should compile");
+
+    for mode in ["vm", "jit"] {
+        assert_error_contains(run_compiled(&program, mode, Vec::new()), "Use after free");
     }
 }
 
@@ -445,6 +466,23 @@ fn raw_pointer_arithmetic_checks_runtime_bounds() {
 
     for mode in ["vm", "jit"] {
         assert_error_contains(run_compiled(&program, mode, Vec::new()), "out of bounds");
+    }
+}
+
+#[test]
+fn pointer_arithmetic_overflow_reports_runtime_error() {
+    let program = compile_source(
+        r#"
+        let mem = buffer(1)
+        let p = ptr(mem, 0)
+        let huge = unsafe ptr_add(p, 9223372036854775807)
+        print ptr_offset(unsafe ptr_add(huge, 1))
+        "#,
+    )
+    .expect("source should compile");
+
+    for mode in ["vm", "jit"] {
+        assert_error_contains(run_compiled(&program, mode, Vec::new()), "offset overflow");
     }
 }
 
@@ -529,13 +567,73 @@ fn raw_memory_operations_require_unsafe_and_check_bounds() {
 }
 
 #[test]
+fn dynamic_allocations_are_bounded_before_host_allocation() {
+    let programs = [
+        compile_source("print len(array(1000001, 0))").expect("source should compile"),
+        compile_source("print len(buffer(16777217))").expect("source should compile"),
+        compile_source(
+            r#"
+            let a = buffer(1048576)
+            let b = buffer(1048576)
+            let c = buffer(1048576)
+            let d = buffer(1048576)
+            let e = buffer(1)
+            print len(e)
+            "#,
+        )
+        .expect("source should compile"),
+    ];
+
+    for program in programs {
+        for mode in ["vm", "jit"] {
+            let error = run_compiled(&program, mode, Vec::new())
+                .expect_err("program should fail")
+                .to_string();
+            assert!(
+                error.contains("exceeds maximum") || error.contains("Heap byte limit"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn runtime_owned_heap_is_released_on_shutdown_without_gc() {
+    let program = compile_source(
+        r#"
+        struct Pair { left, right }
+        let values = [1, 2, 3]
+        let pair = Pair(values, buffer(64))
+        let cell = alloc(pair)
+        print len(values) + len(pair.right)
+        "#,
+    )
+    .expect("source should compile");
+
+    for mode in ["vm", "jit"] {
+        let mut stdout = Vec::new();
+        let report = run_program_report(&program, mode, &mut stdout, Vec::new())
+            .expect("program should run");
+        assert_eq!("67\n", String::from_utf8(stdout).expect("UTF-8 output"));
+        assert!(report.heap_before_shutdown.live_objects >= 4);
+        assert!(report.heap_before_shutdown.live_bytes > 0);
+        assert_eq!(0, report.heap_after_shutdown.live_objects);
+        assert_eq!(0, report.heap_after_shutdown.live_bytes);
+        assert_eq!(
+            report.heap_before_shutdown.live_objects as u64,
+            report.heap_after_shutdown.shutdown_frees
+        );
+    }
+}
+
+#[test]
 fn derived_pointers_fail_after_base_free_even_if_address_is_reused() {
     let programs = [
         compile_source(
             r#"
             let values = [1, 2]
             let p = ptr(values, 1)
-            let ignored = free(values)
+            let ignored = unsafe free(values)
             let replacement = [7, 8]
             print unsafe ptr_load(p)
             "#,
@@ -545,7 +643,7 @@ fn derived_pointers_fail_after_base_free_even_if_address_is_reused() {
             r#"
             let values = [1, 2]
             let p = ptr(values, 1)
-            let ignored = free(values)
+            let ignored = unsafe free(values)
             let replacement = [7, 8]
             print ptr_kind(p)
             "#,
@@ -556,7 +654,7 @@ fn derived_pointers_fail_after_base_free_even_if_address_is_reused() {
             struct Pair { left, right }
             let pair = Pair(1, 2)
             let p = fieldptr(pair, "right")
-            let ignored = free(pair)
+            let ignored = unsafe free(pair)
             let replacement = Pair(3, 4)
             print unsafe ptr_load(p)
             "#,
@@ -574,6 +672,26 @@ fn derived_pointers_fail_after_base_free_even_if_address_is_reused() {
                 "unexpected error: {error}"
             );
         }
+    }
+}
+
+#[test]
+fn recursive_calls_stop_at_language_call_depth_limit() {
+    let program = compile_source(
+        r#"
+        fn recurse(value) {
+          return recurse(value + 1)
+        }
+        print recurse(0)
+        "#,
+    )
+    .expect("source should compile");
+
+    for mode in ["vm", "jit"] {
+        assert_error_contains(
+            run_compiled(&program, mode, Vec::new()),
+            "Call stack overflow",
+        );
     }
 }
 

@@ -41,12 +41,13 @@ edge-case behavior between implementations, please report them on [GitHub](https
 - Peephole constant folding before execution
 - Static control-flow-aware bytecode stack-depth verification
 - Lexical block scopes backed by zero-initialized stack-frame slots
-- Explicit heap allocation/free for arrays, structs, strings, buffers, and cells
+- Explicit heap allocation and unsafe deallocation for arrays, structs, strings,
+  buffers, and cells
 - Raw pointers for heap objects, array elements, struct fields, buffers, and
   pointer cells
 - Unsafe-gated raw pointer dereference and raw address construction/arithmetic
 - Small standard library plus `null`: `len`, `array`, `alloc`, `load`,
-  `store`, `free`, `read`, `read_int`, `read_str`, `to_int`, `ptr`,
+  `store`, `unsafe free`, `read`, `read_int`, `read_str`, `to_int`, `ptr`,
   `fieldptr`, `ptr_addr`, `ptr_at`, `ptr_add`, `ptr_load`, `ptr_store`,
   `ptr_type`, `is_null`, `ptr_eq`, `ptr_ne`, `ptr_base`, `ptr_offset`,
   `ptr_kind`, `ptr_field`, `buffer`, `read8`, `write8`, `read16`, `write16`,
@@ -330,16 +331,16 @@ removes and returns the last value, and reports a runtime error for an empty
 array.
 
 Pointer cells are created through the standard library. They model explicit
-allocation, load/store, and free.
+allocation, load/store, and unsafe free.
 
 ```tinyone
 let ptr = alloc(41)
 print load(ptr)
 print store(ptr, load(ptr) + 1)
-let ignored = free(ptr)
+let ignored = unsafe free(ptr)
 ```
 
-Using a freed pointer is a runtime error.
+Manual deallocation requires `unsafe`. Using a freed pointer is a runtime error.
 
 Raw pointers are a separate runtime value. They can point at heap objects, array
 elements, struct fields, buffers, or pointer cells. `null` is the null raw
@@ -412,7 +413,7 @@ buffer(size)
 alloc(value)
 load(ptr)
 store(ptr, value)
-free(ptr)
+unsafe free(ptr)
 read()
 read_int()
 read_str()
@@ -520,7 +521,7 @@ execution. Invalid bytecode, mismatched function or builtin arity, invalid
 branch targets, invalid string/field/struct indexes, and stack imbalance fail
 before either backend runs.
 
-## Memory Model
+## Memory Safety And Ownership Model
 
 Each function call allocates a fresh stack frame with fixed slots for that
 compiled function. Heap objects are separate from stack frames and are reached
@@ -530,12 +531,58 @@ through `HeapRef` handles:
 - arrays: mutable indexed value vectors
 - structs: mutable named-field records
 - buffers: mutable zero-initialized byte vectors for raw memory operations
-- cells: pointer-like single-value allocations used by `alloc/load/store/free`
+- cells: pointer-like single-value allocations used by `alloc`, `load`,
+  `store`, and `unsafe free`
 
 Heap references and raw pointers carry a runtime generation tag, so stale
-references fail after `free` even when the numeric heap address is reused. The
-heap detects invalid pointers, stale derived pointers, and use-after-free at
-runtime.
+references fail after `unsafe free` even when the numeric heap address is
+reused. The heap detects invalid pointers, stale derived pointers, and
+use-after-free at runtime.
+
+TinyOne does not use garbage collection or compile-time borrow checking. The
+Rust runtime owns the heap for the whole run. TinyOne variables, array elements,
+struct fields, cells, and raw pointers hold values or handles; copying one of
+those handles aliases the same heap object and does not clone, move, or transfer
+ownership of that object.
+
+| Runtime value | Stored where | Ownership behavior | Safety checks |
+| --- | --- | --- | --- |
+| `Int` | Stack slot or heap payload | Copied by value | Arithmetic overflow and divide-by-zero are runtime errors |
+| `HeapRef` | Stack slot, array, struct field, or cell | Aliases one heap object by address and generation | Invalid, stale, and freed references fail before access |
+| `RawPointer` | Stack slot, array, struct field, or cell | Derived alias into an object, array element, struct field, buffer byte range, or cell | Null, kind, generation, bounds, and stale-base checks run before pointer use |
+
+The ownership rules are deliberately explicit:
+
+- The runtime owns every heap allocation until `unsafe free(value)` releases
+  that exact object or runtime shutdown drains all remaining live objects.
+- `unsafe free(value)` is shallow. If a freed array, struct, or cell contains
+  handles to other heap objects, those referenced objects stay alive until they
+  are separately freed or the run shuts down.
+- Handle and pointer aliases remain valid across ordinary mutation of the same
+  live object. They become invalid once the base object is freed, even if the
+  numeric heap address is later reused.
+- `unsafe` is a source-level gate for operations that can violate TinyOne-level
+  lifetime or address rules: manual free, raw address reconstruction, pointer
+  arithmetic, raw pointer load/store, and buffer reads/writes. These operations
+  are still checked by the Rust runtime and report TinyOne runtime errors
+  instead of exposing host memory directly.
+- Stack frames are fixed per compiled function call. Function locals and
+  parameters live in that frame, start as `0`, and are discarded when the call
+  returns.
+
+Host-memory hazards are bounded before allocation:
+
+| Resource | Limit |
+| --- | --- |
+| Dynamic array length | 65,536 elements |
+| Single buffer allocation | 1 MiB |
+| Total live heap payload | 4 MiB |
+| Live heap object slots | 1,000,000 objects |
+| Nested TinyOne calls | 16 calls |
+
+Exceeding any of these limits is a TinyOne runtime error rather than unbounded
+host allocation or host stack growth. At shutdown the runtime drains live heap
+objects and reports the before/after heap state through the report APIs.
 
 ## Bytecode Artifacts
 
@@ -635,7 +682,8 @@ control-transfer opcodes.
 ## Programmatic Use
 
 The Rust crate exposes `compile_source`, `compile_file`, `run_source`,
-`run_program`, `load_artifact`, and `write_artifact` from `tinyone`.
+`run_program`, `run_source_report`, `run_program_report`, `load_artifact`, and
+`write_artifact` from `tinyone`.
 
 ```rust
 let mut stdout = Vec::new();
@@ -658,8 +706,8 @@ assert_eq!(String::from_utf8(stdout).unwrap(), "42\n");
   `unsafe`
 - No native object-file linker; imported source modules are separately compiled
   and linked into one verified bytecode artifact
-- No garbage collector; heap ownership is manual for pointer cells and raw
-  pointers
+- No garbage collector; explicit deallocation is available through `unsafe
+  free(...)`
 
 ## Repository Layout
 

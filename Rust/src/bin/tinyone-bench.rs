@@ -88,7 +88,7 @@ const INPUT_SOURCE: &str = r#"
 let value = read_int()
 let ptr = alloc(value)
 print store(ptr, load(ptr) + 1)
-let ignored = free(ptr)
+let ignored = unsafe free(ptr)
 "#;
 
 const BUILTIN_HEAVY_SOURCE: &str = r#"

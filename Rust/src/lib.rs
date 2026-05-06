@@ -937,7 +937,7 @@ const BUILTINS: &[BuiltinDef] = &[
         name: "free",
         min_args: 1,
         max_args: 1,
-        requires_unsafe: false,
+        requires_unsafe: true,
     },
     BuiltinDef {
         name: "read",
@@ -1114,6 +1114,13 @@ const BUILTINS: &[BuiltinDef] = &[
         requires_unsafe: false,
     },
 ];
+
+const MAX_CALL_DEPTH: usize = 16;
+const MAX_HEAP_OBJECTS: usize = 1_000_000;
+const MAX_HEAP_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ARRAY_LENGTH: usize = 65_536;
+const MAX_BUFFER_BYTES: usize = 1024 * 1024;
+const VALUE_BYTES: usize = std::mem::size_of::<Value>();
 
 fn builtin_index(name: &str) -> Option<usize> {
     BUILTINS.iter().position(|item| item.name == name)
@@ -2012,10 +2019,7 @@ impl Compiler {
             ));
         }
         if builtin.requires_unsafe && self.unsafe_depth == 0 {
-            return Err(self.error_at(
-                format!("Builtin {name:?} requires unsafe dereference syntax"),
-                pos,
-            ));
+            return Err(self.error_at(format!("Builtin {name:?} requires unsafe syntax"), pos));
         }
         self.emit(Op::Builtin, builtin_index as i64, arg_count as i64);
         Ok(())
@@ -2560,11 +2564,24 @@ impl HeapObject {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TinyHeapStats {
+    pub live_objects: usize,
+    pub live_bytes: usize,
+    pub peak_objects: usize,
+    pub peak_bytes: usize,
+    pub total_allocations: u64,
+    pub total_frees: u64,
+    pub shutdown_frees: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct TinyHeap {
     objects: Vec<Option<HeapObject>>,
     free: Vec<usize>,
     generations: Vec<u64>,
+    stats: TinyHeapStats,
+    shutdown: bool,
 }
 
 impl TinyHeap {
@@ -2573,43 +2590,212 @@ impl TinyHeap {
             objects: vec![None],
             free: Vec::new(),
             generations: vec![0],
+            stats: TinyHeapStats::default(),
+            shutdown: false,
         }
     }
 
-    fn alloc(&mut self, object: HeapObject) -> HeapRef {
+    fn alloc(&mut self, object: HeapObject) -> Result<HeapRef> {
+        if self.shutdown {
+            return Err(TinyOneError::runtime("Heap is already shut down"));
+        }
+        let bytes = heap_object_bytes(&object);
+        self.ensure_can_allocate(bytes)?;
         if let Some(address) = self.free.pop() {
-            self.generations[address] += 1;
+            self.generations[address] = self.generations[address]
+                .checked_add(1)
+                .ok_or_else(|| TinyOneError::runtime("Heap generation exhausted"))?;
             self.objects[address] = Some(object);
-            HeapRef {
+            self.record_alloc(bytes)?;
+            Ok(HeapRef {
                 address,
                 generation: self.generations[address],
-            }
+            })
         } else {
+            if self.objects.len() >= MAX_HEAP_OBJECTS {
+                return Err(TinyOneError::runtime(format!(
+                    "Heap object limit {MAX_HEAP_OBJECTS} exceeded"
+                )));
+            }
             let address = self.objects.len();
             self.objects.push(Some(object));
             self.generations.push(1);
-            HeapRef {
+            self.record_alloc(bytes)?;
+            Ok(HeapRef {
                 address,
                 generation: 1,
-            }
+            })
         }
     }
 
-    fn alloc_string(&mut self, text: impl Into<String>) -> HeapRef {
+    fn ensure_can_allocate(&self, bytes: usize) -> Result<()> {
+        if self.stats.live_objects >= MAX_HEAP_OBJECTS {
+            return Err(TinyOneError::runtime(format!(
+                "Heap object limit {MAX_HEAP_OBJECTS} exceeded"
+            )));
+        }
+        let next_bytes = self
+            .stats
+            .live_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting overflow"))?;
+        if next_bytes > MAX_HEAP_BYTES {
+            return Err(TinyOneError::runtime(format!(
+                "Heap byte limit {MAX_HEAP_BYTES} exceeded"
+            )));
+        }
+        Ok(())
+    }
+
+    fn record_alloc(&mut self, bytes: usize) -> Result<()> {
+        self.stats.live_objects = self
+            .stats
+            .live_objects
+            .checked_add(1)
+            .ok_or_else(|| TinyOneError::runtime("Heap object accounting overflow"))?;
+        self.stats.live_bytes = self
+            .stats
+            .live_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting overflow"))?;
+        self.stats.total_allocations = self
+            .stats
+            .total_allocations
+            .checked_add(1)
+            .ok_or_else(|| TinyOneError::runtime("Heap allocation counter overflow"))?;
+        self.stats.peak_objects = self.stats.peak_objects.max(self.stats.live_objects);
+        self.stats.peak_bytes = self.stats.peak_bytes.max(self.stats.live_bytes);
+        Ok(())
+    }
+
+    fn record_free(&mut self, bytes: usize) -> Result<()> {
+        self.stats.live_objects = self
+            .stats
+            .live_objects
+            .checked_sub(1)
+            .ok_or_else(|| TinyOneError::runtime("Heap object accounting underflow"))?;
+        self.stats.live_bytes = self
+            .stats
+            .live_bytes
+            .checked_sub(bytes)
+            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting underflow"))?;
+        self.stats.total_frees = self
+            .stats
+            .total_frees
+            .checked_add(1)
+            .ok_or_else(|| TinyOneError::runtime("Heap free counter overflow"))?;
+        Ok(())
+    }
+
+    fn grow_array(&mut self, target: &Value, value: Value) -> Result<usize> {
+        let Value::Heap(reference) = target else {
+            return Err(TinyOneError::runtime("Expected heap pointer"));
+        };
+        self.get_address(reference.address, reference.generation)?;
+        let object = self.objects[reference.address]
+            .as_ref()
+            .expect("current object");
+        let HeapData::Array(values) = &object.data else {
+            return Err(TinyOneError::runtime(format!(
+                "push() expects an array, got {}",
+                object.kind()
+            )));
+        };
+        if values.len() >= MAX_ARRAY_LENGTH {
+            return Err(TinyOneError::runtime(format!(
+                "push() exceeds maximum length {MAX_ARRAY_LENGTH}"
+            )));
+        }
+        self.ensure_can_allocate_delta(VALUE_BYTES)?;
+        let len = {
+            let object = self.get_address_mut(reference.address, reference.generation)?;
+            let HeapData::Array(values) = &mut object.data else {
+                return Err(TinyOneError::runtime(
+                    "push() target stopped being an array",
+                ));
+            };
+            values.push(value);
+            values.len()
+        };
+        self.record_growth(VALUE_BYTES)?;
+        Ok(len)
+    }
+
+    fn shrink_array(&mut self, target: &Value) -> Result<Value> {
+        let Value::Heap(reference) = target else {
+            return Err(TinyOneError::runtime("Expected heap pointer"));
+        };
+        self.get_address(reference.address, reference.generation)?;
+        let object = self.objects[reference.address]
+            .as_ref()
+            .expect("current object");
+        let HeapData::Array(_) = &object.data else {
+            return Err(TinyOneError::runtime(format!(
+                "pop() expects an array, got {}",
+                object.kind()
+            )));
+        };
+        let value = {
+            let object = self.get_address_mut(reference.address, reference.generation)?;
+            let HeapData::Array(values) = &mut object.data else {
+                return Err(TinyOneError::runtime("pop() target stopped being an array"));
+            };
+            values
+                .pop()
+                .ok_or_else(|| TinyOneError::runtime("pop() cannot pop from an empty array"))?
+        };
+        self.record_shrink(VALUE_BYTES)?;
+        Ok(value)
+    }
+
+    fn ensure_can_allocate_delta(&self, bytes: usize) -> Result<()> {
+        let next_bytes = self
+            .stats
+            .live_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting overflow"))?;
+        if next_bytes > MAX_HEAP_BYTES {
+            return Err(TinyOneError::runtime(format!(
+                "Heap byte limit {MAX_HEAP_BYTES} exceeded"
+            )));
+        }
+        Ok(())
+    }
+
+    fn record_growth(&mut self, bytes: usize) -> Result<()> {
+        self.stats.live_bytes = self
+            .stats
+            .live_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting overflow"))?;
+        self.stats.peak_bytes = self.stats.peak_bytes.max(self.stats.live_bytes);
+        Ok(())
+    }
+
+    fn record_shrink(&mut self, bytes: usize) -> Result<()> {
+        self.stats.live_bytes = self
+            .stats
+            .live_bytes
+            .checked_sub(bytes)
+            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting underflow"))?;
+        Ok(())
+    }
+
+    fn alloc_string(&mut self, text: impl Into<String>) -> Result<HeapRef> {
         self.alloc(HeapObject {
             data: HeapData::String(text.into()),
             type_name: String::new(),
         })
     }
 
-    fn alloc_array(&mut self, values: Vec<Value>) -> HeapRef {
+    fn alloc_array(&mut self, values: Vec<Value>) -> Result<HeapRef> {
         self.alloc(HeapObject {
             data: HeapData::Array(values),
             type_name: String::new(),
         })
     }
 
-    fn alloc_buffer(&mut self, size: usize) -> HeapRef {
+    fn alloc_buffer(&mut self, size: usize) -> Result<HeapRef> {
         self.alloc(HeapObject {
             data: HeapData::Buffer(vec![0; size]),
             type_name: String::new(),
@@ -2620,14 +2806,14 @@ impl TinyHeap {
         &mut self,
         type_name: impl Into<String>,
         fields: Vec<(String, Value)>,
-    ) -> HeapRef {
+    ) -> Result<HeapRef> {
         self.alloc(HeapObject {
             data: HeapData::Struct(fields),
             type_name: type_name.into(),
         })
     }
 
-    fn alloc_cell(&mut self, value: Value) -> HeapRef {
+    fn alloc_cell(&mut self, value: Value) -> Result<HeapRef> {
         self.alloc(HeapObject {
             data: HeapData::Cell(value),
             type_name: String::new(),
@@ -2696,9 +2882,52 @@ impl TinyHeap {
             return Err(TinyOneError::runtime("Expected heap pointer"));
         };
         self.get_address(reference.address, reference.generation)?;
+        let bytes = heap_object_bytes(
+            self.objects[reference.address]
+                .as_ref()
+                .expect("current object"),
+        );
         self.objects[reference.address] = None;
         self.free.push(reference.address);
+        self.record_free(bytes)?;
         Ok(())
+    }
+
+    fn stats(&self) -> TinyHeapStats {
+        self.stats
+    }
+
+    fn shutdown(&mut self) -> TinyHeapStats {
+        if self.shutdown {
+            return self.stats;
+        }
+        let live_objects = self.stats.live_objects;
+        for slot in self.objects.iter_mut().skip(1) {
+            *slot = None;
+        }
+        self.free.clear();
+        self.stats.live_objects = 0;
+        self.stats.live_bytes = 0;
+        self.stats.total_frees += live_objects as u64;
+        self.stats.shutdown_frees += live_objects as u64;
+        self.shutdown = true;
+        self.stats
+    }
+}
+
+fn heap_object_bytes(object: &HeapObject) -> usize {
+    match &object.data {
+        HeapData::String(text) => text.len(),
+        HeapData::Array(values) => values.len().saturating_mul(VALUE_BYTES),
+        HeapData::Buffer(data) => data.len(),
+        HeapData::Struct(fields) => {
+            object.type_name.len()
+                + fields
+                    .iter()
+                    .map(|(name, _)| name.len() + VALUE_BYTES)
+                    .sum::<usize>()
+        }
+        HeapData::Cell(_) => VALUE_BYTES,
     }
 }
 
@@ -2725,6 +2954,20 @@ impl TinyRuntimeContext {
         let value = self.inputs[self.input_index].clone();
         self.input_index += 1;
         Ok(value)
+    }
+
+    fn heap_stats(&self) -> TinyHeapStats {
+        self.heap.stats()
+    }
+
+    fn shutdown(&mut self) -> TinyHeapStats {
+        self.heap.shutdown()
+    }
+}
+
+impl Drop for TinyRuntimeContext {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -2808,6 +3051,76 @@ fn floor_div(lhs: i64, rhs: i64) -> Option<i64> {
     }
 }
 
+fn checked_non_negative_usize(value: i64, operation: &str) -> Result<usize> {
+    if value < 0 {
+        return Err(TinyOneError::runtime(format!(
+            "{operation} must be non-negative"
+        )));
+    }
+    usize::try_from(value).map_err(|_| TinyOneError::runtime(format!("{operation} is too large")))
+}
+
+fn checked_bounded_len(value: i64, operation: &str, max: usize) -> Result<usize> {
+    let value = checked_non_negative_usize(value, operation)?;
+    if value > max {
+        return Err(TinyOneError::runtime(format!(
+            "{operation} exceeds maximum length {max}"
+        )));
+    }
+    Ok(value)
+}
+
+fn checked_collection_index(index: i64, len: usize, kind: &str) -> Result<usize> {
+    if index < 0 {
+        return Err(TinyOneError::runtime(format!(
+            "{kind} index {index} out of bounds"
+        )));
+    }
+    let index = usize::try_from(index)
+        .map_err(|_| TinyOneError::runtime(format!("{kind} index {index} is too large")))?;
+    if index >= len {
+        return Err(TinyOneError::runtime(format!(
+            "{kind} index {index} out of bounds"
+        )));
+    }
+    Ok(index)
+}
+
+fn checked_byte_range(offset: i64, width: usize, len: usize, operation: &str) -> Result<usize> {
+    if offset < 0 {
+        return Err(TinyOneError::runtime(format!(
+            "{operation} out of bounds at byte offset {offset}"
+        )));
+    }
+    let offset = usize::try_from(offset).map_err(|_| {
+        TinyOneError::runtime(format!("{operation} byte offset {offset} is too large"))
+    })?;
+    let end = offset.checked_add(width).ok_or_else(|| {
+        TinyOneError::runtime(format!(
+            "{operation} byte range overflows at offset {offset}"
+        ))
+    })?;
+    if end > len {
+        return Err(TinyOneError::runtime(format!(
+            "{operation} out of bounds at byte offset {offset}"
+        )));
+    }
+    Ok(offset)
+}
+
+fn checked_stack_count(stack_len: usize, count: usize) -> Result<()> {
+    if count > stack_len {
+        return Err(TinyOneError::runtime("Stack underflow"));
+    }
+    Ok(())
+}
+
+fn checked_payload_bytes(count: usize, unit: usize, operation: &str) -> Result<usize> {
+    count
+        .checked_mul(unit)
+        .ok_or_else(|| TinyOneError::runtime(format!("{operation} payload is too large")))
+}
+
 fn runtime_neg(value: Value) -> Result<Value> {
     Ok(Value::Int(
         expect_int(&value, "Negation")?
@@ -2853,8 +3166,13 @@ fn runtime_null() -> Value {
     Value::Pointer(RawPointer::new(0, "null", 0, "", 0, ""))
 }
 
-fn runtime_make_array(context: &mut TinyRuntimeContext, values: Vec<Value>) -> Value {
-    Value::Heap(context.heap.alloc_array(values))
+fn runtime_make_array(context: &mut TinyRuntimeContext, values: Vec<Value>) -> Result<Value> {
+    if values.len() > MAX_ARRAY_LENGTH {
+        return Err(TinyOneError::runtime(format!(
+            "array literal exceeds maximum length {MAX_ARRAY_LENGTH}"
+        )));
+    }
+    Ok(Value::Heap(context.heap.alloc_array(values)?))
 }
 
 fn runtime_index(
@@ -2866,18 +3184,16 @@ fn runtime_index(
     let object = context.heap.get(&container)?.clone();
     match object.data {
         HeapData::Array(values) => {
-            if index < 0 || index as usize >= values.len() {
-                return Err(TinyOneError::runtime(format!(
-                    "Array index {index} out of bounds"
-                )));
-            }
-            Ok(values[index as usize].clone())
+            let index = checked_collection_index(index, values.len(), "Array")?;
+            Ok(values[index].clone())
         }
         HeapData::String(text) => {
-            let ch = text.chars().nth(index as usize).ok_or_else(|| {
-                TinyOneError::runtime(format!("String index {index} out of bounds"))
-            })?;
-            Ok(Value::Heap(context.heap.alloc_string(ch.to_string())))
+            let index = checked_collection_index(index, text.chars().count(), "String")?;
+            let ch = text
+                .chars()
+                .nth(index)
+                .ok_or_else(|| TinyOneError::runtime("String index out of bounds"))?;
+            Ok(Value::Heap(context.heap.alloc_string(ch.to_string())?))
         }
         _ => Err(TinyOneError::runtime(format!(
             "Cannot index {}",
@@ -2900,12 +3216,8 @@ fn runtime_set_index(
             "Cannot assign index on {kind}"
         )));
     };
-    if index < 0 || index as usize >= values.len() {
-        return Err(TinyOneError::runtime(format!(
-            "Array index {index} out of bounds"
-        )));
-    }
-    values[index as usize] = value;
+    let index = checked_collection_index(index, values.len(), "Array")?;
+    values[index] = value;
     Ok(())
 }
 
@@ -2914,28 +3226,11 @@ fn runtime_array_push(
     target: &Value,
     value: Value,
 ) -> Result<Value> {
-    let object = context.heap.get_mut(target)?;
-    let kind = object.kind();
-    let HeapData::Array(values) = &mut object.data else {
-        return Err(TinyOneError::runtime(format!(
-            "push() expects an array, got {kind}"
-        )));
-    };
-    values.push(value);
-    Ok(Value::Int(values.len() as i64))
+    Ok(Value::Int(context.heap.grow_array(target, value)? as i64))
 }
 
 fn runtime_array_pop(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
-    let object = context.heap.get_mut(target)?;
-    let kind = object.kind();
-    let HeapData::Array(values) = &mut object.data else {
-        return Err(TinyOneError::runtime(format!(
-            "pop() expects an array, got {kind}"
-        )));
-    };
-    values
-        .pop()
-        .ok_or_else(|| TinyOneError::runtime("pop() cannot pop from an empty array"))
+    context.heap.shrink_array(target)
 }
 
 fn runtime_make_struct(
@@ -2943,9 +3238,9 @@ fn runtime_make_struct(
     type_name: &str,
     field_names: &[String],
     values: Vec<Value>,
-) -> Value {
+) -> Result<Value> {
     let fields = field_names.iter().cloned().zip(values).collect();
-    Value::Heap(context.heap.alloc_struct(type_name, fields))
+    Ok(Value::Heap(context.heap.alloc_struct(type_name, fields)?))
 }
 
 fn runtime_get_field(context: &TinyRuntimeContext, target: Value, field: &str) -> Result<Value> {
@@ -3141,20 +3436,11 @@ fn runtime_pointer_address(context: &TinyRuntimeContext, value: &Value) -> Resul
 }
 
 fn runtime_pointer_at(context: &TinyRuntimeContext, address: &Value) -> Result<Value> {
-    let address = expect_int(address, "ptr_at")?;
-    if address < 0 {
-        return Err(TinyOneError::runtime(format!(
-            "Invalid heap pointer {address}"
-        )));
-    }
-    let generation = context.heap.current_generation(address as usize)?;
+    let raw_address = expect_int(address, "ptr_at")?;
+    let address = checked_non_negative_usize(raw_address, "heap pointer")?;
+    let generation = context.heap.current_generation(address)?;
     Ok(Value::Pointer(RawPointer::new(
-        address as usize,
-        "object",
-        0,
-        "",
-        generation,
-        "",
+        address, "object", 0, "", generation, "",
     )))
 }
 
@@ -3180,14 +3466,20 @@ fn runtime_pointer_add(
             }
             Ok(Value::Pointer(pointer))
         }
-        "array" | "buffer" => Ok(Value::Pointer(RawPointer::new(
-            pointer.address,
-            pointer.kind,
-            pointer.index + offset,
-            pointer.field,
-            pointer.generation,
-            pointer.cast,
-        ))),
+        "array" | "buffer" => {
+            let index = pointer
+                .index
+                .checked_add(offset)
+                .ok_or_else(|| TinyOneError::runtime("ptr_add offset overflow"))?;
+            Ok(Value::Pointer(RawPointer::new(
+                pointer.address,
+                pointer.kind,
+                index,
+                pointer.field,
+                pointer.generation,
+                pointer.cast,
+            )))
+        }
         "field" => Err(TinyOneError::runtime(
             "Cannot apply pointer arithmetic to field pointers",
         )),
@@ -3223,13 +3515,8 @@ fn runtime_pointer_load(context: &TinyRuntimeContext, pointer: &Value) -> Result
                     "Array pointer no longer points at an array",
                 ));
             };
-            if pointer.index < 0 || pointer.index as usize >= values.len() {
-                return Err(TinyOneError::runtime(format!(
-                    "Array pointer index {} out of bounds",
-                    pointer.index
-                )));
-            }
-            Ok(values[pointer.index as usize].clone())
+            let index = checked_collection_index(pointer.index, values.len(), "Array pointer")?;
+            Ok(values[index].clone())
         }
         "buffer" => Err(TinyOneError::runtime(
             "Use read8/read16/read32 for buffer pointers",
@@ -3292,13 +3579,8 @@ fn runtime_pointer_store(
                     "Array pointer no longer points at an array",
                 ));
             };
-            if pointer.index < 0 || pointer.index as usize >= values.len() {
-                return Err(TinyOneError::runtime(format!(
-                    "Array pointer index {} out of bounds",
-                    pointer.index
-                )));
-            }
-            values[pointer.index as usize] = value.clone();
+            let index = checked_collection_index(pointer.index, values.len(), "Array pointer")?;
+            values[index] = value.clone();
             Ok(value)
         }
         "buffer" => Err(TinyOneError::runtime(
@@ -3341,7 +3623,7 @@ fn runtime_pointer_type(context: &mut TinyRuntimeContext, pointer: &Value) -> Re
     } else {
         pointer.cast
     };
-    Ok(Value::Heap(context.heap.alloc_string(text)))
+    Ok(Value::Heap(context.heap.alloc_string(text)?))
 }
 
 fn runtime_pointer_base(context: &TinyRuntimeContext, pointer: &Value) -> Result<Value> {
@@ -3365,7 +3647,7 @@ fn runtime_pointer_offset(context: &TinyRuntimeContext, pointer: &Value) -> Resu
 fn runtime_pointer_kind(context: &mut TinyRuntimeContext, pointer: &Value) -> Result<Value> {
     let pointer = expect_pointer(pointer, "ptr_kind")?;
     validate_pointer_base(context, &pointer, "ptr_kind")?;
-    Ok(Value::Heap(context.heap.alloc_string(pointer.kind)))
+    Ok(Value::Heap(context.heap.alloc_string(pointer.kind)?))
 }
 
 fn runtime_pointer_field(context: &mut TinyRuntimeContext, pointer: &Value) -> Result<Value> {
@@ -3376,7 +3658,7 @@ fn runtime_pointer_field(context: &mut TinyRuntimeContext, pointer: &Value) -> R
     } else {
         String::new()
     };
-    Ok(Value::Heap(context.heap.alloc_string(field)))
+    Ok(Value::Heap(context.heap.alloc_string(field)?))
 }
 
 fn runtime_pointer_eq(context: &TinyRuntimeContext, lhs: &Value, rhs: &Value) -> Result<Value> {
@@ -3413,11 +3695,13 @@ fn runtime_cast_pointer(
 }
 
 fn runtime_make_buffer(context: &mut TinyRuntimeContext, size: &Value) -> Result<Value> {
-    let size = expect_int(size, "buffer")?;
-    if size < 0 {
-        return Err(TinyOneError::runtime("buffer() size must be non-negative"));
-    }
-    Ok(Value::Heap(context.heap.alloc_buffer(size as usize)))
+    let size = checked_bounded_len(
+        expect_int(size, "buffer")?,
+        "buffer() size",
+        MAX_BUFFER_BYTES,
+    )?;
+    context.heap.ensure_can_allocate(size)?;
+    Ok(Value::Heap(context.heap.alloc_buffer(size)?))
 }
 
 fn buffer_pointer<'a>(
@@ -3454,14 +3738,10 @@ fn runtime_read_uint(
     operation: &str,
 ) -> Result<Value> {
     let (data, offset) = buffer_pointer(context, pointer, operation)?;
-    if offset < 0 || offset as usize + width > data.len() {
-        return Err(TinyOneError::runtime(format!(
-            "{operation} out of bounds at byte offset {offset}"
-        )));
-    }
+    let offset = checked_byte_range(offset, width, data.len(), operation)?;
     let mut value = 0u32;
     for i in 0..width {
-        value |= (data[offset as usize + i] as u32) << (i * 8);
+        value |= (data[offset + i] as u32) << (i * 8);
     }
     Ok(Value::Int(value as i64))
 }
@@ -3481,13 +3761,9 @@ fn runtime_write_uint(
         )));
     }
     let (data, offset) = buffer_pointer(context, pointer, operation)?;
-    if offset < 0 || offset as usize + width > data.len() {
-        return Err(TinyOneError::runtime(format!(
-            "{operation} out of bounds at byte offset {offset}"
-        )));
-    }
+    let offset = checked_byte_range(offset, width, data.len(), operation)?;
     for i in 0..width {
-        data[offset as usize + i] = ((value_int >> (i * 8)) & 0xff) as u8;
+        data[offset + i] = ((value_int >> (i * 8)) & 0xff) as u8;
     }
     Ok(Value::Int(value_int))
 }
@@ -3524,17 +3800,18 @@ fn runtime_call_builtin(
             Ok(Value::Int(len as i64))
         }
         "array" => {
-            let count = expect_int(&args[0], "array")?;
-            if count < 0 {
-                return Err(TinyOneError::runtime("array() length must be non-negative"));
-            }
+            let count = checked_bounded_len(
+                expect_int(&args[0], "array")?,
+                "array() length",
+                MAX_ARRAY_LENGTH,
+            )?;
+            let bytes = checked_payload_bytes(count, VALUE_BYTES, "array()")?;
+            context.heap.ensure_can_allocate(bytes)?;
             Ok(Value::Heap(
-                context
-                    .heap
-                    .alloc_array(vec![args[1].clone(); count as usize]),
+                context.heap.alloc_array(vec![args[1].clone(); count])?,
             ))
         }
-        "alloc" => Ok(Value::Heap(context.heap.alloc_cell(args[0].clone()))),
+        "alloc" => Ok(Value::Heap(context.heap.alloc_cell(args[0].clone())?)),
         "load" => {
             let object = context.heap.get(&args[0])?;
             let HeapData::Cell(value) = &object.data else {
@@ -3561,7 +3838,7 @@ fn runtime_call_builtin(
                     TinyOneError::runtime("read() integer input is out of range")
                 })?))
             } else {
-                Ok(Value::Heap(context.heap.alloc_string(raw)))
+                Ok(Value::Heap(context.heap.alloc_string(raw)?))
             }
         }
         "read_int" => {
@@ -3577,7 +3854,7 @@ fn runtime_call_builtin(
         }
         "read_str" => {
             let raw = context.read_raw()?;
-            Ok(Value::Heap(context.heap.alloc_string(raw)))
+            Ok(Value::Heap(context.heap.alloc_string(raw)?))
         }
         "to_int" => match &args[0] {
             Value::Int(value) => Ok(Value::Int(*value)),
@@ -3733,7 +4010,7 @@ fn runtime_print(
         .map_err(|error| TinyOneError::runtime(format!("Write error: {error}")))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TinyMemory {
     values: Vec<Value>,
 }
@@ -3770,10 +4047,18 @@ impl TinyMemory {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TinyRunReport {
+    pub memory: TinyMemory,
+    pub heap_before_shutdown: TinyHeapStats,
+    pub heap_after_shutdown: TinyHeapStats,
+}
+
 pub struct VM<'a> {
     program: &'a Program,
     memory: TinyMemory,
     context: TinyRuntimeContext,
+    call_depth: usize,
 }
 
 impl<'a> VM<'a> {
@@ -3782,13 +4067,24 @@ impl<'a> VM<'a> {
             program,
             memory,
             context: TinyRuntimeContext::new(inputs),
+            call_depth: 0,
         }
     }
 
-    pub fn run(mut self, stdout: &mut dyn Write) -> Result<TinyMemory> {
+    pub fn run(self, stdout: &mut dyn Write) -> Result<TinyMemory> {
+        Ok(self.run_report(stdout)?.memory)
+    }
+
+    pub fn run_report(mut self, stdout: &mut dyn Write) -> Result<TinyRunReport> {
         let mut memory = self.memory.clone();
         self.run_chunk(&self.program.code, &mut memory, stdout, "main")?;
-        Ok(memory)
+        let heap_before_shutdown = self.context.heap_stats();
+        let heap_after_shutdown = self.context.shutdown();
+        Ok(TinyRunReport {
+            memory,
+            heap_before_shutdown,
+            heap_after_shutdown,
+        })
     }
 
     fn run_chunk(
@@ -3809,15 +4105,27 @@ impl<'a> VM<'a> {
                 Op::PushInt => stack.push(Value::Int(instr.arg)),
                 Op::PushNull => stack.push(runtime_null()),
                 Op::PushString => {
-                    let text = self.program.strings[instr.arg as usize].clone();
-                    stack.push(Value::Heap(self.context.heap.alloc_string(text)));
+                    let string_index = checked_non_negative_usize(instr.arg, "string index")?;
+                    let text = self
+                        .program
+                        .strings
+                        .get(string_index)
+                        .ok_or_else(|| {
+                            TinyOneError::runtime(format!("Invalid string index {string_index}"))
+                        })?
+                        .clone();
+                    stack.push(Value::Heap(self.context.heap.alloc_string(text)?));
                 }
-                Op::Load => stack.push(memory.load(instr.arg as usize)?),
+                Op::Load => {
+                    let slot = checked_non_negative_usize(instr.arg, "memory slot")?;
+                    stack.push(memory.load(slot)?);
+                }
                 Op::Store => {
+                    let slot = checked_non_negative_usize(instr.arg, "memory slot")?;
                     let value = stack
                         .pop()
                         .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    memory.store(instr.arg as usize, value)?;
+                    memory.store(slot, value)?;
                 }
                 Op::Add => {
                     let rhs = stack
@@ -3870,27 +4178,27 @@ impl<'a> VM<'a> {
                         .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
                     stack.push(runtime_compare(instr.op, lhs, rhs)?);
                 }
-                Op::Jump => pc = instr.arg as usize,
+                Op::Jump => pc = checked_non_negative_usize(instr.arg, "jump target")?,
                 Op::JumpIfZero => {
                     let value = stack
                         .pop()
                         .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
                     if runtime_is_false(&value) {
-                        pc = instr.arg as usize;
+                        pc = checked_non_negative_usize(instr.arg, "jump target")?;
                     }
                 }
                 Op::Call => {
-                    let result = self.call_function(
-                        instr.arg as usize,
-                        &mut stack,
-                        instr.arg2 as usize,
-                        stdout,
-                    )?;
+                    let function_index = checked_non_negative_usize(instr.arg, "function index")?;
+                    let arg_count = checked_non_negative_usize(instr.arg2, "function arity")?;
+                    let result =
+                        self.call_function(function_index, &mut stack, arg_count, stdout)?;
                     stack.push(result);
                 }
                 Op::MakeArray => {
-                    let mut values = Vec::with_capacity(instr.arg as usize);
-                    for _ in 0..instr.arg {
+                    let count = checked_non_negative_usize(instr.arg, "array arity")?;
+                    checked_stack_count(stack.len(), count)?;
+                    let mut values = Vec::with_capacity(count);
+                    for _ in 0..count {
                         values.push(
                             stack
                                 .pop()
@@ -3898,7 +4206,7 @@ impl<'a> VM<'a> {
                         );
                     }
                     values.reverse();
-                    stack.push(runtime_make_array(&mut self.context, values));
+                    stack.push(runtime_make_array(&mut self.context, values)?);
                 }
                 Op::Index => {
                     let index = stack
@@ -3922,8 +4230,10 @@ impl<'a> VM<'a> {
                     runtime_set_index(&mut self.context, container, index, value)?;
                 }
                 Op::MakeStruct => {
-                    let mut values = Vec::with_capacity(instr.arg2 as usize);
-                    for _ in 0..instr.arg2 {
+                    let field_count = checked_non_negative_usize(instr.arg2, "struct arity")?;
+                    checked_stack_count(stack.len(), field_count)?;
+                    let mut values = Vec::with_capacity(field_count);
+                    for _ in 0..field_count {
                         values.push(
                             stack
                                 .pop()
@@ -3931,19 +4241,25 @@ impl<'a> VM<'a> {
                         );
                     }
                     values.reverse();
-                    let struct_def = &self.program.structs[instr.arg as usize];
+                    let struct_index = checked_non_negative_usize(instr.arg, "struct index")?;
+                    let struct_def = self.program.structs.get(struct_index).ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid struct index {struct_index}"))
+                    })?;
                     stack.push(runtime_make_struct(
                         &mut self.context,
                         &struct_def.name,
                         &struct_def.fields,
                         values,
-                    ));
+                    )?);
                 }
                 Op::GetField => {
                     let target = stack
                         .pop()
                         .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let field = &self.program.fields[instr.arg as usize];
+                    let field_index = checked_non_negative_usize(instr.arg, "field index")?;
+                    let field = self.program.fields.get(field_index).ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid field index {field_index}"))
+                    })?;
                     stack.push(runtime_get_field(&self.context, target, field)?);
                 }
                 Op::SetField => {
@@ -3953,12 +4269,18 @@ impl<'a> VM<'a> {
                     let target = stack
                         .pop()
                         .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let field = &self.program.fields[instr.arg as usize];
+                    let field_index = checked_non_negative_usize(instr.arg, "field index")?;
+                    let field = self.program.fields.get(field_index).ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid field index {field_index}"))
+                    })?;
                     runtime_set_field(&mut self.context, target, field, value)?;
                 }
                 Op::Builtin => {
-                    let mut args = Vec::with_capacity(instr.arg2 as usize);
-                    for _ in 0..instr.arg2 {
+                    let builtin_index = checked_non_negative_usize(instr.arg, "builtin index")?;
+                    let arg_count = checked_non_negative_usize(instr.arg2, "builtin arity")?;
+                    checked_stack_count(stack.len(), arg_count)?;
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count {
                         args.push(
                             stack
                                 .pop()
@@ -3968,7 +4290,7 @@ impl<'a> VM<'a> {
                     args.reverse();
                     stack.push(runtime_call_builtin(
                         &mut self.context,
-                        instr.arg as usize,
+                        builtin_index,
                         args,
                     )?);
                 }
@@ -4004,7 +4326,21 @@ impl<'a> VM<'a> {
         arg_count: usize,
         stdout: &mut dyn Write,
     ) -> Result<Value> {
-        let function = &self.program.functions[function_index];
+        let function = self.program.functions.get(function_index).ok_or_else(|| {
+            TinyOneError::runtime(format!("Invalid function index {function_index}"))
+        })?;
+        if arg_count != function.param_count {
+            return Err(TinyOneError::runtime(format!(
+                "Function {:?} expects {} argument(s), got {arg_count}",
+                function.name, function.param_count
+            )));
+        }
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(TinyOneError::runtime(format!(
+                "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
+            )));
+        }
+        checked_stack_count(caller_stack.len(), arg_count)?;
         let mut args = Vec::with_capacity(arg_count);
         for _ in 0..arg_count {
             args.push(
@@ -4018,10 +4354,12 @@ impl<'a> VM<'a> {
         for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;
         }
-        self.run_chunk(&function.code, &mut memory, stdout, &function.name)?
-            .ok_or_else(|| {
-                TinyOneError::runtime(format!("Function {:?} returned no value", function.name))
-            })
+        self.call_depth += 1;
+        let result = self.run_chunk(&function.code, &mut memory, stdout, &function.name);
+        self.call_depth -= 1;
+        result?.ok_or_else(|| {
+            TinyOneError::runtime(format!("Function {:?} returned no value", function.name))
+        })
     }
 }
 
@@ -4366,6 +4704,14 @@ impl JitProgram {
         JitVm::new(self, inputs).run(stdout)
     }
 
+    pub fn run_report(
+        &mut self,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+    ) -> Result<TinyRunReport> {
+        JitVm::new(self, inputs).run_report(stdout)
+    }
+
     fn record_back_edge(&mut self, chunk_index: usize, op_pc: usize, target: usize) {
         if target >= op_pc {
             return;
@@ -4413,6 +4759,7 @@ fn jit_pop_pair(stack: &mut Vec<Value>) -> Result<(Value, Value)> {
 struct JitVm<'a> {
     program: &'a mut JitProgram,
     context: TinyRuntimeContext,
+    call_depth: usize,
 }
 
 impl<'a> JitVm<'a> {
@@ -4420,14 +4767,25 @@ impl<'a> JitVm<'a> {
         Self {
             program,
             context: TinyRuntimeContext::new(inputs),
+            call_depth: 0,
         }
     }
 
-    fn run(mut self, stdout: &mut dyn Write) -> Result<TinyMemory> {
+    fn run(self, stdout: &mut dyn Write) -> Result<TinyMemory> {
+        Ok(self.run_report(stdout)?.memory)
+    }
+
+    fn run_report(mut self, stdout: &mut dyn Write) -> Result<TinyRunReport> {
         let slot_count = self.program.chunks[0].slot_count;
         let mut memory = TinyMemory::new(slot_count);
         self.run_chunk(0, &mut memory, stdout)?;
-        Ok(memory)
+        let heap_before_shutdown = self.context.heap_stats();
+        let heap_after_shutdown = self.context.shutdown();
+        Ok(TinyRunReport {
+            memory,
+            heap_before_shutdown,
+            heap_after_shutdown,
+        })
     }
 
     fn run_chunk(
@@ -4457,8 +4815,15 @@ impl<'a> JitVm<'a> {
                 JitOp::PushInt(value) => stack.push(Value::Int(value)),
                 JitOp::PushNull => stack.push(runtime_null()),
                 JitOp::PushString(index) => {
-                    let text = self.program.strings[index].clone();
-                    stack.push(Value::Heap(self.context.heap.alloc_string(text)));
+                    let text = self
+                        .program
+                        .strings
+                        .get(index)
+                        .ok_or_else(|| {
+                            TinyOneError::runtime(format!("Invalid string index {index}"))
+                        })?
+                        .clone();
+                    stack.push(Value::Heap(self.context.heap.alloc_string(text)?));
                 }
                 JitOp::Load(slot) => stack.push(memory.load(slot)?),
                 JitOp::Store(slot) => {
@@ -4539,12 +4904,13 @@ impl<'a> JitVm<'a> {
                     stack.push(result);
                 }
                 JitOp::MakeArray(count) => {
+                    checked_stack_count(stack.len(), count)?;
                     let mut values = Vec::with_capacity(count);
                     for _ in 0..count {
                         values.push(jit_pop(&mut stack)?);
                     }
                     values.reverse();
-                    stack.push(runtime_make_array(&mut self.context, values));
+                    stack.push(runtime_make_array(&mut self.context, values)?);
                 }
                 JitOp::Index => {
                     let index = jit_pop(&mut stack)?;
@@ -4558,31 +4924,39 @@ impl<'a> JitVm<'a> {
                     runtime_set_index(&mut self.context, container, index, value)?;
                 }
                 JitOp::MakeStruct(struct_index, field_count) => {
+                    checked_stack_count(stack.len(), field_count)?;
                     let mut values = Vec::with_capacity(field_count);
                     for _ in 0..field_count {
                         values.push(jit_pop(&mut stack)?);
                     }
                     values.reverse();
-                    let struct_def = &self.program.structs[struct_index];
+                    let struct_def = self.program.structs.get(struct_index).ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid struct index {struct_index}"))
+                    })?;
                     stack.push(runtime_make_struct(
                         &mut self.context,
                         &struct_def.name,
                         &struct_def.fields,
                         values,
-                    ));
+                    )?);
                 }
                 JitOp::GetField(field_index) => {
                     let target = jit_pop(&mut stack)?;
-                    let field = &self.program.fields[field_index];
+                    let field = self.program.fields.get(field_index).ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid field index {field_index}"))
+                    })?;
                     stack.push(runtime_get_field(&self.context, target, field)?);
                 }
                 JitOp::SetField(field_index) => {
                     let value = jit_pop(&mut stack)?;
                     let target = jit_pop(&mut stack)?;
-                    let field = &self.program.fields[field_index];
+                    let field = self.program.fields.get(field_index).ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid field index {field_index}"))
+                    })?;
                     runtime_set_field(&mut self.context, target, field, value)?;
                 }
                 JitOp::Builtin(builtin_index, arg_count) => {
+                    checked_stack_count(stack.len(), arg_count)?;
                     let mut args = Vec::with_capacity(arg_count);
                     for _ in 0..arg_count {
                         args.push(jit_pop(&mut stack)?);
@@ -4635,6 +5009,12 @@ impl<'a> JitVm<'a> {
                 "Function {name:?} expects {param_count} argument(s), got {arg_count}"
             )));
         }
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(TinyOneError::runtime(format!(
+                "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
+            )));
+        }
+        checked_stack_count(caller_stack.len(), arg_count)?;
         let mut args = Vec::with_capacity(arg_count);
         for _ in 0..arg_count {
             args.push(jit_pop(caller_stack)?);
@@ -4644,8 +5024,10 @@ impl<'a> JitVm<'a> {
         for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;
         }
-        self.run_chunk(chunk_index, &mut memory, stdout)?
-            .ok_or_else(|| TinyOneError::runtime(format!("Function {name:?} returned no value")))
+        self.call_depth += 1;
+        let result = self.run_chunk(chunk_index, &mut memory, stdout);
+        self.call_depth -= 1;
+        result?.ok_or_else(|| TinyOneError::runtime(format!("Function {name:?} returned no value")))
     }
 }
 
@@ -4703,6 +5085,16 @@ impl JitCache {
         compiled.run(stdout, inputs)
     }
 
+    pub fn run_program_report(
+        &mut self,
+        program: &Program,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+    ) -> Result<TinyRunReport> {
+        let compiled = self.compile_mut(program);
+        compiled.run_report(stdout, inputs)
+    }
+
     pub fn run_source(
         &mut self,
         source: &str,
@@ -4711,6 +5103,16 @@ impl JitCache {
     ) -> Result<TinyMemory> {
         let program = compile_source(source)?;
         self.run_program(&program, stdout, inputs)
+    }
+
+    pub fn run_source_report(
+        &mut self,
+        source: &str,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+    ) -> Result<TinyRunReport> {
+        let program = compile_source(source)?;
+        self.run_program_report(&program, stdout, inputs)
     }
 }
 
@@ -4730,6 +5132,22 @@ pub fn run_program(
     }
 }
 
+pub fn run_program_report(
+    program: &Program,
+    mode: &str,
+    stdout: &mut dyn Write,
+    inputs: Vec<String>,
+) -> Result<TinyRunReport> {
+    match mode {
+        "vm" => VM::new(program, TinyMemory::new(program.slot_count), inputs).run_report(stdout),
+        "jit" => {
+            let mut cache = JitCache::new();
+            cache.run_program_report(program, stdout, inputs)
+        }
+        _ => Err(TinyOneError::runtime(format!("Unsupported mode {mode:?}"))),
+    }
+}
+
 pub fn run_source(
     source: &str,
     mode: &str,
@@ -4738,6 +5156,16 @@ pub fn run_source(
 ) -> Result<TinyMemory> {
     let program = compile_source(source)?;
     run_program(&program, mode, stdout, inputs)
+}
+
+pub fn run_source_report(
+    source: &str,
+    mode: &str,
+    stdout: &mut dyn Write,
+    inputs: Vec<String>,
+) -> Result<TinyRunReport> {
+    let program = compile_source(source)?;
+    run_program_report(&program, mode, stdout, inputs)
 }
 
 fn resolve_import(from_filename: &str, import_path: &str) -> Result<(String, String)> {
