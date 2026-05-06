@@ -1,0 +1,9 @@
+fn _normalize(v) {
+  return v
+}
+
+export struct Point { x, y }
+
+export fn add(a, b) {
+  return _normalize(a) + b
+}

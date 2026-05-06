@@ -1,0 +1,8 @@
+struct Pair { left, right }
+let pair = Pair(4, 5)
+let fp = fieldptr(pair, "right")
+print ptr_kind(fp)
+print ptr_field(fp)
+print ptr_type(fp)
+let cp = cast_ptr(fp, "i32")
+print ptr_type(cp)

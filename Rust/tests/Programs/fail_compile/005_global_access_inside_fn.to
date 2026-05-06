@@ -1,0 +1,5 @@
+let g = 9
+fn read_global() {
+  return g
+}
+print read_global()

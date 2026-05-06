@@ -1,0 +1,8 @@
+let x = 10
+if 1 {
+  let x = 20
+  print x
+}
+print x
+let x = x + 5
+print x
