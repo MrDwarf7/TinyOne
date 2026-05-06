@@ -155,17 +155,25 @@ runtime errors.
 
 ## Release/Audit Hash Tool
 
-`hash.py` hashes files or deterministic directory trees for release manifests:
+`Tools/hash.py` hashes individual files or deterministic directory trees for
+release manifests, audit checkpoints, and source-tree integrity checks. It is a
+stdlib-only developer utility; it is not part of the TinyOne compiler, VM, JIT,
+or language runtime.
 
 ```sh
-./hash.py README.md
-./hash.py --tree . --exclude manifest.json --format json > manifest.json
-./hash.py --expected DIGEST README.md
-./hash.py --check manifest.json
+./Tools/hash.py README.md
+./Tools/hash.py --tree . --exclude manifest.json --format json > manifest.json
+./Tools/hash.py --expected DIGEST README.md
+./Tools/hash.py --check manifest.json
 ```
 
-Tree mode excludes `.git`, `Rust/target`, `__pycache__`, `.mypy_cache`,
-`.agents`, and `.codex` by default. Add repeatable `--exclude PATTERN` entries
+File mode prints stable checksum lines for one or more files. Tree mode walks a
+directory in deterministic path order, frames each path and file digest into one
+tree digest, and can optionally emit per-file entries with `--list-files`.
+Manifest verification re-hashes every emitted entry and fails when a digest or
+recorded tree file count changes.
+
+Tree mode excludes .gitignore by default. Add repeatable `--exclude PATTERN` entries
 for local artifacts or use `--no-default-excludes` when a fully explicit tree is
 needed. `--include SUFFIX` can still narrow tree hashing to source-like files.
 When writing a manifest inside the hashed tree, exclude the manifest path.
@@ -173,6 +181,12 @@ When writing a manifest inside the hashed tree, exclude the manifest path.
 Verification exits with status `0` when every entry matches, status `1` when a
 digest or tree file count mismatches, and status `2` for usage, manifest, file,
 or hashing errors.
+
+`Tools/` is reserved for future repo-maintenance utilities: release manifest
+generation, compatibility/audit helpers, benchmark result summarizers,
+cross-implementation parity scripts, and source-tree integrity checks. Tools in
+this directory should remain optional, deterministic where practical, and
+separate from the runtime semantics of the Rust and Python implementations.
 
 ## Language
 
@@ -556,7 +570,28 @@ JIT backend.
 
 ## Tests and Benchmarks
 
-Run the correctness suite:
+### General Correctness Check
+
+Use this as the normal repo-wide sanity pass before comparing runtimes,
+publishing hashes, or changing language behavior:
+
+```sh
+cargo test --manifest-path Rust/Cargo.toml
+python3 -m unittest discover -s Python/Tests -p 'test_*.py'
+python3 -m py_compile Python/main.py Tools/hash.py Python/Tests/test_vm_jit.py Python/Tests/bench_vm_jit.py
+./Tools/hash.py --tree . --include .py --include .rs --include .toml --include .md --format json
+```
+
+The Rust check covers the primary implementation: compiler, verifier, heap,
+VM, adaptive JIT, artifact round trips, CLI-facing APIs, benchmark-surface
+coverage, and VM/JIT runtime parity. The Python check keeps the reference
+implementation honest across the same broad semantic categories while the Rust
+runtime remains the production path. The `py_compile` pass catches Python syntax
+and import-time parse errors in the reference runtime, tests, benchmark harness,
+and tool scripts. The tree hash command is not a semantic test; it is an
+integrity checkpoint for the source-like files that should change intentionally.
+
+Run the Rust correctness suite:
 
 ```sh
 cargo test --manifest-path Rust/Cargo.toml
@@ -572,7 +607,13 @@ quickening, JIT listing emission, cache reuse, and verifier failures. The
 broader Python reference suite remains under `Python/Tests/` while the migration
 continues.
 
-Run the benchmark suite:
+Run the Python reference correctness suite:
+
+```sh
+python3 -m unittest discover -s Python/Tests -p 'test_*.py'
+```
+
+Run the Rust benchmark suite:
 
 ```sh
 cargo run --release --manifest-path Rust/Cargo.toml --bin tinyone-bench
@@ -624,6 +665,8 @@ assert_eq!(String::from_utf8(stdout).unwrap(), "42\n");
 
 ```text
 .
+├── Tools/
+│   └── hash.py
 ├── Python/
 │   ├── main.py
 │   └── Tests/
@@ -644,4 +687,6 @@ assert_eq!(String::from_utf8(stdout).unwrap(), "42\n");
 
 `Rust/src/lib.rs` contains the compiler, verifier, bytecode runtime, heap, and
 public API. `Rust/src/main.rs` contains the CLI entrypoint. `Python/` keeps the
-previous implementation and tests as a reference corpus.
+previous implementation and tests as a reference corpus. `Tools/` contains
+optional repo-maintenance utilities that support release, audit, and parity
+work without becoming part of the language runtime.
