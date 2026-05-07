@@ -4,17 +4,19 @@ TinyOne is a tiny systems-language sketch implemented in Rust. It includes a
 lexer, recursive-descent compiler, bytecode optimizer, verifier, portable VM,
 heap/runtime model, bytecode artifact support, and CLI.
 
-The Python implementation is maintained under `Python/` as a compile-less,
-near-portable TinyOne runtime and language implementation. The primary
-production implementation currently lives under `Rust/`.
+`Rust/` is the source of truth and test plane for language development. New
+syntax, bytecode, VM, JIT, and runtime behavior is built in Rust first. The
+Python implementation under `Python/` is maintained as the validation plane and
+portable runtime: it follows Rust semantics, catches portability drift, and
+keeps a compile-less implementation available.
 
 Future maintained implementations are planned for Go and C++.
 
 ## Compatibility Notice
 
-The Rust and Python implementations are designed to remain behaviorally aligned
-through the shared TinyOne VM model and runtime semantics. Minor implementation
-differences and edge-case inconsistencies may still exist between runtimes.
+Rust owns TinyOne behavior. Python validates that behavior and keeps a portable
+runtime aligned with the Rust implementation. Minor implementation differences
+and edge-case inconsistencies may still exist between runtimes.
 
 The VM architecture is specifically designed to reduce behavioral divergence
 across implementations, but exact parity is not yet guaranteed in all cases.
@@ -60,7 +62,8 @@ edge-case behavior between implementations, please report them on [GitHub](https
 - Rust benchmark runner with correctness preflight and timing table
 - Rust unit tests under `Rust/src/lib.rs` and integration tests under
   `Rust/tests/`
-- Python reference tests and benchmark harness under `Python/Tests/`
+- Python validation tests and portable-runtime benchmark harness under
+  `Python/Tests/`
 
 ## Project Goals
 
@@ -96,7 +99,7 @@ Create a TinyOne source file:
 let x = 1 + 2 * 3
 let y = (x - 4) / 2
 while y < 5 {
-  let y = y + 1
+  y = y + 1
 }
 print x
 print y
@@ -105,7 +108,7 @@ print y
 Run it with the default adaptive `jit` mode:
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml -- example.tinyone
+cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- example.tinyone
 ```
 
 Expected output:
@@ -118,13 +121,13 @@ Expected output:
 Run the same program through the VM backend:
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml -- --mode vm example.tinyone
+cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- --mode vm example.tinyone
 ```
 
-Enable compiler/runtime debug logging:
+Print a compiler/runtime summary to stderr:
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml -- --verbose example.tinyone
+cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- --verbose example.tinyone
 ```
 
 ## Command Line
@@ -149,7 +152,7 @@ Arguments:
 - `--run-bytecode PATH`: execute a previously emitted JSON artifact
 - `--input VALUE`: append one deterministic input item for `read*` builtins
 - `--stdin`: append stdin lines to the deterministic input queue
-- `--verbose`: enable debug logging
+- `--verbose`: print a compiler/runtime summary to stderr
 
 TinyOne exits with status `0` on success and status `1` for file, compile, or
 runtime errors.
@@ -200,6 +203,7 @@ line comment.
 
 ```tinyone
 let name = expression
+name = expression
 print expression
 set name[index] = expression
 set name.field = expression
@@ -211,13 +215,13 @@ continue
 return expression
 ```
 
-`let` defines or updates a variable slot. Variables must be defined before they
-are read, and slots start at `0` inside the current stack frame. Block-local
-names are hidden after the block, while assignments to outer visible names keep
-using the outer slot. `if` runs its first block when the expression is non-zero;
-the optional `else` block runs otherwise. `while` repeats while its expression
-is non-zero. `break` exits the innermost loop, `continue` jumps back to that
-loop's condition, and `return` is only valid inside a function.
+`let` declares a variable in the current block. Plain assignment updates an
+existing visible variable slot. Variables must be defined before they are read,
+and slots start at `0` inside the current stack frame. Block-local names are
+hidden after the block. `if` runs its first block when the expression is
+non-zero; the optional `else` block runs otherwise. `while` repeats while its
+expression is non-zero. `break` exits the innermost loop, `continue` jumps back
+to that loop's condition, and `return` is only valid inside a function.
 
 ### Imports
 
@@ -286,8 +290,8 @@ values as arguments and return results.
 fn fact(n) {
   let acc = 1
   while n > 1 {
-    let acc = acc * n
-    let n = n - 1
+    acc = acc * n
+    n = n - 1
   }
   return acc
 }
@@ -588,20 +592,23 @@ objects and reports the before/after heap state through the report APIs.
 
 TinyOne can emit and run a JSON artifact containing bytecode, function chunks,
 string literals, struct definitions, field metadata, and module dependency
-metadata.
+metadata. Module metadata records stable module identities and original import
+strings; it does not embed canonical source paths from the build machine.
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml -- --check --emit-bytecode program.tobc.json program.to
-cargo run --manifest-path Rust/Cargo.toml -- --run-bytecode program.tobc.json
+cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- --check --emit-bytecode program.tobc.json program.to
+cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- --run-bytecode program.tobc.json
 ```
 
 Artifacts are verified again before execution.
 
 ## JIT Backend
 
-The Rust JIT backend does not emit machine code yet. It compiles verified
-TinyOne bytecode into a lowered internal bytecode with decoded operands,
-separate compiled chunks for functions, and a fingerprint-keyed cache.
+The Rust JIT backend is an adaptive bytecode tier, not a native machine-code
+JIT. It compiles verified TinyOne bytecode into a lowered internal bytecode
+with decoded operands, separate compiled chunks for functions, simple
+assignment superinstructions such as `store.i` and `slot.add.i`, and a
+fingerprint-keyed cache.
 
 During execution, the JIT records backward branches. Once a loop back-edge is
 hot, the compiled chunk is quickened in-place: arithmetic, comparison, and jump
@@ -623,20 +630,22 @@ Use this as the normal repo-wide sanity pass before comparing runtimes,
 publishing hashes, or changing language behavior:
 
 ```sh
+cargo fmt --manifest-path Rust/Cargo.toml --all --check
 cargo test --manifest-path Rust/Cargo.toml
+cargo clippy --manifest-path Rust/Cargo.toml --all-targets -- -D warnings
 python3 -m unittest discover -s Python/Tests -p 'test_*.py'
 python3 -m py_compile Python/main.py Tools/hash.py Python/Tests/test_vm_jit.py Python/Tests/bench_vm_jit.py
 ./Tools/hash.py --tree . --include .py --include .rs --include .toml --include .md --format json
 ```
 
-The Rust check covers the primary implementation: compiler, verifier, heap,
-VM, adaptive JIT, artifact round trips, CLI-facing APIs, benchmark-surface
-coverage, and VM/JIT runtime parity. The Python check keeps the reference
-implementation honest across the same broad semantic categories while the Rust
-runtime remains the production path. The `py_compile` pass catches Python syntax
-and import-time parse errors in the reference runtime, tests, benchmark harness,
-and tool scripts. The tree hash command is not a semantic test; it is an
-integrity checkpoint for the source-like files that should change intentionally.
+The Rust check covers the source-of-truth implementation: compiler, verifier,
+heap, VM, adaptive JIT, artifact round trips, CLI-facing APIs,
+benchmark-surface coverage, and VM/JIT runtime parity. The Python check
+validates that the portable runtime still follows Rust semantics across the
+same broad semantic categories. The `py_compile` pass catches Python syntax and
+import-time parse errors in the portable runtime, tests, benchmark harness, and
+tool scripts. The tree hash command is not a semantic test; it is an integrity
+checkpoint for the source-like files that should change intentionally.
 
 Run the Rust correctness suite:
 
@@ -651,10 +660,9 @@ cells, raw pointers, null checks, pointer metadata, stale pointer rejection,
 deterministic input, namespaced imports, export visibility, package manifest
 resolution, artifact round trips, diagnostics, lexical scopes, hot-loop
 quickening, JIT listing emission, cache reuse, and verifier failures. The
-broader Python reference suite remains under `Python/Tests/` while the migration
-continues.
+Python validation suite remains under `Python/Tests/`.
 
-Run the Python reference correctness suite:
+Run the Python validation correctness suite:
 
 ```sh
 python3 -m unittest discover -s Python/Tests -p 'test_*.py'
@@ -735,6 +743,6 @@ assert_eq!(String::from_utf8(stdout).unwrap(), "42\n");
 
 `Rust/src/lib.rs` contains the compiler, verifier, bytecode runtime, heap, and
 public API. `Rust/src/main.rs` contains the CLI entrypoint. `Python/` keeps the
-previous implementation and tests as a reference corpus. `Tools/` contains
+portable runtime and validation tests aligned with Rust. `Tools/` contains
 optional repo-maintenance utilities that support release, audit, and parity
 work without becoming part of the language runtime.

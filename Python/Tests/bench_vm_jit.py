@@ -60,8 +60,8 @@ LOOP_SOURCE: Final = """
 let i = 0
 let total = 0
 while i < 128 {
-  let total = total + (i * 3)
-  let i = i + 1
+  total = total + (i * 3)
+  i = i + 1
 }
 print total
 """
@@ -70,8 +70,8 @@ FUNCTION_SOURCE: Final = """
 fn mul_by_count(value, count) {
   let acc = 0
   while count > 0 {
-    let acc = acc + value
-    let count = count - 1
+    acc = acc + value
+    count = count - 1
   }
   return acc
 }
@@ -83,8 +83,8 @@ fn pair(x) {
 let i = 1
 let total = 0
 while i <= 32 {
-  let total = total + pair(i)
-  let i = i + 1
+  total = total + pair(i)
+  i = i + 1
 }
 print total
 """
@@ -95,10 +95,10 @@ let pulses = 0
 while i < 96 {
   let gate = 1
   while gate {
-    let pulses = pulses + i
-    let gate = 0
+    pulses = pulses + i
+    gate = 0
   }
-  let i = i + 1
+  i = i + 1
 }
 print pulses
 """
@@ -109,7 +109,7 @@ let values = [1, 2, 3, 4, 5]
 let i = 0
 while i < len(values) {
   set values[i] = values[i] * 3
-  let i = i + 1
+  i = i + 1
 }
 let point = Point(values[1], len("tinyone"))
 set point.y = point.y + values[4]
@@ -122,7 +122,7 @@ INPUT_SOURCE: Final = """
 let value = read_int()
 let ptr = alloc(value)
 print store(ptr, load(ptr) + 1)
-let ignored = free(ptr)
+let ignored = unsafe free(ptr)
 """
 
 # Exercises builtin dispatch: array(), len(), to_int(), set arr[i], arr[j].
@@ -131,13 +131,13 @@ let arr = array(16, 0)
 let i = 0
 while i < len(arr) {
   set arr[i] = to_int(i * 7)
-  let i = i + 1
+  i = i + 1
 }
 let total = 0
 let j = 0
 while j < len(arr) {
-  let total = total + arr[j]
-  let j = j + 1
+  total = total + arr[j]
+  j = j + 1
 }
 print total
 """

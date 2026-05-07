@@ -7,7 +7,6 @@ use crate::{Function, ModuleDef, ModuleImportDef, StructDef};
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleInfo {
     pub(crate) name: String,
-    pub(crate) path: String,
     pub(crate) function_exports: HashMap<String, usize>,
     pub(crate) struct_exports: HashMap<String, usize>,
     pub(crate) all_functions: HashSet<String>,

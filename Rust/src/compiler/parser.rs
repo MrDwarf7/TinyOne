@@ -32,7 +32,6 @@ pub(crate) struct Compiler {
     local_struct_indexes: HashMap<String, usize>,
     loops: Vec<LoopContext>,
     in_function: bool,
-    loop_rebind_depth: usize,
     unsafe_depth: usize,
 }
 
@@ -63,7 +62,6 @@ impl Compiler {
                         filename.clone(),
                         ModuleInfo {
                             name: name.clone(),
-                            path: filename.clone(),
                             function_exports: HashMap::new(),
                             struct_exports: HashMap::new(),
                             all_functions: HashSet::new(),
@@ -97,7 +95,6 @@ impl Compiler {
             local_struct_indexes: HashMap::new(),
             loops: Vec::new(),
             in_function: false,
-            loop_rebind_depth: 0,
             unsafe_depth: 0,
         })
     }
@@ -175,7 +172,7 @@ impl Compiler {
             info.finalized = true;
             ModuleDef {
                 name: info.name.clone(),
-                path: info.path.clone(),
+                path: info.name.clone(),
                 imports: info.imports.clone(),
                 exported_functions,
                 exported_structs,
@@ -192,6 +189,9 @@ impl Compiler {
             TokenKind::If => self.if_statement(),
             TokenKind::Break => self.break_statement(),
             TokenKind::Continue => self.continue_statement(),
+            TokenKind::Ident if self.peek_kind(1) == Some(TokenKind::Equal) => {
+                self.assignment_statement()
+            }
             TokenKind::Return => self.return_statement(),
             TokenKind::Set => self.set_statement(),
             TokenKind::Fn => Err(self.error(
@@ -222,7 +222,31 @@ impl Compiler {
         self.expression()?;
         let slot = self
             .symbols
-            .define_for_let(&name_token.text, self.loop_rebind_depth > 0);
+            .define_current(&name_token.text)
+            .ok_or_else(|| {
+                self.error(
+                    format!(
+                        "Variable {:?} is already defined in this scope",
+                        name_token.text
+                    ),
+                    name_token.clone(),
+                )
+            })?;
+        self.emit(Op::Store, slot as i64, 0);
+        Ok(())
+    }
+
+    fn assignment_statement(&mut self) -> Result<()> {
+        let name_token = self.eat(TokenKind::Ident)?;
+        if self.namespaces.contains_key(&name_token.text) {
+            return Err(self.error(
+                format!("Cannot assign to import namespace {:?}", name_token.text),
+                name_token,
+            ));
+        }
+        let slot = self.get_slot(&name_token)?;
+        self.eat(TokenKind::Equal)?;
+        self.expression()?;
         self.emit(Op::Store, slot as i64, 0);
         Ok(())
     }
@@ -243,9 +267,7 @@ impl Compiler {
             start: loop_start,
             breaks: Vec::new(),
         });
-        self.loop_rebind_depth += 1;
         let result = self.block();
-        self.loop_rebind_depth -= 1;
         result?;
         let loop_context = self.loops.pop().expect("loop context");
         self.emit(Op::Jump, loop_start as i64, 0);
@@ -426,8 +448,8 @@ impl Compiler {
         self.module_imports.push(ModuleImportDef {
             alias,
             path: path_token.text,
-            module: info.name,
-            resolved: module_filename,
+            module: info.name.clone(),
+            resolved: info.name,
         });
         Ok(())
     }
@@ -561,10 +583,10 @@ impl Compiler {
         if self.current().kind != TokenKind::RParen {
             loop {
                 let param = self.eat(TokenKind::Ident)?;
-                let slot = function_symbols.define_current_or_get(&param.text);
-                if slot != param_count {
+                let Some(slot) = function_symbols.define_current(&param.text) else {
                     return Err(self.error(format!("Duplicate parameter {:?}", param.text), param));
-                }
+                };
+                debug_assert_eq!(slot, param_count);
                 param_count += 1;
                 if self.current().kind != TokenKind::Comma {
                     break;
@@ -872,6 +894,10 @@ impl Compiler {
 
     fn current(&self) -> &Token {
         &self.tokens[self.index]
+    }
+
+    fn peek_kind(&self, offset: usize) -> Option<TokenKind> {
+        self.tokens.get(self.index + offset).map(|token| token.kind)
     }
 
     fn eat(&mut self, kind: TokenKind) -> Result<Token> {

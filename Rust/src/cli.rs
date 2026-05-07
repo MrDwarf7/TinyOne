@@ -15,6 +15,7 @@ struct Args {
     run_bytecode: Option<String>,
     inputs: Vec<String>,
     stdin: bool,
+    verbose: bool,
     help: bool,
 }
 
@@ -29,6 +30,7 @@ impl Default for Args {
             run_bytecode: None,
             inputs: Vec::new(),
             stdin: false,
+            verbose: false,
             help: false,
         }
     }
@@ -62,7 +64,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                     .push(iter.next().ok_or("--input requires a value")?);
             }
             "--stdin" => args.stdin = true,
-            "--verbose" => {}
+            "--verbose" => args.verbose = true,
             _ if arg.starts_with('-') => return Err(format!("unknown option {arg}")),
             _ => {
                 if args.path.is_some() {
@@ -114,6 +116,18 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
     }
     if let Some(path) = args.emit_jit {
         write_jit_listing(&program, path)?;
+    }
+    if args.verbose {
+        eprintln!(
+            "tinyone: mode={} check={} slots={} functions={} structs={} modules={} fingerprint={}",
+            args.mode,
+            args.check,
+            program.slot_count,
+            program.functions.len(),
+            program.structs.len(),
+            program.modules.len(),
+            program.fingerprint()
+        );
     }
     if !args.check {
         let mut stdout = io::stdout();

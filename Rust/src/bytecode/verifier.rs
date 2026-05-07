@@ -4,16 +4,26 @@ use crate::{BUILTINS, Function, Instr, Op, Program, Result, StructDef, TinyOneEr
 
 pub struct BytecodeVerifier;
 
+struct VerificationContext<'a> {
+    functions: &'a [Function],
+    strings: &'a [String],
+    structs: &'a [StructDef],
+    fields: &'a [String],
+}
+
 impl BytecodeVerifier {
     pub fn verify(program: &Program) -> Result<()> {
+        let context = VerificationContext {
+            functions: &program.functions,
+            strings: &program.strings,
+            structs: &program.structs,
+            fields: &program.fields,
+        };
         Self::verify_chunk(
             "main",
             &program.code,
             program.slot_count,
-            &program.functions,
-            &program.strings,
-            &program.structs,
-            &program.fields,
+            &context,
             Op::Halt,
         )?;
         for (index, function) in program.functions.iter().enumerate() {
@@ -21,10 +31,7 @@ impl BytecodeVerifier {
                 &format!("function {:?} (index {index})", function.name),
                 &function.code,
                 function.slot_count,
-                &program.functions,
-                &program.strings,
-                &program.structs,
-                &program.fields,
+                &context,
                 Op::Return,
             )?;
         }
@@ -35,10 +42,7 @@ impl BytecodeVerifier {
         chunk_name: &str,
         code: &[Instr],
         slot_count: usize,
-        functions: &[Function],
-        strings: &[String],
-        structs: &[StructDef],
-        fields: &[String],
+        context: &VerificationContext<'_>,
         final_op: Op,
     ) -> Result<()> {
         if code.last().map(|instr| instr.op) != Some(final_op) {
@@ -64,12 +68,13 @@ impl BytecodeVerifier {
                     "Verifier: invalid slot {arg} at instruction {pc} in {chunk_name}"
                 )));
             }
-            if op == Op::PushString && !valid_index(arg, strings.len()) {
+            if op == Op::PushString && !valid_index(arg, context.strings.len()) {
                 return Err(TinyOneError::compile(format!(
                     "Verifier: invalid string index {arg} at instruction {pc} in {chunk_name}"
                 )));
             }
-            if matches!(op, Op::GetField | Op::SetField) && !valid_index(arg, fields.len()) {
+            if matches!(op, Op::GetField | Op::SetField) && !valid_index(arg, context.fields.len())
+            {
                 return Err(TinyOneError::compile(format!(
                     "Verifier: invalid field index {arg} at instruction {pc} in {chunk_name}"
                 )));
@@ -90,12 +95,12 @@ impl BytecodeVerifier {
                     )?;
                 }
                 Op::Call => {
-                    if !valid_index(arg, functions.len()) {
+                    if !valid_index(arg, context.functions.len()) {
                         return Err(TinyOneError::compile(format!(
                             "Verifier: invalid function index {arg} at instruction {pc} in {chunk_name}"
                         )));
                     }
-                    let function = &functions[arg as usize];
+                    let function = &context.functions[arg as usize];
                     if arg2 as usize != function.param_count {
                         return Err(TinyOneError::compile(format!(
                             "Function {:?} expects {} argument(s), got {arg2} at instruction {pc} in {chunk_name}",
@@ -129,16 +134,16 @@ impl BytecodeVerifier {
                     )?;
                 }
                 Op::MakeStruct => {
-                    if !valid_index(arg, structs.len()) {
+                    if !valid_index(arg, context.structs.len()) {
                         return Err(TinyOneError::compile(format!(
                             "Verifier: invalid struct index {arg} at instruction {pc} in {chunk_name}"
                         )));
                     }
-                    let expected = structs[arg as usize].fields.len();
+                    let expected = context.structs[arg as usize].fields.len();
                     if arg2 as usize != expected {
                         return Err(TinyOneError::compile(format!(
                             "Struct {:?} expects {expected} field value(s), got {arg2} at instruction {pc} in {chunk_name}",
-                            structs[arg as usize].name
+                            context.structs[arg as usize].name
                         )));
                     }
                     visit(

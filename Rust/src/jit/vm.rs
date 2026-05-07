@@ -59,7 +59,8 @@ impl<'a> JitVm<'a> {
         memory: &mut TinyMemory,
         stdout: &mut dyn Write,
     ) -> Result<Option<Value>> {
-        let mut stack: Vec<Value> = Vec::new();
+        let stack_capacity = self.program.chunks[chunk_index].ops.len().min(32);
+        let mut stack: Vec<Value> = Vec::with_capacity(stack_capacity);
         let mut pc = 0usize;
         loop {
             let instr = {
@@ -94,6 +95,15 @@ impl<'a> JitVm<'a> {
                 JitOp::Store(slot) => {
                     let value = jit_pop(&mut stack)?;
                     memory.store(slot, value)?;
+                }
+                JitOp::StoreInt(slot, value) => {
+                    memory.store_int(slot, value)?;
+                }
+                JitOp::AddSlotInt(slot, value) => {
+                    memory.add_int(slot, value)?;
+                }
+                JitOp::SubSlotInt(slot, value) => {
+                    memory.sub_int(slot, value)?;
                 }
                 JitOp::Add => {
                     let (lhs, rhs) = jit_pop_pair(&mut stack)?;
@@ -258,7 +268,7 @@ impl<'a> JitVm<'a> {
         arg_count: usize,
         stdout: &mut dyn Write,
     ) -> Result<Value> {
-        let (chunk_index, slot_count, param_count, name) = {
+        let (chunk_index, slot_count, param_count) = {
             let function = self.program.functions.get(function_index).ok_or_else(|| {
                 TinyOneError::runtime(format!("Invalid function index {function_index}"))
             })?;
@@ -266,12 +276,12 @@ impl<'a> JitVm<'a> {
                 function.chunk_index,
                 function.slot_count,
                 function.param_count,
-                function.name.clone(),
             )
         };
         if arg_count != param_count {
             return Err(TinyOneError::runtime(format!(
-                "Function {name:?} expects {param_count} argument(s), got {arg_count}"
+                "Function {:?} expects {param_count} argument(s), got {arg_count}",
+                self.function_name(function_index)
             )));
         }
         if self.call_depth >= MAX_CALL_DEPTH {
@@ -280,18 +290,27 @@ impl<'a> JitVm<'a> {
             )));
         }
         checked_stack_count(caller_stack.len(), arg_count)?;
-        let mut args = Vec::with_capacity(arg_count);
-        for _ in 0..arg_count {
-            args.push(jit_pop(caller_stack)?);
-        }
-        args.reverse();
         let mut memory = TinyMemory::new(slot_count);
-        for (slot, value) in args.into_iter().enumerate() {
+        for slot in (0..arg_count).rev() {
+            let value = jit_pop(caller_stack)?;
             memory.store(slot, value)?;
         }
         self.call_depth += 1;
         let result = self.run_chunk(chunk_index, &mut memory, stdout);
         self.call_depth -= 1;
-        result?.ok_or_else(|| TinyOneError::runtime(format!("Function {name:?} returned no value")))
+        result?.ok_or_else(|| {
+            TinyOneError::runtime(format!(
+                "Function {:?} returned no value",
+                self.function_name(function_index)
+            ))
+        })
+    }
+
+    fn function_name(&self, function_index: usize) -> &str {
+        self.program
+            .functions
+            .get(function_index)
+            .map(|function| function.name.as_str())
+            .unwrap_or("<invalid>")
     }
 }

@@ -56,12 +56,12 @@ pub extern "C" fn tinyone_run_source_json(
         let inputs = read_inputs(inputs_json)?;
         let mut stdout = Vec::new();
         let report = run_source_report(&source, &mode, &mut stdout, inputs)?;
-        Ok(run_payload(
+        run_payload(
             stdout,
             report.memory,
             report.heap_before_shutdown,
             report.heap_after_shutdown,
-        )?)
+        )
     })
 }
 

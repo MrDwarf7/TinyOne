@@ -61,23 +61,33 @@ impl Lexer {
                         if pos >= bytes.len() {
                             return Err(self.error("Unterminated string escape", start, pos));
                         }
-                        match bytes[pos] {
-                            b'n' => text.push('\n'),
-                            b't' => text.push('\t'),
-                            b'"' => text.push('"'),
-                            b'\\' => text.push('\\'),
+                        let escaped = self.source[pos..]
+                            .chars()
+                            .next()
+                            .expect("escape byte starts a character");
+                        match escaped {
+                            'n' => text.push('\n'),
+                            't' => text.push('\t'),
+                            '"' => text.push('"'),
+                            '\\' => text.push('\\'),
                             other => {
                                 return Err(self.error(
-                                    format!("Unknown string escape \\{}", other as char),
+                                    format!("Unknown string escape \\{other}"),
                                     pos,
-                                    pos + 1,
+                                    pos + other.len_utf8(),
                                 ));
                             }
                         }
+                        pos += escaped.len_utf8();
                     } else {
-                        text.push(bytes[pos] as char);
+                        let ch = self.source[pos..]
+                            .chars()
+                            .next()
+                            .expect("string byte starts a character");
+                        text.push(ch);
+                        pos += ch.len_utf8();
+                        continue;
                     }
-                    pos += 1;
                 }
                 if pos >= bytes.len() {
                     return Err(self.error("Unterminated string literal", start, pos));

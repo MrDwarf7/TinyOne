@@ -37,7 +37,7 @@ impl<'a> VM<'a> {
     }
 
     pub fn run_report(mut self, stdout: &mut dyn Write) -> Result<TinyRunReport> {
-        let mut memory = self.memory.clone();
+        let mut memory = std::mem::take(&mut self.memory);
         self.run_chunk(&self.program.code, &mut memory, stdout, "main")?;
         let heap_before_shutdown = self.context.heap_stats();
         let heap_after_shutdown = self.context.shutdown();
@@ -55,7 +55,7 @@ impl<'a> VM<'a> {
         stdout: &mut dyn Write,
         chunk_name: &str,
     ) -> Result<Option<Value>> {
-        let mut stack: Vec<Value> = Vec::new();
+        let mut stack: Vec<Value> = Vec::with_capacity(code.len().min(32));
         let mut pc = 0usize;
         loop {
             let instr = code.get(pc).copied().ok_or_else(|| {
@@ -302,17 +302,11 @@ impl<'a> VM<'a> {
             )));
         }
         checked_stack_count(caller_stack.len(), arg_count)?;
-        let mut args = Vec::with_capacity(arg_count);
-        for _ in 0..arg_count {
-            args.push(
-                caller_stack
-                    .pop()
-                    .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?,
-            );
-        }
-        args.reverse();
         let mut memory = TinyMemory::new(function.slot_count);
-        for (slot, value) in args.into_iter().enumerate() {
+        for slot in (0..arg_count).rev() {
+            let value = caller_stack
+                .pop()
+                .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
             memory.store(slot, value)?;
         }
         self.call_depth += 1;

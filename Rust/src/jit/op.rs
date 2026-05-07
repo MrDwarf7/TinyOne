@@ -7,6 +7,9 @@ pub(crate) enum JitOp {
     PushString(usize),
     Load(usize),
     Store(usize),
+    StoreInt(usize, i64),
+    AddSlotInt(usize, i64),
+    SubSlotInt(usize, i64),
     Add,
     AddInt,
     Sub,
@@ -85,6 +88,9 @@ impl JitOp {
             Self::PushString(index) => format!("push.str {index}"),
             Self::Load(slot) => format!("load {slot}"),
             Self::Store(slot) => format!("store {slot}"),
+            Self::StoreInt(slot, value) => format!("store.i {slot} {value}"),
+            Self::AddSlotInt(slot, value) => format!("slot.add.i {slot} {value}"),
+            Self::SubSlotInt(slot, value) => format!("slot.sub.i {slot} {value}"),
             Self::Add => "add".to_string(),
             Self::AddInt => "add.int".to_string(),
             Self::Sub => "sub".to_string(),
@@ -111,6 +117,22 @@ impl JitOp {
             Self::Return => "return".to_string(),
             Self::Print => "print".to_string(),
             Self::Halt => "halt".to_string(),
+        }
+    }
+
+    pub(crate) fn remap_targets(&mut self, original_to_compiled: &[usize]) {
+        match self {
+            Self::Jump(target) | Self::JumpHot(target) => {
+                if let Some(mapped) = original_to_compiled.get(*target) {
+                    *target = *mapped;
+                }
+            }
+            Self::JumpIfZero(target) | Self::JumpIfZeroHot(target) => {
+                if let Some(mapped) = original_to_compiled.get(*target) {
+                    *target = *mapped;
+                }
+            }
+            _ => {}
         }
     }
 }

@@ -14,16 +14,16 @@ fn arithmetic_loops_and_functions() {
     fn mul_by_count(value, count) {
       let acc = 0
       while count > 0 {
-        let acc = acc + value
-        let count = count - 1
+        acc = acc + value
+        count = count - 1
       }
       return acc
     }
     let i = 1
     let total = 0
     while i <= 8 {
-      let total = total + mul_by_count(i, 3)
-      let i = i + 1
+      total = total + mul_by_count(i, 3)
+      i = i + 1
     }
     print total
     "#;
@@ -104,14 +104,14 @@ fn conditionals_break_and_continue() {
     let i = 0
     let total = 0
     while i < 10 {
-      let i = i + 1
+      i = i + 1
       if i == 3 {
         continue
       }
       if i == 8 {
         break
       } else {
-        let total = total + i
+        total = total + i
       }
     }
     print total
@@ -132,7 +132,7 @@ fn dynamic_array_push_and_pop_storage() {
     let i = 0
     while i < 4 {
       let ignored = push(values, i * 2)
-      let i = i + 1
+      i = i + 1
     }
     print len(values)
     print values[2]

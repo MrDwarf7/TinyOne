@@ -26,8 +26,8 @@ const LOOP_SOURCE: &str = r#"
 let i = 0
 let total = 0
 while i < 128 {
-  let total = total + (i * 3)
-  let i = i + 1
+  total = total + (i * 3)
+  i = i + 1
 }
 print total
 "#;
@@ -36,8 +36,8 @@ const FUNCTION_SOURCE: &str = r#"
 fn mul_by_count(value, count) {
   let acc = 0
   while count > 0 {
-    let acc = acc + value
-    let count = count - 1
+    acc = acc + value
+    count = count - 1
   }
   return acc
 }
@@ -49,8 +49,8 @@ fn pair(x) {
 let i = 1
 let total = 0
 while i <= 32 {
-  let total = total + pair(i)
-  let i = i + 1
+  total = total + pair(i)
+  i = i + 1
 }
 print total
 "#;
@@ -61,10 +61,10 @@ let pulses = 0
 while i < 96 {
   let gate = 1
   while gate {
-    let pulses = pulses + i
-    let gate = 0
+    pulses = pulses + i
+    gate = 0
   }
-  let i = i + 1
+  i = i + 1
 }
 print pulses
 "#;
@@ -75,7 +75,7 @@ let values = [1, 2, 3, 4, 5]
 let i = 0
 while i < len(values) {
   set values[i] = values[i] * 3
-  let i = i + 1
+  i = i + 1
 }
 let point = Point(values[1], len("tinyone"))
 set point.y = point.y + values[4]
@@ -96,13 +96,13 @@ let arr = array(16, 0)
 let i = 0
 while i < len(arr) {
   set arr[i] = to_int(i * 7)
-  let i = i + 1
+  i = i + 1
 }
 let total = 0
 let j = 0
 while j < len(arr) {
-  let total = total + arr[j]
-  let j = j + 1
+  total = total + arr[j]
+  j = j + 1
 }
 print total
 "#;
@@ -444,19 +444,22 @@ fn build_benchmarks() -> Vec<Benchmark> {
         bench("verifier.loop_cfg", 30_000, {
             let program = loop_fixture.program.clone();
             move || {
-                black_box(BytecodeVerifier::verify(&program).expect("verify loop"));
+                BytecodeVerifier::verify(&program).expect("verify loop");
+                black_box(());
             }
         }),
         bench("verifier.function_cfg", 20_000, {
             let program = functions.program.clone();
             move || {
-                black_box(BytecodeVerifier::verify(&program).expect("verify functions"));
+                BytecodeVerifier::verify(&program).expect("verify functions");
+                black_box(());
             }
         }),
         bench("verifier.heap_structs", 20_000, {
             let program = heap.program.clone();
             move || {
-                black_box(BytecodeVerifier::verify(&program).expect("verify heap"));
+                BytecodeVerifier::verify(&program).expect("verify heap");
+                black_box(());
             }
         }),
         bench("compile.full_pipeline", 2_000, || {

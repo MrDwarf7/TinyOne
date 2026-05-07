@@ -74,8 +74,8 @@ class RuntimeParityTests(unittest.TestCase):
         let i = 0
         let total = 0
         while i < 32 {
-          let total = total + (i * 3)
-          let i = i + 1
+          total = total + (i * 3)
+          i = i + 1
         }
         print total
         print i == 32
@@ -88,13 +88,38 @@ class RuntimeParityTests(unittest.TestCase):
         self.assertIn("pc =", generated)
         self.assertFalse(JitCache._can_emit_straightline(program))
 
+    def test_conditionals_break_and_continue_match_vm(self) -> None:
+        source = """
+        let i = 0
+        let total = 0
+        while i < 10 {
+          i = i + 1
+          if i == 3 {
+            continue
+          }
+          if i == 8 {
+            break
+          } else {
+            total = total + i
+          }
+        }
+        print total
+        if total == 25 {
+          print 1
+        } else {
+          print 0
+        }
+        """
+
+        self.assert_backends_match(source, "25\n1\n")
+
     def test_dispatch_call_return_jit_matches_vm(self) -> None:
         source = """
         fn mul_by_count(value, count) {
           let acc = 0
           while count > 0 {
-            let acc = acc + value
-            let count = count - 1
+            acc = acc + value
+            count = count - 1
           }
           return acc
         }
@@ -106,8 +131,8 @@ class RuntimeParityTests(unittest.TestCase):
         let i = 1
         let total = 0
         while i <= 8 {
-          let total = total + pair(i)
-          let i = i + 1
+          total = total + pair(i)
+          i = i + 1
         }
         print total
         """
@@ -127,11 +152,11 @@ class RuntimeParityTests(unittest.TestCase):
         while i < 10 {
           let gate = 1
           while gate {
-            let trips = trips + marker
-            let gate = 0
+            trips = trips + marker
+            gate = 0
           }
-          let marker = marker + 1
-          let i = i + 1
+          marker = marker + 1
+          i = i + 1
         }
         print trips
         """
@@ -179,6 +204,16 @@ class RuntimeParityTests(unittest.TestCase):
 
         self.assert_backends_match(source, "hi\n[10, 99, 30]\n99\n99\n4\n2\ni\n")
 
+    def test_utf8_string_literals_are_preserved(self) -> None:
+        self.assert_backends_match(
+            """
+            let text = "é"
+            print text
+            print len(text)
+            """,
+            "é\n1\n",
+        )
+
     def test_pointer_cells_and_deterministic_input(self) -> None:
         source = """
         let start = read_int()
@@ -186,7 +221,7 @@ class RuntimeParityTests(unittest.TestCase):
         print load(ptr)
         print store(ptr, load(ptr) + 5)
         print load(ptr)
-        let done = free(ptr)
+        let done = unsafe free(ptr)
         """
         program = compile_source(source)
 
@@ -317,7 +352,7 @@ class RuntimeParityTests(unittest.TestCase):
                 """
                 let values = [1, 2]
                 let p = ptr(values, 1)
-                let ignored = free(values)
+                let ignored = unsafe free(values)
                 let replacement = [7, 8]
                 print unsafe ptr_load(p)
                 """
@@ -326,7 +361,7 @@ class RuntimeParityTests(unittest.TestCase):
                 """
                 let values = [1, 2]
                 let p = ptr(values, 1)
-                let ignored = free(values)
+                let ignored = unsafe free(values)
                 let replacement = [7, 8]
                 print ptr_kind(p)
                 """
@@ -336,7 +371,7 @@ class RuntimeParityTests(unittest.TestCase):
                 struct Pair { left, right }
                 let pair = Pair(1, 2)
                 let p = fieldptr(pair, "right")
-                let ignored = free(pair)
+                let ignored = unsafe free(pair)
                 let replacement = Pair(3, 4)
                 print unsafe ptr_load(p)
                 """
@@ -381,10 +416,12 @@ class RuntimeParityTests(unittest.TestCase):
 
             program = compile_file(main_path)
             self.assertEqual(len(program.modules), 1)
+            self.assertEqual(program.modules[0].path, "pairs")
             self.assertEqual(program.modules[0].exported_functions, ("sum_pair",))
             self.assertEqual(program.modules[0].exported_structs, ("Pair",))
             artifact_path = root / "main.tobc.json"
             write_artifact(program, artifact_path)
+            self.assertNotIn(str(root), artifact_path.read_text(encoding="utf-8"))
             loaded = load_artifact(artifact_path)
 
             self.assertEqual(program.fingerprint, loaded.fingerprint)
@@ -462,7 +499,7 @@ class RuntimeParityTests(unittest.TestCase):
                 let i = 0
                 while i < 1 {
                   let scoped = 9
-                  let i = i + 1
+                  i = i + 1
                 }
                 print scoped
                 """

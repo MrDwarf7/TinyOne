@@ -7,7 +7,7 @@ Language:
     fn double(n) { return n * 2 }
     struct Pair { left, right }
     let x = 1 + 2 * 3
-    while x < 10 { let x = x + 1 }
+    while x < 10 { x = x + 1 }
     let pair = Pair("left", [1, 2, 3])
     let mem = buffer(16)
     print unsafe ptr_load(fieldptr(pair, "left"))
@@ -127,33 +127,37 @@ class TokenKind(IntEnum):
     FN = 6
     RETURN = 7
     WHILE = 8
-    STRUCT = 9
-    IMPORT = 10
-    EXPORT = 11
-    AS = 12
-    SET = 13
-    UNSAFE = 14
-    PLUS = 15
-    MINUS = 16
-    STAR = 17
-    SLASH = 18
-    EQUAL = 19
-    EQEQ = 20
-    BANG_EQUAL = 21
-    LT = 22
-    LTE = 23
-    GT = 24
-    GTE = 25
-    LPAREN = 26
-    RPAREN = 27
-    LBRACE = 28
-    RBRACE = 29
-    LBRACKET = 30
-    RBRACKET = 31
-    DOT = 32
-    COMMA = 33
-    EOF = 34
-    NULL = 35
+    IF = 9
+    ELSE = 10
+    BREAK = 11
+    CONTINUE = 12
+    STRUCT = 13
+    IMPORT = 14
+    EXPORT = 15
+    AS = 16
+    SET = 17
+    UNSAFE = 18
+    PLUS = 19
+    MINUS = 20
+    STAR = 21
+    SLASH = 22
+    EQUAL = 23
+    EQEQ = 24
+    BANG_EQUAL = 25
+    LT = 26
+    LTE = 27
+    GT = 28
+    GTE = 29
+    LPAREN = 30
+    RPAREN = 31
+    LBRACE = 32
+    RBRACE = 33
+    LBRACKET = 34
+    RBRACKET = 35
+    DOT = 36
+    COMMA = 37
+    EOF = 38
+    NULL = 39
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +174,10 @@ _KEYWORDS: Final[dict[str, TokenKind]] = {
     "fn": TokenKind.FN,
     "return": TokenKind.RETURN,
     "while": TokenKind.WHILE,
+    "if": TokenKind.IF,
+    "else": TokenKind.ELSE,
+    "break": TokenKind.BREAK,
+    "continue": TokenKind.CONTINUE,
     "struct": TokenKind.STRUCT,
     "import": TokenKind.IMPORT,
     "export": TokenKind.EXPORT,
@@ -649,7 +657,7 @@ _BUILTINS: Final[tuple[BuiltinDef, ...]] = (
     BuiltinDef("alloc", 1, 1),
     BuiltinDef("load", 1, 1),
     BuiltinDef("store", 2, 2),
-    BuiltinDef("free", 1, 1),
+    BuiltinDef("free", 1, 1, True),
     BuiltinDef("read", 0, 0),
     BuiltinDef("read_int", 0, 0),
     BuiltinDef("read_str", 0, 0),
@@ -700,11 +708,9 @@ class SymbolTable:
             raise RuntimeError("cannot exit root symbol scope")
         self._scopes.pop()
 
-    def define_or_get(self, name: str) -> Slot:
-        for scope in reversed(self._scopes):
-            existing = scope.get(name)
-            if existing is not None:
-                return existing
+    def define_current(self, name: str) -> Slot | None:
+        if name in self._scopes[-1]:
+            return None
         slot = Slot(len(self._names))
         self._scopes[-1][name] = slot
         self._names.append(name)
@@ -727,6 +733,12 @@ class SymbolTable:
     @property
     def names(self) -> tuple[str, ...]:
         return tuple(self._names)
+
+
+@dataclass(slots=True)
+class LoopContext:
+    start: int
+    breaks: list[int]
 
 
 class Compiler:
@@ -760,6 +772,7 @@ class Compiler:
         "_string_indexes",
         "_strings",
         "_in_function",
+        "_loops",
         "_unsafe_depth",
     )
 
@@ -798,6 +811,7 @@ class Compiler:
         self._string_indexes = self._shared.string_indexes
         self._strings = self._shared.strings
         self._in_function = False
+        self._loops: list[LoopContext] = []
         self._unsafe_depth = 0
         self._module_imports: list[ModuleImportDef] = []
         self._namespaces: dict[str, ModuleInfo] = {}
@@ -874,7 +888,7 @@ class Compiler:
         self._shared.module_defs.append(
             ModuleDef(
                 info.name,
-                info.path,
+                info.name,
                 tuple(info.imports),
                 tuple(sorted(info.function_exports)),
                 tuple(sorted(info.struct_exports)),
@@ -892,6 +906,18 @@ class Compiler:
             return
         if kind == TokenKind.WHILE:
             self._while_statement()
+            return
+        if kind == TokenKind.IF:
+            self._if_statement()
+            return
+        if kind == TokenKind.BREAK:
+            self._break_statement()
+            return
+        if kind == TokenKind.CONTINUE:
+            self._continue_statement()
+            return
+        if kind == TokenKind.IDENT and self._peek_kind(1) == TokenKind.EQUAL:
+            self._assignment_statement()
             return
         if kind == TokenKind.RETURN:
             self._return_statement()
@@ -921,8 +947,21 @@ class Compiler:
             raise self._error_at(f"Variable {name!r} conflicts with an imported namespace", name_pos)
         self._eat(TokenKind.EQUAL)
         self._expression()
-        slot = self._symbols.define_or_get(name)
+        slot = self._symbols.define_current(name)
+        if slot is None:
+            raise self._error_at(f"Variable {name!r} is already defined in this scope", name_pos)
         LOGGER.debug("compiled let", extra={"name": name, "slot": int(slot), "pos": name_pos})
+        self._emit(Op.STORE, int(slot))
+
+    def _assignment_statement(self) -> None:
+        name_token = self._current
+        name = name_token.text
+        self._eat(TokenKind.IDENT)
+        if name in self._namespaces:
+            raise self._error(f"Cannot assign to import namespace {name!r}", name_token)
+        slot = self._get_slot(name_token)
+        self._eat(TokenKind.EQUAL)
+        self._expression()
         self._emit(Op.STORE, int(slot))
 
     def _print_statement(self) -> None:
@@ -935,9 +974,42 @@ class Compiler:
         loop_start = len(self._code)
         self._expression()
         exit_jump = self._emit_placeholder(Op.JUMP_IF_ZERO)
+        self._loops.append(LoopContext(loop_start, []))
         self._block()
+        loop_context = self._loops.pop()
         self._emit(Op.JUMP, loop_start)
-        self._patch(exit_jump, len(self._code))
+        loop_end = len(self._code)
+        self._patch(exit_jump, loop_end)
+        for break_jump in loop_context.breaks:
+            self._patch(break_jump, loop_end)
+
+    def _if_statement(self) -> None:
+        self._eat(TokenKind.IF)
+        self._expression()
+        false_jump = self._emit_placeholder(Op.JUMP_IF_ZERO)
+        self._block()
+        if self._current.kind == TokenKind.ELSE:
+            end_jump = self._emit_placeholder(Op.JUMP)
+            self._patch(false_jump, len(self._code))
+            self._eat(TokenKind.ELSE)
+            self._block()
+            self._patch(end_jump, len(self._code))
+        else:
+            self._patch(false_jump, len(self._code))
+
+    def _break_statement(self) -> None:
+        token = self._current
+        self._eat(TokenKind.BREAK)
+        if not self._loops:
+            raise self._error("Break outside loop", token)
+        self._loops[-1].breaks.append(self._emit_placeholder(Op.JUMP))
+
+    def _continue_statement(self) -> None:
+        token = self._current
+        self._eat(TokenKind.CONTINUE)
+        if not self._loops:
+            raise self._error("Continue outside loop", token)
+        self._emit(Op.JUMP, self._loops[-1].start)
 
     def _return_statement(self) -> None:
         if not self._in_function:
@@ -1019,9 +1091,7 @@ class Compiler:
             info = self._shared.modules[module_filename]
 
         self._namespaces[alias] = info
-        self._module_imports.append(
-            ModuleImportDef(alias, path_token.text, info.name, module_filename)
-        )
+        self._module_imports.append(ModuleImportDef(alias, path_token.text, info.name, info.name))
 
     def _struct_definition(self, *, exported: bool) -> None:
         self._eat(TokenKind.STRUCT)
@@ -1097,9 +1167,10 @@ class Compiler:
                 param_pos = self._current.pos
                 param_token = self._current
                 self._eat(TokenKind.IDENT)
-                slot = function_symbols.define_or_get(param_name)
-                if int(slot) != param_count:
+                slot = function_symbols.define_current(param_name)
+                if slot is None:
                     raise self._error(f"Duplicate parameter {param_name!r}", param_token)
+                assert int(slot) == param_count
                 param_count += 1
                 if self._current.kind != TokenKind.COMMA:
                     break
@@ -1381,6 +1452,12 @@ class Compiler:
             raise self._error(f"Expected {kind.name}, got {self._current.kind.name}", self._current)
         self._index += 1
         self._current = self._tokens[self._index]
+
+    def _peek_kind(self, offset: int) -> TokenKind | None:
+        index = self._index + offset
+        if index >= len(self._tokens):
+            return None
+        return self._tokens[index].kind
 
     def _emit(self, op: Op, arg: int = 0, arg2: int = 0) -> None:
         self._code.append(Instr(op, arg, arg2))

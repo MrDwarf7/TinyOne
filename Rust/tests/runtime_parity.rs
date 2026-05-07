@@ -134,14 +134,14 @@ fn loops_conditionals_and_loop_control_match() {
     let i = 0
     let total = 0
     while i < 10 {
-      let i = i + 1
+      i = i + 1
       if i == 3 {
         continue
       }
       if i == 8 {
         break
       } else {
-        let total = total + i
+        total = total + i
       }
     }
     print total
@@ -167,8 +167,8 @@ fn function_call_return_dispatch_matches() {
     fn mul_by_count(value, count) {
       let acc = 0
       while count > 0 {
-        let acc = acc + value
-        let count = count - 1
+        acc = acc + value
+        count = count - 1
       }
       return acc
     }
@@ -180,8 +180,8 @@ fn function_call_return_dispatch_matches() {
     let i = 1
     let total = 0
     while i <= 8 {
-      let total = total + pair(i)
-      let i = i + 1
+      total = total + pair(i)
+      i = i + 1
     }
     print total
     "#;
@@ -200,11 +200,11 @@ fn nested_control_flow_transfers_match() {
     while i < 10 {
       let gate = 1
       while gate {
-        let trips = trips + marker
-        let gate = 0
+        trips = trips + marker
+        gate = 0
       }
-      let marker = marker + 1
-      let i = i + 1
+      marker = marker + 1
+      i = i + 1
     }
     print trips
     "#;
@@ -245,7 +245,7 @@ fn jit_cache_reuses_straightline_dispatch_and_heap_programs() {
             }
             let i = 0
             while i < 4 {
-              let i = inc(i)
+              i = inc(i)
             }
             print i
             "#,
@@ -289,11 +289,11 @@ fn jit_compiles_to_lowered_bytecode_listing() {
 
     assert_eq!(program.fingerprint(), compiled.fingerprint());
     assert!(compiled.listing().contains(".chunk 0 main"));
-    assert!(compiled.listing().contains("store 0"));
+    assert!(compiled.listing().contains("store.i 0"));
     let stats = cache.stats();
     assert_eq!(1, stats.programs);
     assert_eq!(1, stats.compiled_chunks);
-    assert!(stats.compiled_ops >= program.code.len());
+    assert!(stats.compiled_ops > 0);
 }
 
 #[test]
@@ -307,7 +307,7 @@ fn write_jit_listing_emits_inspectable_file() {
 
     assert!(listing.contains("tinyone adaptive-jit"));
     assert!(listing.contains(".chunk 0 main"));
-    assert!(listing.contains("push.i 42"));
+    assert!(listing.contains("store.i 0 42"));
 }
 
 #[test]
@@ -317,8 +317,8 @@ fn jit_quickens_hot_back_edges_after_warm_runs() {
         let i = 0
         let total = 0
         while i < 64 {
-          let total = total + i
-          let i = i + 1
+          total = total + i
+          i = i + 1
         }
         print total
         "#,
@@ -350,8 +350,8 @@ fn jit_cache_run_source_supports_warm_api_path() {
     let i = 0
     let total = 0
     while i < 8 {
-      let total = total + i
-      let i = i + 1
+      total = total + i
+      i = i + 1
     }
     print total
     "#;
@@ -390,6 +390,18 @@ fn heap_arrays_structs_strings_fields_and_dynamic_storage_match() {
     "#;
 
     assert_backends_match(source, "4\nhi\n[10, 99, 30, 40]\n40\n3\n99\n99\n5\n2\ni\n");
+}
+
+#[test]
+fn utf8_string_literals_are_preserved() {
+    assert_backends_match(
+        r#"
+        let text = "é"
+        print text
+        print len(text)
+        "#,
+        "é\n1\n",
+    );
 }
 
 #[test]
@@ -769,6 +781,7 @@ fn imports_and_artifact_roundtrip() {
 
     let program = compile_file(&main_path).expect("compile file");
     assert_eq!(1, program.modules.len());
+    assert_eq!("pairs", program.modules[0].path);
     assert_eq!(
         vec!["sum_pair".to_string()],
         program.modules[0].exported_functions
@@ -776,6 +789,13 @@ fn imports_and_artifact_roundtrip() {
     assert_eq!(
         vec!["Pair".to_string()],
         program.modules[0].exported_structs
+    );
+    assert!(
+        !program
+            .to_artifact()
+            .to_string()
+            .contains(&temp.path().display().to_string()),
+        "artifact should not contain canonical temp paths"
     );
 
     let artifact_path = temp.path().join("main.tobc.json");
@@ -876,7 +896,7 @@ fn block_scope_hides_loop_locals_and_loop_control_requires_loop() {
             let i = 0
             while i < 1 {
               let scoped = 9
-              let i = i + 1
+              i = i + 1
             }
             print scoped
             "#,

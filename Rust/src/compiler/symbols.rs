@@ -25,14 +25,13 @@ impl SymbolTable {
         self.scopes.pop();
     }
 
-    pub(crate) fn define_current_or_get(&mut self, name: &str) -> usize {
-        if let Some(slot) = self
+    pub(crate) fn define_current(&mut self, name: &str) -> Option<usize> {
+        if self
             .scopes
             .last()
-            .and_then(|scope| scope.get(name))
-            .copied()
+            .is_some_and(|scope| scope.contains_key(name))
         {
-            return slot;
+            return None;
         }
         let slot = self.names.len();
         self.scopes
@@ -40,30 +39,7 @@ impl SymbolTable {
             .expect("scope")
             .insert(name.to_string(), slot);
         self.names.push(name.to_string());
-        slot
-    }
-
-    pub(crate) fn define_for_let(&mut self, name: &str, rebind_visible: bool) -> usize {
-        if let Some(slot) = self
-            .scopes
-            .last()
-            .and_then(|scope| scope.get(name))
-            .copied()
-        {
-            return slot;
-        }
-        if rebind_visible {
-            if let Some(slot) = self
-                .scopes
-                .iter()
-                .rev()
-                .skip(1)
-                .find_map(|scope| scope.get(name).copied())
-            {
-                return slot;
-            }
-        }
-        self.define_current_or_get(name)
+        Some(slot)
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<usize> {
