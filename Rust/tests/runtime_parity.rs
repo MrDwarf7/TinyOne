@@ -114,6 +114,21 @@ fn straightline_vm_and_jit_alias_match() {
 }
 
 #[test]
+fn lexical_shadowing_restores_outer_scope() {
+    let program = compile_file("tests/Programs/pass/003_variables_shadowing.to")
+        .expect("shadowing fixture should compile");
+
+    for mode in ["vm", "jit"] {
+        assert_eq!(
+            "20\n10\n15\n",
+            run_compiled(&program, mode, Vec::new())
+                .expect("shadowing fixture should run")
+                .0
+        );
+    }
+}
+
+#[test]
 fn loops_conditionals_and_loop_control_match() {
     let source = r#"
     let i = 0
@@ -394,6 +409,33 @@ fn pointer_cells_and_deterministic_input_match() {
             run_compiled(&program, mode, vec!["37"]).expect("program should run");
         assert_eq!("37\n42\n42\n", stdout);
         assert_eq!(3, memory.len());
+    }
+}
+
+#[test]
+fn input_exhaustion_errors_on_explicit_reads() {
+    let program = compile_file("tests/Programs/fail_runtime/008_input_exhaustion.to")
+        .expect("input exhaustion fixture should compile");
+
+    for mode in ["vm", "jit"] {
+        assert_error_contains(run_compiled(&program, mode, Vec::new()), "Input exhausted");
+    }
+
+    let exact = compile_source(
+        r#"
+        print read()
+        print read_int()
+        print read_str()
+        "#,
+    )
+    .expect("input source should compile");
+    for mode in ["vm", "jit"] {
+        assert_eq!(
+            "12\n34\nhello\n",
+            run_compiled(&exact, mode, vec!["12", "34", "hello"])
+                .expect("exact input queue should run")
+                .0
+        );
     }
 }
 

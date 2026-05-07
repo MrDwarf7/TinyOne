@@ -1,0 +1,116 @@
+use crate::{Instr, Op};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JitOp {
+    PushInt(i64),
+    PushNull,
+    PushString(usize),
+    Load(usize),
+    Store(usize),
+    Add,
+    AddInt,
+    Sub,
+    SubInt,
+    Mul,
+    MulInt,
+    Div,
+    DivInt,
+    Neg,
+    Compare(Op),
+    CompareInt(Op),
+    Jump(usize),
+    JumpHot(usize),
+    JumpIfZero(usize),
+    JumpIfZeroHot(usize),
+    Call(usize, usize),
+    MakeArray(usize),
+    Index,
+    SetIndex,
+    MakeStruct(usize, usize),
+    GetField(usize),
+    SetField(usize),
+    Builtin(usize, usize),
+    Return,
+    Print,
+    Halt,
+}
+
+impl JitOp {
+    pub(crate) fn from_instr(instr: Instr) -> Self {
+        match instr.op {
+            Op::PushInt => Self::PushInt(instr.arg),
+            Op::PushNull => Self::PushNull,
+            Op::PushString => Self::PushString(instr.arg as usize),
+            Op::Load => Self::Load(instr.arg as usize),
+            Op::Store => Self::Store(instr.arg as usize),
+            Op::Add => Self::Add,
+            Op::Sub => Self::Sub,
+            Op::Mul => Self::Mul,
+            Op::Div => Self::Div,
+            Op::Neg => Self::Neg,
+            Op::Lt | Op::Lte | Op::Gt | Op::Gte | Op::Eq | Op::Ne => Self::Compare(instr.op),
+            Op::Jump => Self::Jump(instr.arg as usize),
+            Op::JumpIfZero => Self::JumpIfZero(instr.arg as usize),
+            Op::Call => Self::Call(instr.arg as usize, instr.arg2 as usize),
+            Op::MakeArray => Self::MakeArray(instr.arg as usize),
+            Op::Index => Self::Index,
+            Op::SetIndex => Self::SetIndex,
+            Op::MakeStruct => Self::MakeStruct(instr.arg as usize, instr.arg2 as usize),
+            Op::GetField => Self::GetField(instr.arg as usize),
+            Op::SetField => Self::SetField(instr.arg as usize),
+            Op::Builtin => Self::Builtin(instr.arg as usize, instr.arg2 as usize),
+            Op::Return => Self::Return,
+            Op::Print => Self::Print,
+            Op::Halt => Self::Halt,
+        }
+    }
+
+    pub(crate) fn quickened(self) -> Self {
+        match self {
+            Self::Add => Self::AddInt,
+            Self::Sub => Self::SubInt,
+            Self::Mul => Self::MulInt,
+            Self::Div => Self::DivInt,
+            Self::Compare(op) => Self::CompareInt(op),
+            Self::Jump(target) => Self::JumpHot(target),
+            Self::JumpIfZero(target) => Self::JumpIfZeroHot(target),
+            _ => self,
+        }
+    }
+
+    pub(crate) fn listing(self) -> String {
+        match self {
+            Self::PushInt(value) => format!("push.i {value}"),
+            Self::PushNull => "push.null".to_string(),
+            Self::PushString(index) => format!("push.str {index}"),
+            Self::Load(slot) => format!("load {slot}"),
+            Self::Store(slot) => format!("store {slot}"),
+            Self::Add => "add".to_string(),
+            Self::AddInt => "add.int".to_string(),
+            Self::Sub => "sub".to_string(),
+            Self::SubInt => "sub.int".to_string(),
+            Self::Mul => "mul".to_string(),
+            Self::MulInt => "mul.int".to_string(),
+            Self::Div => "div".to_string(),
+            Self::DivInt => "div.int".to_string(),
+            Self::Neg => "neg".to_string(),
+            Self::Compare(op) => format!("cmp.{}", op.name().to_ascii_lowercase()),
+            Self::CompareInt(op) => format!("cmp.int.{}", op.name().to_ascii_lowercase()),
+            Self::Jump(target) => format!("jmp {target}"),
+            Self::JumpHot(target) => format!("jmp.hot {target}"),
+            Self::JumpIfZero(target) => format!("jz {target}"),
+            Self::JumpIfZeroHot(target) => format!("jz.hot {target}"),
+            Self::Call(function, arg_count) => format!("call f{function} argc={arg_count}"),
+            Self::MakeArray(count) => format!("array {count}"),
+            Self::Index => "index".to_string(),
+            Self::SetIndex => "set.index".to_string(),
+            Self::MakeStruct(index, field_count) => format!("struct s{index} fields={field_count}"),
+            Self::GetField(field) => format!("get.field {field}"),
+            Self::SetField(field) => format!("set.field {field}"),
+            Self::Builtin(index, arg_count) => format!("builtin b{index} argc={arg_count}"),
+            Self::Return => "return".to_string(),
+            Self::Print => "print".to_string(),
+            Self::Halt => "halt".to_string(),
+        }
+    }
+}
