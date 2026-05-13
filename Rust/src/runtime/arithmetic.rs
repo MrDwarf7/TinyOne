@@ -10,17 +10,7 @@ pub(crate) fn expect_int(value: &Value, operation: &str) -> Result<i64> {
 }
 
 pub(crate) fn expect_int_pair(lhs: Value, rhs: Value, operation: &str) -> Result<(i64, i64)> {
-    let Value::Int(lhs) = lhs else {
-        return Err(TinyOneError::runtime(format!(
-            "{operation} expects integer operands"
-        )));
-    };
-    let Value::Int(rhs) = rhs else {
-        return Err(TinyOneError::runtime(format!(
-            "{operation} expects integer operands"
-        )));
-    };
-    Ok((lhs, rhs))
+    Ok((expect_int(&lhs, operation)?, expect_int(&rhs, operation)?))
 }
 
 pub(crate) fn runtime_add_int(lhs: Value, rhs: Value) -> Result<Value> {
@@ -147,6 +137,11 @@ pub(crate) fn checked_stack_count(stack_len: usize, count: usize) -> Result<()> 
         return Err(TinyOneError::runtime("Stack underflow"));
     }
     Ok(())
+}
+
+pub(crate) fn pop_args(stack: &mut Vec<Value>, count: usize) -> Result<Vec<Value>> {
+    checked_stack_count(stack.len(), count)?;
+    Ok(stack.split_off(stack.len() - count))
 }
 
 pub(crate) fn checked_payload_bytes(count: usize, unit: usize, operation: &str) -> Result<usize> {

@@ -1,11 +1,12 @@
+use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
     JitOp, JitProgram, MAX_CALL_DEPTH, Result, TinyMemory, TinyOneError, TinyRunReport,
-    TinyRuntimeContext, Value, checked_div, checked_div_int, checked_stack_count, runtime_add,
-    runtime_add_int, runtime_call_builtin, runtime_compare, runtime_compare_int, runtime_get_field,
-    runtime_index, runtime_is_false, runtime_make_array, runtime_make_struct, runtime_mul,
-    runtime_mul_int, runtime_neg, runtime_null, runtime_print, runtime_set_field,
+    TinyRuntimeContext, Value, checked_div, checked_div_int, pop_args, runtime_add,
+    runtime_add_int, runtime_call_builtin, runtime_compare, runtime_compare_int,
+    runtime_get_field, runtime_index, runtime_is_false, runtime_make_array, runtime_make_struct,
+    runtime_mul, runtime_mul_int, runtime_neg, runtime_null, runtime_print, runtime_set_field,
     runtime_set_index, runtime_sub, runtime_sub_int,
 };
 
@@ -34,6 +35,14 @@ impl<'a> JitVm<'a> {
             context: TinyRuntimeContext::new(inputs),
             call_depth: 0,
         }
+    }
+
+    pub(crate) fn set_sys_args(&mut self, args: Vec<String>) {
+        self.context.set_sys_args(args);
+    }
+
+    pub(crate) fn set_sys_env(&mut self, env: HashMap<String, String>) {
+        self.context.set_sys_env(env);
     }
 
     pub(crate) fn run(self, stdout: &mut dyn Write) -> Result<TinyMemory> {
@@ -179,12 +188,7 @@ impl<'a> JitVm<'a> {
                     stack.push(result);
                 }
                 JitOp::MakeArray(count) => {
-                    checked_stack_count(stack.len(), count)?;
-                    let mut values = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        values.push(jit_pop(&mut stack)?);
-                    }
-                    values.reverse();
+                    let values = pop_args(&mut stack, count)?;
                     stack.push(runtime_make_array(&mut self.context, values)?);
                 }
                 JitOp::Index => {
@@ -199,12 +203,7 @@ impl<'a> JitVm<'a> {
                     runtime_set_index(&mut self.context, container, index, value)?;
                 }
                 JitOp::MakeStruct(struct_index, field_count) => {
-                    checked_stack_count(stack.len(), field_count)?;
-                    let mut values = Vec::with_capacity(field_count);
-                    for _ in 0..field_count {
-                        values.push(jit_pop(&mut stack)?);
-                    }
-                    values.reverse();
+                    let values = pop_args(&mut stack, field_count)?;
                     let struct_def = self.program.structs.get(struct_index).ok_or_else(|| {
                         TinyOneError::runtime(format!("Invalid struct index {struct_index}"))
                     })?;
@@ -231,12 +230,7 @@ impl<'a> JitVm<'a> {
                     runtime_set_field(&mut self.context, target, field, value)?;
                 }
                 JitOp::Builtin(builtin_index, arg_count) => {
-                    checked_stack_count(stack.len(), arg_count)?;
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count {
-                        args.push(jit_pop(&mut stack)?);
-                    }
-                    args.reverse();
+                    let args = pop_args(&mut stack, arg_count)?;
                     stack.push(runtime_call_builtin(
                         &mut self.context,
                         builtin_index,
@@ -289,10 +283,9 @@ impl<'a> JitVm<'a> {
                 "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
             )));
         }
-        checked_stack_count(caller_stack.len(), arg_count)?;
+        let args = pop_args(caller_stack, arg_count)?;
         let mut memory = TinyMemory::new(slot_count);
-        for slot in (0..arg_count).rev() {
-            let value = jit_pop(caller_stack)?;
+        for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;
         }
         self.call_depth += 1;

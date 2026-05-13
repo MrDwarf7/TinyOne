@@ -1,0 +1,20 @@
+# tinyone-stdlib/sys.to
+# Deterministic system introspection. args/env are injected by the host at
+# runtime construction time; they do not touch the real process environment
+# unless the caller explicitly passes std::env::vars() in.
+
+export fn argc() {
+  return sys_argc()
+}
+
+export fn argv(index) {
+  return sys_argv(index)
+}
+
+export fn env_has(name) {
+  return sys_env_has(name)
+}
+
+export fn env_get(name) {
+  return sys_env_get(name)
+}

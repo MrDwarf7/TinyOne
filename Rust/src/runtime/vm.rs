@@ -1,11 +1,12 @@
+use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
     Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory, TinyOneError,
-    TinyRuntimeContext, Value, checked_div, checked_non_negative_usize, checked_stack_count,
-    runtime_add, runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index,
-    runtime_is_false, runtime_make_array, runtime_make_struct, runtime_mul, runtime_neg,
-    runtime_null, runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
+    TinyRuntimeContext, Value, checked_div, checked_non_negative_usize, pop_args, runtime_add,
+    runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index, runtime_is_false,
+    runtime_make_array, runtime_make_struct, runtime_mul, runtime_neg, runtime_null,
+    runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +23,25 @@ pub struct VM<'a> {
     call_depth: usize,
 }
 
+fn vm_pop(stack: &mut Vec<Value>) -> Result<Value> {
+    stack
+        .pop()
+        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))
+}
+
+fn vm_pop_pair(stack: &mut Vec<Value>) -> Result<(Value, Value)> {
+    let rhs = vm_pop(stack)?;
+    let lhs = vm_pop(stack)?;
+    Ok((lhs, rhs))
+}
+
+fn lookup_field(fields: &[String], index: usize) -> Result<&str> {
+    fields
+        .get(index)
+        .map(String::as_str)
+        .ok_or_else(|| TinyOneError::runtime(format!("Invalid field index {index}")))
+}
+
 impl<'a> VM<'a> {
     pub fn new(program: &'a Program, memory: TinyMemory, inputs: Vec<String>) -> Self {
         Self {
@@ -30,6 +50,14 @@ impl<'a> VM<'a> {
             context: TinyRuntimeContext::new(inputs),
             call_depth: 0,
         }
+    }
+
+    pub fn set_sys_args(&mut self, args: Vec<String>) {
+        self.context.set_sys_args(args);
+    }
+
+    pub fn set_sys_env(&mut self, env: HashMap<String, String>) {
+        self.context.set_sys_env(env);
     }
 
     pub fn run(self, stdout: &mut dyn Write) -> Result<TinyMemory> {
@@ -83,68 +111,35 @@ impl<'a> VM<'a> {
                 }
                 Op::Store => {
                     let slot = checked_non_negative_usize(instr.arg, "memory slot")?;
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    memory.store(slot, value)?;
+                    memory.store(slot, vm_pop(&mut stack)?)?;
                 }
                 Op::Add => {
-                    let rhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let lhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let (lhs, rhs) = vm_pop_pair(&mut stack)?;
                     stack.push(runtime_add(lhs, rhs)?);
                 }
                 Op::Sub => {
-                    let rhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let lhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let (lhs, rhs) = vm_pop_pair(&mut stack)?;
                     stack.push(runtime_sub(lhs, rhs)?);
                 }
                 Op::Mul => {
-                    let rhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let lhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let (lhs, rhs) = vm_pop_pair(&mut stack)?;
                     stack.push(runtime_mul(lhs, rhs)?);
                 }
                 Op::Div => {
-                    let rhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let lhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let (lhs, rhs) = vm_pop_pair(&mut stack)?;
                     stack.push(checked_div(lhs, rhs)?);
                 }
                 Op::Neg => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let value = vm_pop(&mut stack)?;
                     stack.push(runtime_neg(value)?);
                 }
                 Op::Lt | Op::Lte | Op::Gt | Op::Gte | Op::Eq | Op::Ne => {
-                    let rhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let lhs = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let (lhs, rhs) = vm_pop_pair(&mut stack)?;
                     stack.push(runtime_compare(instr.op, lhs, rhs)?);
                 }
                 Op::Jump => pc = checked_non_negative_usize(instr.arg, "jump target")?,
                 Op::JumpIfZero => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    if runtime_is_false(&value) {
+                    if runtime_is_false(&vm_pop(&mut stack)?) {
                         pc = checked_non_negative_usize(instr.arg, "jump target")?;
                     }
                 }
@@ -157,51 +152,22 @@ impl<'a> VM<'a> {
                 }
                 Op::MakeArray => {
                     let count = checked_non_negative_usize(instr.arg, "array arity")?;
-                    checked_stack_count(stack.len(), count)?;
-                    let mut values = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        values.push(
-                            stack
-                                .pop()
-                                .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?,
-                        );
-                    }
-                    values.reverse();
+                    let values = pop_args(&mut stack, count)?;
                     stack.push(runtime_make_array(&mut self.context, values)?);
                 }
                 Op::Index => {
-                    let index = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let container = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let (container, index) = vm_pop_pair(&mut stack)?;
                     stack.push(runtime_index(&mut self.context, container, index)?);
                 }
                 Op::SetIndex => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let index = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let container = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let value = vm_pop(&mut stack)?;
+                    let index = vm_pop(&mut stack)?;
+                    let container = vm_pop(&mut stack)?;
                     runtime_set_index(&mut self.context, container, index, value)?;
                 }
                 Op::MakeStruct => {
                     let field_count = checked_non_negative_usize(instr.arg2, "struct arity")?;
-                    checked_stack_count(stack.len(), field_count)?;
-                    let mut values = Vec::with_capacity(field_count);
-                    for _ in 0..field_count {
-                        values.push(
-                            stack
-                                .pop()
-                                .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?,
-                        );
-                    }
-                    values.reverse();
+                    let values = pop_args(&mut stack, field_count)?;
                     let struct_index = checked_non_negative_usize(instr.arg, "struct index")?;
                     let struct_def = self.program.structs.get(struct_index).ok_or_else(|| {
                         TinyOneError::runtime(format!("Invalid struct index {struct_index}"))
@@ -214,58 +180,31 @@ impl<'a> VM<'a> {
                     )?);
                 }
                 Op::GetField => {
-                    let target = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let target = vm_pop(&mut stack)?;
                     let field_index = checked_non_negative_usize(instr.arg, "field index")?;
-                    let field = self.program.fields.get(field_index).ok_or_else(|| {
-                        TinyOneError::runtime(format!("Invalid field index {field_index}"))
-                    })?;
+                    let field = lookup_field(&self.program.fields, field_index)?;
                     stack.push(runtime_get_field(&self.context, target, field)?);
                 }
                 Op::SetField => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
-                    let target = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let value = vm_pop(&mut stack)?;
+                    let target = vm_pop(&mut stack)?;
                     let field_index = checked_non_negative_usize(instr.arg, "field index")?;
-                    let field = self.program.fields.get(field_index).ok_or_else(|| {
-                        TinyOneError::runtime(format!("Invalid field index {field_index}"))
-                    })?;
+                    let field = lookup_field(&self.program.fields, field_index)?;
                     runtime_set_field(&mut self.context, target, field, value)?;
                 }
                 Op::Builtin => {
                     let builtin_index = checked_non_negative_usize(instr.arg, "builtin index")?;
                     let arg_count = checked_non_negative_usize(instr.arg2, "builtin arity")?;
-                    checked_stack_count(stack.len(), arg_count)?;
-                    let mut args = Vec::with_capacity(arg_count);
-                    for _ in 0..arg_count {
-                        args.push(
-                            stack
-                                .pop()
-                                .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?,
-                        );
-                    }
-                    args.reverse();
+                    let args = pop_args(&mut stack, arg_count)?;
                     stack.push(runtime_call_builtin(
                         &mut self.context,
                         builtin_index,
                         args,
                     )?);
                 }
-                Op::Return => {
-                    return Ok(Some(
-                        stack
-                            .pop()
-                            .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?,
-                    ));
-                }
+                Op::Return => return Ok(Some(vm_pop(&mut stack)?)),
                 Op::Print => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+                    let value = vm_pop(&mut stack)?;
                     runtime_print(&self.context, stdout, &value)?;
                 }
                 Op::Halt => {
@@ -301,12 +240,9 @@ impl<'a> VM<'a> {
                 "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
             )));
         }
-        checked_stack_count(caller_stack.len(), arg_count)?;
+        let args = pop_args(caller_stack, arg_count)?;
         let mut memory = TinyMemory::new(function.slot_count);
-        for slot in (0..arg_count).rev() {
-            let value = caller_stack
-                .pop()
-                .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
+        for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;
         }
         self.call_depth += 1;

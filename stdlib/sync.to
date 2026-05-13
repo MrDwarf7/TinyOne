@@ -1,0 +1,31 @@
+# tinyone-stdlib/sync.to
+# Mutex + Atomic primitive shells. The VM is single-threaded today; misuse
+# (double-lock, unlock-when-unlocked) still produces TinyOne runtime errors.
+
+export fn mutex() {
+  return mutex_new()
+}
+
+export fn lock(m) {
+  return mutex_lock(m)
+}
+
+export fn unlock(m) {
+  return mutex_unlock(m)
+}
+
+export fn atomic(initial) {
+  return atomic_new(initial)
+}
+
+export fn atomic_get(a) {
+  return atomic_load(a)
+}
+
+export fn atomic_put(a, value) {
+  return atomic_store(a, value)
+}
+
+export fn atomic_increment(a, delta) {
+  return atomic_add(a, delta)
+}

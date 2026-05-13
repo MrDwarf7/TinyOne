@@ -78,9 +78,18 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
 }
 
 fn print_help() {
-    println!(
-        "usage: tinyone [--mode {{jit,vm}}] [--check] [--emit-bytecode PATH] \\\n       [--emit-jit PATH] [--run-bytecode PATH] [--input VALUE] \\\n       [--stdin] [--verbose] [path]"
-    );
+    println!("usage: tinyone [OPTIONS] [path]");
+    println!();
+    println!("Options:");
+    println!("  --mode {{jit,vm}}       Execution mode (default: jit)");
+    println!("  --check                Compile only, do not run");
+    println!("  --emit-bytecode PATH   Write a bytecode artifact to PATH");
+    println!("  --emit-jit PATH        Write a JIT listing to PATH");
+    println!("  --run-bytecode PATH    Run a compiled bytecode artifact");
+    println!("  --input VALUE          Supply a program input value (repeatable)");
+    println!("  --stdin                Read input values from stdin");
+    println!("  --verbose              Print program metadata before running");
+    println!("  -h, --help             Show this help message");
 }
 
 pub(crate) fn run() -> Result<i32, TinyOneError> {
@@ -94,10 +103,7 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
         io::stdin()
             .read_to_string(&mut text)
             .map_err(|error| TinyOneError::Compile(format!("File error: {error}")))?;
-        args.inputs.extend(
-            text.lines()
-                .map(|line| line.trim_end_matches('\n').to_string()),
-        );
+        args.inputs.extend(text.lines().map(str::to_string));
     }
 
     let program = if let Some(path) = args.run_bytecode {

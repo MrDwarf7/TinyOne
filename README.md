@@ -408,7 +408,11 @@ allocation.
 
 ### Standard Library
 
-TinyOne reserves these builtin names:
+TinyOne reserves these builtin names. Phase-1 (core) builtins occupy
+slots 0..34 in the canonical builtin table; Phase-2 stdlib bridge builtins
+follow them and are also bytecode-stable.
+
+Phase-1 (core):
 
 ```text
 len(value)
@@ -447,6 +451,66 @@ unsafe write32(ptr, value)
 cast_ptr(ptr, type_name)
 push(array, value)
 pop(array)
+```
+
+Phase-2 stdlib bridge builtins (the higher-level modules under `stdlib/`
+wrap these; you can also call them directly):
+
+```text
+# Dynamic arrays / hash maps
+vec_new(), vec_clear(v)
+map_new(), map_set(m, k, v), map_get(m, k), map_has(m, k), map_del(m, k)
+map_len(m), map_keys(m), map_values(m)
+
+# I/O abstractions (deterministic stdin/stdout/stderr buffers)
+io_stdout(), io_stderr(), io_stdin()
+io_write(fd, text), io_writeln(fd, text), io_read_line()
+io_flush(fd), io_capture_stdout(), io_capture_stderr()
+
+# String / Unicode (UTF-8)
+str_byte_len(s), str_char_len(s)
+str_byte_at(s, byte_index), str_char_at(s, char_index)
+str_slice(s, start_char, end_char), str_concat(a, b)
+str_is_utf8(value), str_from_buffer(buf)
+
+# Threading & sync (single-threaded semantic shells; misuse is a runtime error)
+mutex_new(), mutex_lock(m), mutex_unlock(m)
+atomic_new(init), atomic_load(a), atomic_store(a, v), atomic_add(a, delta)
+
+# Result / Option (heap-struct encoding; tag 1 = Ok/Some, tag 0 = Err/None)
+result_ok(v), result_err(v)
+result_is_ok(r), result_is_err(r), result_unwrap(r), result_unwrap_err(r)
+option_some(v), option_none()
+option_is_some(o), option_is_none(o), option_unwrap(o)
+
+# System introspection (deterministic, host args/env injected by runtime)
+sys_argc(), sys_argv(index)
+sys_env_has(name), sys_env_get(name)
+
+# Paths & FS (FS ops are unsafe per phase_2.md "could hurt the system")
+path_join(left, right), path_basename(p), path_dirname(p)
+unsafe fs_read(path), unsafe fs_write(path, buffer)
+fs_exists(path), unsafe fs_list_dir(path)
+
+# Math & logic
+math_const(name), math_abs(v), math_min(a, b), math_max(a, b)
+logic_and(a, b), logic_or(a, b), logic_not(v), logic_xor(a, b)
+
+# Typing system (typing_system.md)
+type_of(value), type_id(name)
+smallest_fit(value), promote(lhs, rhs), check_int_range(value, type_name)
+typed_add(lhs, rhs, type_name), typed_sub(lhs, rhs, type_name)
+typed_mul(lhs, rhs, type_name), typed_div(lhs, rhs, type_name)
+typed_neg(value, type_name)
+assert(condition)
+assert(condition, message)
+```
+
+Stdlib modules under `stdlib/` (loadable via the existing `import "name" as
+alias` namespacing with a `tinyone.json` package manifest) wrap these:
+
+```text
+vec, map, io, string, sync, result, option, sys, path, fs, math, logic, typing
 ```
 
 `read()` consumes one deterministic input item and returns an integer when the

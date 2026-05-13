@@ -29,13 +29,15 @@ pub(crate) use compiler::{
 pub use error::{Result, TinyOneError};
 pub(crate) use jit::{HOT_BACK_EDGE_THRESHOLD, JitChunk, JitFunction, JitOp, JitVm};
 pub use jit::{JitCache, JitCacheStats, JitProgram, JitStats, write_jit_listing};
-pub use runner::{run_program, run_program_report, run_source, run_source_report};
+pub use runner::{
+    run_program, run_program_report, run_program_with_env, run_source, run_source_report,
+};
 pub(crate) use runtime::{
     HeapData, MAX_ARRAY_LENGTH, MAX_BUFFER_BYTES, MAX_CALL_DEPTH, MAX_HEAP_BYTES, MAX_HEAP_OBJECTS,
     TinyHeap, TinyRuntimeContext, VALUE_BYTES, Value, checked_bounded_len, checked_byte_range,
     checked_collection_index, checked_div, checked_div_int, checked_non_negative_usize,
-    checked_payload_bytes, checked_stack_count, expect_int, expect_pointer, expect_string,
-    floor_div, runtime_add, runtime_add_int, runtime_array_pop, runtime_array_push,
+    checked_payload_bytes, expect_int, expect_pointer, expect_string, floor_div, pop_args,
+    runtime_add, runtime_add_int, runtime_array_pop, runtime_array_push,
     runtime_call_builtin, runtime_cast_pointer, runtime_compare, runtime_compare_int,
     runtime_get_field, runtime_index, runtime_is_false, runtime_make_array, runtime_make_buffer,
     runtime_make_field_pointer, runtime_make_pointer, runtime_make_struct, runtime_mul,
@@ -46,7 +48,7 @@ pub(crate) use runtime::{
     runtime_sub, runtime_sub_int, runtime_write_uint, validate_pointer_base,
 };
 pub use runtime::{
-    HeapRef, RawPointer, RuntimeValue, TinyHeapStats, TinyMemory, TinyRunReport, VM,
+    HeapRef, RawPointer, RuntimeValue, TinyHeapStats, TinyMemory, TinyRunReport, TypeKind, VM,
 };
 pub(crate) use source::SourceMap;
 pub(crate) use syntax::{Lexer, Token, TokenKind};

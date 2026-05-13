@@ -1,0 +1,39 @@
+# tinyone-stdlib/vec.to
+# Dynamic array (Vec<T>) wrapper module.
+#
+# Builtins used:
+#   vec_new() -> Vec
+#   vec_clear(v) -> 0
+#   push(v, x) -> new length
+#   pop(v) -> last value (runtime error if empty)
+#   len(v) -> length
+#   array(n, fill) -> heap array prefilled with `fill`
+#   v[index] / set v[index] = expr
+
+export fn new() {
+  return vec_new()
+}
+
+export fn with_capacity(cap, fill) {
+  return array(cap, fill)
+}
+
+export fn append(v, x) {
+  return push(v, x)
+}
+
+export fn remove_last(v) {
+  return pop(v)
+}
+
+export fn size(v) {
+  return len(v)
+}
+
+export fn clear(v) {
+  return vec_clear(v)
+}
+
+export fn at(v, index) {
+  return v[index]
+}

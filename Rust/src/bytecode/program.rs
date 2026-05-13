@@ -77,36 +77,12 @@ impl Program {
         for module in &self.modules {
             hash_string_u32(&mut hasher, &module.name);
             hash_string_u32(&mut hasher, &module.path);
-            let lists: [&[String]; 6] = [
-                &module
-                    .imports
-                    .iter()
-                    .map(|item| item.alias.clone())
-                    .collect::<Vec<_>>(),
-                &module
-                    .imports
-                    .iter()
-                    .map(|item| item.path.clone())
-                    .collect::<Vec<_>>(),
-                &module
-                    .imports
-                    .iter()
-                    .map(|item| item.module.clone())
-                    .collect::<Vec<_>>(),
-                &module
-                    .imports
-                    .iter()
-                    .map(|item| item.resolved.clone())
-                    .collect::<Vec<_>>(),
-                &module.exported_functions,
-                &module.exported_structs,
-            ];
-            for list in lists {
-                hasher.update((list.len() as u32).to_le_bytes());
-                for item in list {
-                    hash_string_u32(&mut hasher, item);
-                }
-            }
+            hash_string_list(&mut hasher, module.imports.iter().map(|item| &item.alias));
+            hash_string_list(&mut hasher, module.imports.iter().map(|item| &item.path));
+            hash_string_list(&mut hasher, module.imports.iter().map(|item| &item.module));
+            hash_string_list(&mut hasher, module.imports.iter().map(|item| &item.resolved));
+            hash_string_list(&mut hasher, module.exported_functions.iter());
+            hash_string_list(&mut hasher, module.exported_structs.iter());
         }
         let digest = hasher.finalize();
         hex::encode(&digest[..16])
@@ -131,4 +107,14 @@ fn hash_string_u64(hasher: &mut Blake2b512, value: &str) {
     let bytes = value.as_bytes();
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
+}
+
+fn hash_string_list<'a, I>(hasher: &mut Blake2b512, items: I)
+where
+    I: ExactSizeIterator<Item = &'a String>,
+{
+    hasher.update((items.len() as u32).to_le_bytes());
+    for item in items {
+        hash_string_u32(hasher, item);
+    }
 }

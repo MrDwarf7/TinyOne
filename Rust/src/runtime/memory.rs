@@ -36,34 +36,32 @@ impl TinyMemory {
         self.store(slot, Value::Int(value))
     }
 
-    pub(crate) fn add_int(&mut self, slot: usize, value: i64) -> Result<()> {
+    fn update_int_slot(
+        &mut self,
+        slot: usize,
+        op_name: &str,
+        op: impl FnOnce(i64) -> Option<i64>,
+    ) -> Result<()> {
         let target = self
             .values
             .get_mut(slot)
             .ok_or_else(|| TinyOneError::runtime(format!("Invalid memory slot {slot}")))?;
         let Value::Int(current) = target else {
-            return Err(TinyOneError::runtime("Addition expects integer operands"));
+            return Err(TinyOneError::runtime(format!(
+                "{op_name} expects integer operands"
+            )));
         };
-        *current = current
-            .checked_add(value)
-            .ok_or_else(|| TinyOneError::runtime("Addition overflow"))?;
+        *current = op(*current)
+            .ok_or_else(|| TinyOneError::runtime(format!("{op_name} overflow")))?;
         Ok(())
     }
 
+    pub(crate) fn add_int(&mut self, slot: usize, value: i64) -> Result<()> {
+        self.update_int_slot(slot, "Addition", |current| current.checked_add(value))
+    }
+
     pub(crate) fn sub_int(&mut self, slot: usize, value: i64) -> Result<()> {
-        let target = self
-            .values
-            .get_mut(slot)
-            .ok_or_else(|| TinyOneError::runtime(format!("Invalid memory slot {slot}")))?;
-        let Value::Int(current) = target else {
-            return Err(TinyOneError::runtime(
-                "Subtraction expects integer operands",
-            ));
-        };
-        *current = current
-            .checked_sub(value)
-            .ok_or_else(|| TinyOneError::runtime("Subtraction overflow"))?;
-        Ok(())
+        self.update_int_slot(slot, "Subtraction", |current| current.checked_sub(value))
     }
 
     pub fn snapshot(&self) -> Vec<Value> {

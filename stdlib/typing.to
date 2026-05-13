@@ -1,0 +1,54 @@
+# tinyone-stdlib/typing.to
+# Inspection and typed arithmetic helpers (typing_system.md §Primitive Scalar
+# Types).
+#
+# Names are passed to typed_* as strings: "i8", "i16", "i32", "i64",
+# "u8", "u16", "u32", "u64". Overflow raises Runtime.Memory_Overflow.
+#
+# `type_of`, `type_id`, `smallest_fit`, `promote`, `check_int_range`,
+# `typed_*`, and `assert` are direct builtin names; wrapper functions use
+# different names so they do not collide.
+
+export fn kind_of(value) {
+  return type_of(value)
+}
+
+export fn id(name) {
+  return type_id(name)
+}
+
+export fn fit(value) {
+  return smallest_fit(value)
+}
+
+export fn unify(lhs, rhs) {
+  return promote(lhs, rhs)
+}
+
+export fn within(value, type_name) {
+  return check_int_range(value, type_name)
+}
+
+export fn add(lhs, rhs, type_name) {
+  return typed_add(lhs, rhs, type_name)
+}
+
+export fn sub(lhs, rhs, type_name) {
+  return typed_sub(lhs, rhs, type_name)
+}
+
+export fn mul(lhs, rhs, type_name) {
+  return typed_mul(lhs, rhs, type_name)
+}
+
+export fn div(lhs, rhs, type_name) {
+  return typed_div(lhs, rhs, type_name)
+}
+
+export fn neg(value, type_name) {
+  return typed_neg(value, type_name)
+}
+
+export fn check(condition) {
+  return assert(condition)
+}

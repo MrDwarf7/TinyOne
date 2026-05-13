@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{Result, TinyHeap, TinyHeapStats, TinyOneError};
 
 #[derive(Debug)]
@@ -5,6 +7,10 @@ pub(crate) struct TinyRuntimeContext {
     pub(crate) heap: TinyHeap,
     pub(crate) inputs: Vec<String>,
     pub(crate) input_index: usize,
+    pub(crate) io_stdout: String,
+    pub(crate) io_stderr: String,
+    pub(crate) sys_args: Vec<String>,
+    pub(crate) sys_env: HashMap<String, String>,
 }
 
 impl TinyRuntimeContext {
@@ -13,6 +19,10 @@ impl TinyRuntimeContext {
             heap: TinyHeap::new(),
             inputs: inputs.into_iter().collect(),
             input_index: 0,
+            io_stdout: String::new(),
+            io_stderr: String::new(),
+            sys_args: Vec::new(),
+            sys_env: HashMap::new(),
         }
     }
 
@@ -31,6 +41,14 @@ impl TinyRuntimeContext {
 
     pub(crate) fn shutdown(&mut self) -> TinyHeapStats {
         self.heap.shutdown()
+    }
+
+    pub(crate) fn set_sys_args(&mut self, args: Vec<String>) {
+        self.sys_args = args;
+    }
+
+    pub(crate) fn set_sys_env(&mut self, env: HashMap<String, String>) {
+        self.sys_env = env;
     }
 }
 

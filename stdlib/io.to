@@ -1,0 +1,38 @@
+# tinyone-stdlib/io.to
+# I/O abstractions over deterministic stdin/stdout/stderr file descriptors.
+
+export fn stdout() {
+  return io_stdout()
+}
+
+export fn stderr() {
+  return io_stderr()
+}
+
+export fn stdin() {
+  return io_stdin()
+}
+
+export fn write(fd, text) {
+  return io_write(fd, text)
+}
+
+export fn writeln(fd, text) {
+  return io_writeln(fd, text)
+}
+
+export fn read_line() {
+  return io_read_line()
+}
+
+export fn flush(fd) {
+  return io_flush(fd)
+}
+
+export fn capture_stdout() {
+  return io_capture_stdout()
+}
+
+export fn capture_stderr() {
+  return io_capture_stderr()
+}

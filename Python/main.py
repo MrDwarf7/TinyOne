@@ -685,10 +685,94 @@ _BUILTINS: Final[tuple[BuiltinDef, ...]] = (
     BuiltinDef("read32", 1, 1, True),
     BuiltinDef("write32", 2, 2, True),
     BuiltinDef("cast_ptr", 2, 2),
+    # Phase 1 (Rust-canonical): push/pop ship in the first 35 slots and must
+    # mirror Rust order. Without these the Python verifier cannot accept any
+    # artifact emitted by Rust that uses push/pop.
+    BuiltinDef("push", 2, 2),
+    BuiltinDef("pop", 1, 1),
+    # ---- Phase 2 stdlib bridge builtins. Order must mirror Rust. ----
+    BuiltinDef("vec_new", 0, 0),
+    BuiltinDef("vec_clear", 1, 1),
+    BuiltinDef("map_new", 0, 0),
+    BuiltinDef("map_set", 3, 3),
+    BuiltinDef("map_get", 2, 2),
+    BuiltinDef("map_has", 2, 2),
+    BuiltinDef("map_del", 2, 2),
+    BuiltinDef("map_len", 1, 1),
+    BuiltinDef("map_keys", 1, 1),
+    BuiltinDef("map_values", 1, 1),
+    BuiltinDef("io_stdout", 0, 0),
+    BuiltinDef("io_stderr", 0, 0),
+    BuiltinDef("io_stdin", 0, 0),
+    BuiltinDef("io_write", 2, 2),
+    BuiltinDef("io_writeln", 2, 2),
+    BuiltinDef("io_read_line", 0, 0),
+    BuiltinDef("io_flush", 1, 1),
+    BuiltinDef("io_capture_stdout", 0, 0),
+    BuiltinDef("io_capture_stderr", 0, 0),
+    BuiltinDef("str_byte_len", 1, 1),
+    BuiltinDef("str_char_len", 1, 1),
+    BuiltinDef("str_byte_at", 2, 2),
+    BuiltinDef("str_char_at", 2, 2),
+    BuiltinDef("str_slice", 3, 3),
+    BuiltinDef("str_concat", 2, 2),
+    BuiltinDef("str_is_utf8", 1, 1),
+    BuiltinDef("str_from_buffer", 1, 1),
+    BuiltinDef("mutex_new", 0, 0),
+    BuiltinDef("mutex_lock", 1, 1),
+    BuiltinDef("mutex_unlock", 1, 1),
+    BuiltinDef("atomic_new", 1, 1),
+    BuiltinDef("atomic_load", 1, 1),
+    BuiltinDef("atomic_store", 2, 2),
+    BuiltinDef("atomic_add", 2, 2),
+    BuiltinDef("result_ok", 1, 1),
+    BuiltinDef("result_err", 1, 1),
+    BuiltinDef("result_is_ok", 1, 1),
+    BuiltinDef("result_is_err", 1, 1),
+    BuiltinDef("result_unwrap", 1, 1),
+    BuiltinDef("result_unwrap_err", 1, 1),
+    BuiltinDef("option_some", 1, 1),
+    BuiltinDef("option_none", 0, 0),
+    BuiltinDef("option_is_some", 1, 1),
+    BuiltinDef("option_is_none", 1, 1),
+    BuiltinDef("option_unwrap", 1, 1),
+    BuiltinDef("sys_argc", 0, 0),
+    BuiltinDef("sys_argv", 1, 1),
+    BuiltinDef("sys_env_has", 1, 1),
+    BuiltinDef("sys_env_get", 1, 1),
+    BuiltinDef("path_join", 2, 2),
+    BuiltinDef("path_basename", 1, 1),
+    BuiltinDef("path_dirname", 1, 1),
+    BuiltinDef("fs_read", 1, 1, True),
+    BuiltinDef("fs_write", 2, 2, True),
+    BuiltinDef("fs_exists", 1, 1),
+    BuiltinDef("fs_list_dir", 1, 1, True),
+    BuiltinDef("math_const", 1, 1),
+    BuiltinDef("math_abs", 1, 1),
+    BuiltinDef("math_min", 2, 2),
+    BuiltinDef("math_max", 2, 2),
+    BuiltinDef("logic_and", 2, 2),
+    BuiltinDef("logic_or", 2, 2),
+    BuiltinDef("logic_not", 1, 1),
+    BuiltinDef("logic_xor", 2, 2),
+    BuiltinDef("type_of", 1, 1),
+    BuiltinDef("type_id", 1, 1),
+    BuiltinDef("smallest_fit", 1, 1),
+    BuiltinDef("promote", 2, 2),
+    BuiltinDef("check_int_range", 2, 2),
+    BuiltinDef("typed_add", 3, 3),
+    BuiltinDef("typed_sub", 3, 3),
+    BuiltinDef("typed_mul", 3, 3),
+    BuiltinDef("typed_div", 3, 3),
+    BuiltinDef("typed_neg", 2, 2),
+    BuiltinDef("assert", 1, 2),
 )
 _BUILTIN_INDEXES: Final[dict[str, int]] = {
     builtin.name: index for index, builtin in enumerate(_BUILTINS)
 }
+# Test surface: re-exported so parity tests can compare against the Rust
+# canonical name table without touching private internals.
+BUILTINS_PUBLIC: Final[tuple[BuiltinDef, ...]] = _BUILTINS
 
 
 class SymbolTable:
@@ -1889,6 +1973,9 @@ class TinyHeap:
     def alloc_cell(self, value: Value) -> HeapRef:
         return self.alloc(HeapObject("cell", value))
 
+    def alloc_map(self, entries: Iterable[tuple[Value, Value]]) -> HeapRef:
+        return self.alloc(HeapObject("map", [(k, v) for k, v in entries]))
+
     def get(self, ref: Value) -> HeapObject:
         if not isinstance(ref, HeapRef):
             raise RuntimeTinyOneError("Expected heap pointer")
@@ -1926,12 +2013,35 @@ class TinyHeap:
 class TinyRuntimeContext:
     """Runtime state shared by stack frames: heap plus deterministic input."""
 
-    __slots__ = ("heap", "_inputs", "_input_index")
+    __slots__ = (
+        "heap",
+        "_inputs",
+        "_input_index",
+        "io_stdout",
+        "io_stderr",
+        "sys_args",
+        "sys_env",
+    )
 
-    def __init__(self, inputs: Iterable[object] | None = None) -> None:
+    def __init__(
+        self,
+        inputs: Iterable[object] | None = None,
+        *,
+        sys_args: Iterable[str] | None = None,
+        sys_env: dict[str, str] | None = None,
+    ) -> None:
         self.heap = TinyHeap()
         self._inputs = [str(value) for value in (inputs or ())]
         self._input_index = 0
+        # Phase 2 stdlib-bridge state:
+        # io_stdout/io_stderr collect bytes written via io_write/io_writeln
+        # (separate from the real Python stdout); sys_args/sys_env are
+        # deterministic, never touch the host process environment unless the
+        # caller passes them in explicitly.
+        self.io_stdout: list[str] = []
+        self.io_stderr: list[str] = []
+        self.sys_args: list[str] = list(sys_args or ())
+        self.sys_env: dict[str, str] = dict(sys_env or {})
 
     def read_raw(self) -> str:
         if self._input_index >= len(self._inputs):
@@ -2371,6 +2481,8 @@ def _b_len(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
         return len(obj.value) if isinstance(obj.value, (list, str, bytearray)) else 0
     if obj.kind == "struct":
         return len(obj.value) if isinstance(obj.value, dict) else 0
+    if obj.kind == "map":
+        return len(obj.value) if isinstance(obj.value, list) else 0
     raise RuntimeTinyOneError(f"len() does not support {obj.kind}")
 
 
@@ -2525,6 +2637,891 @@ def _b_cast_ptr(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
     return runtime_cast_pointer(ctx, args[0], args[1])
 
 
+# ---------------------------------------------------------------------------
+# push/pop bring Python parity with the Rust BUILTINS table indices 33/34.
+# Without these, Python verifies and runs Rust-generated artifacts that use
+# dynamic array growth incorrectly. See `BUILTINS` in Rust/src/builtins.rs.
+# ---------------------------------------------------------------------------
+
+
+def _b_push(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "array":
+        raise RuntimeTinyOneError(
+            f"push() expects an array, got {obj.kind}"
+        )
+    values = obj.value
+    if not isinstance(values, list):
+        raise RuntimeTinyOneError("Corrupt array object")
+    if len(values) >= 65_536:
+        raise RuntimeTinyOneError("push() exceeds maximum length 65536")
+    values.append(args[1])
+    return len(values)
+
+
+def _b_pop(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "array":
+        raise RuntimeTinyOneError(
+            f"pop() expects an array, got {obj.kind}"
+        )
+    values = obj.value
+    if not isinstance(values, list):
+        raise RuntimeTinyOneError("Corrupt array object")
+    if not values:
+        raise RuntimeTinyOneError("pop() cannot pop from an empty array")
+    return values.pop()
+
+
+# ---------------------------------------------------------------------------
+# TinyOne typing system (mirror of Rust/src/runtime/typing.rs).
+#
+# Type IDs MUST match the Rust ordinals; the parity tests confirm that.
+# ---------------------------------------------------------------------------
+
+
+class TypeKind:
+    UNIT = "unit"
+    BOOL = "bool"
+    I8 = "i8"
+    I16 = "i16"
+    I32 = "i32"
+    I64 = "i64"
+    U8 = "u8"
+    U16 = "u16"
+    U32 = "u32"
+    U64 = "u64"
+    BF16 = "bf16"
+    FP16 = "fp16"
+    FP32 = "fp32"
+    FP64 = "fp64"
+    CHAR = "Char"
+    STRING = "String"
+    CHAR_BUFFER = "CharBuffer"
+    ARRAY = "Array"
+    VEC = "Vec"
+    BUFFER = "Buffer"
+    MAP = "Map"
+    DICTIONARY = "Dictionary"
+    STRUCT = "Struct"
+    RECORD = "Record"
+    POINTER = "Pointer"
+    REFERENCE = "Reference"
+    BOX = "Box"
+    ALLOC = "Alloc"
+    FUNCTION = "Function"
+    CLOSURE = "Closure"
+    SUM = "Sum"
+    ENUM = "Enum"
+    TAGGED_UNION = "TaggedUnion"
+    PHANTOM = "Phantom"
+    ZST = "Zst"
+    UNSAFE = "Unsafe"
+    DYN = "Dyn"
+    NULL = "Null"
+    RESULT = "Result"
+    OPTION = "Option"
+    FILE_DESCRIPTOR = "FileDescriptor"
+    MUTEX = "Mutex"
+    ATOMIC = "Atomic"
+
+
+_TYPE_KIND_IDS: Final[dict[str, int]] = {
+    "unit": 0,
+    "bool": 1,
+    "i8": 2,
+    "i16": 3,
+    "i32": 4,
+    "i64": 5,
+    "u8": 6,
+    "u16": 7,
+    "u32": 8,
+    "u64": 9,
+    "bf16": 10,
+    "fp16": 11,
+    "fp32": 12,
+    "fp64": 13,
+    "Char": 14,
+    "String": 15,
+    "CharBuffer": 16,
+    "Array": 17,
+    "Vec": 18,
+    "Buffer": 19,
+    "Map": 20,
+    "Dictionary": 21,
+    "Struct": 22,
+    "Record": 23,
+    "Pointer": 24,
+    "Reference": 25,
+    "Box": 26,
+    "Alloc": 27,
+    "Function": 28,
+    "Closure": 29,
+    "Sum": 30,
+    "Enum": 31,
+    "TaggedUnion": 32,
+    "Phantom": 33,
+    "Zst": 34,
+    "Unsafe": 35,
+    "Dyn": 36,
+    "Null": 37,
+    "Result": 38,
+    "Option": 39,
+    "FileDescriptor": 40,
+    "Mutex": 41,
+    "Atomic": 42,
+}
+
+_INT_RANGES: Final[dict[str, tuple[int, int]]] = {
+    "i8": (-(1 << 7), (1 << 7) - 1),
+    "i16": (-(1 << 15), (1 << 15) - 1),
+    "i32": (-(1 << 31), (1 << 31) - 1),
+    "i64": (-(1 << 63), (1 << 63) - 1),
+    "u8": (0, (1 << 8) - 1),
+    "u16": (0, (1 << 16) - 1),
+    "u32": (0, (1 << 32) - 1),
+    "u64": (0, (1 << 64) - 1),
+}
+
+_INT_BITS: Final[dict[str, int]] = {
+    "i8": 8, "i16": 16, "i32": 32, "i64": 64,
+    "u8": 8, "u16": 16, "u32": 32, "u64": 64,
+}
+
+
+def _is_signed(name: str) -> bool:
+    return name in ("i8", "i16", "i32", "i64")
+
+
+def _is_unsigned(name: str) -> bool:
+    return name in ("u8", "u16", "u32", "u64")
+
+
+def _is_integer(name: str) -> bool:
+    return _is_signed(name) or _is_unsigned(name)
+
+
+def typing_smallest_fit(value: int) -> str:
+    """Mirror of Rust `smallest_fit_literal`."""
+    if value >= 0:
+        if value <= 0xFF:
+            return "u8"
+        if value <= 0xFFFF:
+            return "u16"
+        if value <= 0xFFFF_FFFF:
+            return "u32"
+        return "u64"
+    if -(1 << 7) <= value <= (1 << 7) - 1:
+        return "i8"
+    if -(1 << 15) <= value <= (1 << 15) - 1:
+        return "i16"
+    if -(1 << 31) <= value <= (1 << 31) - 1:
+        return "i32"
+    return "i64"
+
+
+def typing_promote(lhs: str, rhs: str) -> str:
+    """Mirror of Rust `promote_integer` — spec rule:
+       target_bits = min(64, max(lhs_bits, rhs_bits) * 2)
+       target signed if either operand signed."""
+    if not _is_integer(lhs) or not _is_integer(rhs):
+        raise RuntimeTinyOneError("integer promotion requires integer operands")
+    if lhs == rhs:
+        return lhs
+    target_signed = _is_signed(lhs) or _is_signed(rhs)
+    target_bits = min(64, max(_INT_BITS[lhs], _INT_BITS[rhs]) * 2)
+    table = {
+        (False, 8): "u8", (False, 16): "u16", (False, 32): "u32", (False, 64): "u64",
+        (True, 8): "i8", (True, 16): "i16", (True, 32): "i32", (True, 64): "i64",
+    }
+    # round target_bits up to nearest defined width
+    for bits in (8, 16, 32, 64):
+        if target_bits <= bits:
+            return table[(target_signed, bits)]
+    return "u64" if not target_signed else "i64"
+
+
+def typing_check_range(kind: str, value: int) -> int:
+    if kind not in _INT_RANGES:
+        raise RuntimeTinyOneError(f"{kind!r} is not an integer type with a defined range")
+    lo, hi = _INT_RANGES[kind]
+    if value < lo or value > hi:
+        raise RuntimeTinyOneError(
+            f"Runtime.Memory_Overflow: {value} out of range for {kind}"
+        )
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Stdlib bridges (mirror of Rust/src/runtime/stdlib.rs).
+# ---------------------------------------------------------------------------
+
+
+def _b_vec_new(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return ctx.heap.alloc_array([])
+
+
+def _b_vec_clear(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "array" or not isinstance(obj.value, list):
+        raise RuntimeTinyOneError("vec_clear expects a vec/array")
+    obj.value.clear()
+    return 0
+
+
+def _b_map_new(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return ctx.heap.alloc_map([])
+
+
+def _map_key_equal(ctx: TinyRuntimeContext, lhs: Value, rhs: Value) -> bool:
+    if isinstance(lhs, int) and isinstance(rhs, int):
+        return lhs == rhs
+    if isinstance(lhs, RawPointer) and isinstance(rhs, RawPointer):
+        return (
+            lhs.kind == rhs.kind
+            and lhs.address == rhs.address
+            and lhs.index == rhs.index
+            and lhs.field == rhs.field
+        )
+    if isinstance(lhs, HeapRef) and isinstance(rhs, HeapRef):
+        lobj = ctx.heap.get(lhs)
+        robj = ctx.heap.get(rhs)
+        if lobj.kind == "string" and robj.kind == "string":
+            return lobj.value == robj.value
+        return lhs.address == rhs.address and lhs.generation == rhs.generation
+    return False
+
+
+def _b_map_set(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "map" or not isinstance(obj.value, list):
+        raise RuntimeTinyOneError("map_set expects a map")
+    entries = obj.value
+    key, value = args[1], args[2]
+    for i, (k, _) in enumerate(entries):
+        if _map_key_equal(ctx, k, key):
+            entries[i] = (k, value)
+            return value
+    entries.append((key, value))
+    return value
+
+
+def _b_map_get(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "map" or not isinstance(obj.value, list):
+        raise RuntimeTinyOneError("map_get expects a map")
+    for k, v in obj.value:
+        if _map_key_equal(ctx, k, args[1]):
+            return v
+    raise RuntimeTinyOneError("map_get: missing key")
+
+
+def _b_map_has(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "map" or not isinstance(obj.value, list):
+        raise RuntimeTinyOneError("map_has expects a map")
+    return 1 if any(_map_key_equal(ctx, k, args[1]) for k, _ in obj.value) else 0
+
+
+def _b_map_del(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "map" or not isinstance(obj.value, list):
+        raise RuntimeTinyOneError("map_del expects a map")
+    before = len(obj.value)
+    obj.value[:] = [(k, v) for k, v in obj.value if not _map_key_equal(ctx, k, args[1])]
+    return 1 if before != len(obj.value) else 0
+
+
+def _b_map_len(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "map" or not isinstance(obj.value, list):
+        raise RuntimeTinyOneError("map_len expects a map")
+    return len(obj.value)
+
+
+def _b_map_keys(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "map" or not isinstance(obj.value, list):
+        raise RuntimeTinyOneError("map_keys expects a map")
+    return ctx.heap.alloc_array([k for k, _ in obj.value])
+
+
+def _b_map_values(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "map" or not isinstance(obj.value, list):
+        raise RuntimeTinyOneError("map_values expects a map")
+    return ctx.heap.alloc_array([v for _, v in obj.value])
+
+
+# I/O fds: keep identical to Rust constants.
+
+IO_FD_STDIN = 0
+IO_FD_STDOUT = 1
+IO_FD_STDERR = 2
+
+
+def _b_io_stdout(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return IO_FD_STDOUT
+
+
+def _b_io_stderr(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return IO_FD_STDERR
+
+
+def _b_io_stdin(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return IO_FD_STDIN
+
+
+def _b_io_write(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    fd = runtime_expect_int(args[0], "io_write")
+    text = runtime_expect_string(ctx, args[1], "io_write")
+    encoded = text.encode("utf-8")
+    if fd == IO_FD_STDOUT:
+        ctx.io_stdout.append(text)
+    elif fd == IO_FD_STDERR:
+        ctx.io_stderr.append(text)
+    elif fd == IO_FD_STDIN:
+        raise RuntimeTinyOneError("io_write: cannot write to stdin (fd 0)")
+    else:
+        raise RuntimeTinyOneError(f"io_write: unsupported fd {fd}")
+    return len(encoded)
+
+
+def _b_io_writeln(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    fd = runtime_expect_int(args[0], "io_writeln")
+    text = runtime_expect_string(ctx, args[1], "io_writeln")
+    encoded = text.encode("utf-8")
+    if fd == IO_FD_STDOUT:
+        ctx.io_stdout.append(text)
+        ctx.io_stdout.append("\n")
+    elif fd == IO_FD_STDERR:
+        ctx.io_stderr.append(text)
+        ctx.io_stderr.append("\n")
+    elif fd == IO_FD_STDIN:
+        raise RuntimeTinyOneError("io_writeln: cannot write to stdin (fd 0)")
+    else:
+        raise RuntimeTinyOneError(f"io_writeln: unsupported fd {fd}")
+    return len(encoded) + 1
+
+
+def _b_io_read_line(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return ctx.heap.alloc_string(ctx.read_raw())
+
+
+def _b_io_flush(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return 0
+
+
+def _b_io_capture_stdout(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    text = "".join(ctx.io_stdout)
+    ctx.io_stdout.clear()
+    return ctx.heap.alloc_string(text)
+
+
+def _b_io_capture_stderr(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    text = "".join(ctx.io_stderr)
+    ctx.io_stderr.clear()
+    return ctx.heap.alloc_string(text)
+
+
+# String / Unicode helpers.
+
+def _b_str_byte_len(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    text = runtime_expect_string(ctx, args[0], "str_byte_len")
+    return len(text.encode("utf-8"))
+
+
+def _b_str_char_len(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    text = runtime_expect_string(ctx, args[0], "str_char_len")
+    return len(text)
+
+
+def _b_str_byte_at(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    text = runtime_expect_string(ctx, args[0], "str_byte_at")
+    index = runtime_expect_int(args[1], "str_byte_at")
+    if index < 0:
+        raise RuntimeTinyOneError("str_byte_at: negative index")
+    data = text.encode("utf-8")
+    if index >= len(data):
+        raise RuntimeTinyOneError("str_byte_at: index out of bounds")
+    return data[index]
+
+
+def _b_str_char_at(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    text = runtime_expect_string(ctx, args[0], "str_char_at")
+    index = runtime_expect_int(args[1], "str_char_at")
+    if index < 0:
+        raise RuntimeTinyOneError("str_char_at: negative index")
+    if index >= len(text):
+        raise RuntimeTinyOneError("str_char_at: index out of bounds")
+    return ctx.heap.alloc_string(text[index])
+
+
+def _b_str_slice(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    text = runtime_expect_string(ctx, args[0], "str_slice")
+    start = runtime_expect_int(args[1], "str_slice")
+    end = runtime_expect_int(args[2], "str_slice")
+    if start < 0 or end < 0:
+        raise RuntimeTinyOneError("str_slice: negative bound")
+    if end < start:
+        raise RuntimeTinyOneError("str_slice: end < start")
+    if start > len(text) or end > len(text):
+        raise RuntimeTinyOneError("str_slice: bound out of range")
+    return ctx.heap.alloc_string(text[start:end])
+
+
+def _b_str_concat(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    left = runtime_expect_string(ctx, args[0], "str_concat")
+    right = runtime_expect_string(ctx, args[1], "str_concat")
+    return ctx.heap.alloc_string(left + right)
+
+
+def _b_str_is_utf8(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind == "string":
+        return 1
+    if obj.kind == "buffer":
+        try:
+            bytes(obj.value).decode("utf-8")
+            return 1
+        except UnicodeDecodeError:
+            return 0
+    raise RuntimeTinyOneError("str_is_utf8 expects a String or Buffer")
+
+
+def _b_str_from_buffer(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "buffer":
+        raise RuntimeTinyOneError("str_from_buffer expects a Buffer")
+    try:
+        text = bytes(obj.value).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RuntimeTinyOneError("str_from_buffer: invalid UTF-8") from error
+    return ctx.heap.alloc_string(text)
+
+
+# Threading / Sync.
+
+def _b_mutex_new(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return ctx.heap.alloc_struct("tinyone.sync.Mutex", {"locked": 0})
+
+
+def _b_mutex_lock(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "struct" or not isinstance(obj.value, dict):
+        raise RuntimeTinyOneError("mutex_lock expects a Mutex")
+    state = obj.value.get("locked")
+    if not isinstance(state, int):
+        raise RuntimeTinyOneError("mutex_lock: corrupt mutex state")
+    if state != 0:
+        raise RuntimeTinyOneError("mutex_lock: already locked (deadlock)")
+    obj.value["locked"] = 1
+    return 1
+
+
+def _b_mutex_unlock(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "struct" or not isinstance(obj.value, dict):
+        raise RuntimeTinyOneError("mutex_unlock expects a Mutex")
+    state = obj.value.get("locked")
+    if not isinstance(state, int):
+        raise RuntimeTinyOneError("mutex_unlock: corrupt mutex state")
+    if state == 0:
+        raise RuntimeTinyOneError("mutex_unlock: not locked")
+    obj.value["locked"] = 0
+    return 0
+
+
+def _b_atomic_new(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    init = runtime_expect_int(args[0], "atomic_new")
+    return ctx.heap.alloc_struct("tinyone.sync.Atomic", {"value": init})
+
+
+def _b_atomic_load(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "struct" or not isinstance(obj.value, dict):
+        raise RuntimeTinyOneError("atomic_load expects an Atomic")
+    return obj.value["value"]
+
+
+def _b_atomic_store(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    new_value = runtime_expect_int(args[1], "atomic_store")
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "struct" or not isinstance(obj.value, dict):
+        raise RuntimeTinyOneError("atomic_store expects an Atomic")
+    obj.value["value"] = new_value
+    return new_value
+
+
+def _b_atomic_add(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    delta = runtime_expect_int(args[1], "atomic_add")
+    obj = ctx.heap.get(args[0])
+    if obj.kind != "struct" or not isinstance(obj.value, dict):
+        raise RuntimeTinyOneError("atomic_add expects an Atomic")
+    current = obj.value.get("value")
+    if not isinstance(current, int):
+        raise RuntimeTinyOneError("atomic_add: corrupt atomic state")
+    nxt = current + delta
+    if nxt < -(1 << 63) or nxt > (1 << 63) - 1:
+        raise RuntimeTinyOneError("Runtime.Memory_Overflow: atomic_add overflow")
+    obj.value["value"] = nxt
+    return nxt
+
+
+# Result / Option.
+
+_VARIANT_OK = 1
+_VARIANT_ERR = 0
+_VARIANT_SOME = 1
+_VARIANT_NONE = 0
+
+
+def _b_result_ok(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return ctx.heap.alloc_struct(
+        "tinyone.result.Result", {"tag": _VARIANT_OK, "payload": args[0]}
+    )
+
+
+def _b_result_err(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return ctx.heap.alloc_struct(
+        "tinyone.result.Result", {"tag": _VARIANT_ERR, "payload": args[0]}
+    )
+
+
+def _variant_tag(ctx: TinyRuntimeContext, target: Value, type_name: str, op: str) -> int:
+    obj = ctx.heap.get(target)
+    if obj.type_name != type_name:
+        raise RuntimeTinyOneError(
+            f"{op}: expected {type_name}, got {obj.type_name!r}"
+        )
+    if obj.kind != "struct" or not isinstance(obj.value, dict):
+        raise RuntimeTinyOneError(f"{op}: corrupt {type_name}")
+    tag = obj.value.get("tag")
+    if not isinstance(tag, int):
+        raise RuntimeTinyOneError(f"{op}: tag must be an integer")
+    return tag
+
+
+def _variant_payload(ctx: TinyRuntimeContext, target: Value, type_name: str, op: str) -> Value:
+    obj = ctx.heap.get(target)
+    if obj.type_name != type_name:
+        raise RuntimeTinyOneError(
+            f"{op}: expected {type_name}, got {obj.type_name!r}"
+        )
+    if obj.kind != "struct" or not isinstance(obj.value, dict):
+        raise RuntimeTinyOneError(f"{op}: corrupt {type_name}")
+    return obj.value.get("payload", 0)
+
+
+def _b_result_is_ok(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return 1 if _variant_tag(ctx, args[0], "tinyone.result.Result", "result_is_ok") == _VARIANT_OK else 0
+
+
+def _b_result_is_err(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return 1 if _variant_tag(ctx, args[0], "tinyone.result.Result", "result_is_err") == _VARIANT_ERR else 0
+
+
+def _b_result_unwrap(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    if _variant_tag(ctx, args[0], "tinyone.result.Result", "result_unwrap") != _VARIANT_OK:
+        raise RuntimeTinyOneError("result_unwrap: called on Err")
+    return _variant_payload(ctx, args[0], "tinyone.result.Result", "result_unwrap")
+
+
+def _b_result_unwrap_err(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    if _variant_tag(ctx, args[0], "tinyone.result.Result", "result_unwrap_err") != _VARIANT_ERR:
+        raise RuntimeTinyOneError("result_unwrap_err: called on Ok")
+    return _variant_payload(ctx, args[0], "tinyone.result.Result", "result_unwrap_err")
+
+
+def _b_option_some(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return ctx.heap.alloc_struct(
+        "tinyone.option.Option", {"tag": _VARIANT_SOME, "payload": args[0]}
+    )
+
+
+def _b_option_none(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return ctx.heap.alloc_struct(
+        "tinyone.option.Option", {"tag": _VARIANT_NONE, "payload": 0}
+    )
+
+
+def _b_option_is_some(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return 1 if _variant_tag(ctx, args[0], "tinyone.option.Option", "option_is_some") == _VARIANT_SOME else 0
+
+
+def _b_option_is_none(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return 1 if _variant_tag(ctx, args[0], "tinyone.option.Option", "option_is_none") == _VARIANT_NONE else 0
+
+
+def _b_option_unwrap(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    if _variant_tag(ctx, args[0], "tinyone.option.Option", "option_unwrap") != _VARIANT_SOME:
+        raise RuntimeTinyOneError("option_unwrap: called on None")
+    return _variant_payload(ctx, args[0], "tinyone.option.Option", "option_unwrap")
+
+
+# System introspection.
+
+def _b_sys_argc(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return len(ctx.sys_args)
+
+
+def _b_sys_argv(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    index = runtime_expect_int(args[0], "sys_argv")
+    if index < 0 or index >= len(ctx.sys_args):
+        raise RuntimeTinyOneError("sys_argv: index out of range")
+    return ctx.heap.alloc_string(ctx.sys_args[index])
+
+
+def _b_sys_env_has(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    key = runtime_expect_string(ctx, args[0], "sys_env_has")
+    return 1 if key in ctx.sys_env else 0
+
+
+def _b_sys_env_get(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    key = runtime_expect_string(ctx, args[0], "sys_env_get")
+    if key not in ctx.sys_env:
+        raise RuntimeTinyOneError(f"sys_env_get: missing variable {key!r}")
+    return ctx.heap.alloc_string(ctx.sys_env[key])
+
+
+# Path / FS.
+
+def _b_path_join(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    left = runtime_expect_string(ctx, args[0], "path_join")
+    right = runtime_expect_string(ctx, args[1], "path_join")
+    if right.startswith("/"):
+        joined = right
+    elif not left:
+        joined = right
+    elif left.endswith("/"):
+        joined = left + right
+    else:
+        joined = f"{left}/{right}"
+    return ctx.heap.alloc_string(joined)
+
+
+def _b_path_basename(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    path = runtime_expect_string(ctx, args[0], "path_basename")
+    return ctx.heap.alloc_string(Path(path).name)
+
+
+def _b_path_dirname(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    path = runtime_expect_string(ctx, args[0], "path_dirname")
+    parent = Path(path).parent
+    rendered = str(parent) if str(parent) != "." or path.startswith(("/", ".")) else ""
+    if rendered == "." and not path.startswith("."):
+        rendered = ""
+    return ctx.heap.alloc_string(rendered if rendered != "." else "")
+
+
+def _b_fs_read(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    path = runtime_expect_string(ctx, args[0], "fs_read")
+    try:
+        data = Path(path).read_bytes()
+    except OSError as error:
+        raise RuntimeTinyOneError(f"fs_read: {error}") from error
+    return ctx.heap.alloc(HeapObject("buffer", bytearray(data)))
+
+
+def _b_fs_write(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    path = runtime_expect_string(ctx, args[0], "fs_write")
+    obj = ctx.heap.get(args[1])
+    if obj.kind != "buffer" or not isinstance(obj.value, bytearray):
+        raise RuntimeTinyOneError("fs_write expects a buffer payload")
+    try:
+        Path(path).write_bytes(bytes(obj.value))
+    except OSError as error:
+        raise RuntimeTinyOneError(f"fs_write: {error}") from error
+    return len(obj.value)
+
+
+def _b_fs_exists(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    path = runtime_expect_string(ctx, args[0], "fs_exists")
+    return 1 if Path(path).exists() else 0
+
+
+def _b_fs_list_dir(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    path = runtime_expect_string(ctx, args[0], "fs_list_dir")
+    try:
+        entries = sorted(p.name for p in Path(path).iterdir())
+    except OSError as error:
+        raise RuntimeTinyOneError(f"fs_list_dir: {error}") from error
+    return ctx.heap.alloc_array([ctx.heap.alloc_string(name) for name in entries])
+
+
+# Math / Logic.
+
+_MATH_CONSTANTS: Final[dict[str, int]] = {
+    "PI_THOUSANDTHS": 3142,
+    "E_THOUSANDTHS": 2718,
+    "TAU_THOUSANDTHS": 6283,
+    "MAX_I64": (1 << 63) - 1,
+    "MIN_I64": -(1 << 63),
+}
+
+
+def _b_math_const(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    key = runtime_expect_string(ctx, args[0], "math_const")
+    if key not in _MATH_CONSTANTS:
+        raise RuntimeTinyOneError(f"math_const: unknown constant {key!r}")
+    return _MATH_CONSTANTS[key]
+
+
+def _b_math_abs(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    value = runtime_expect_int(args[0], "math_abs")
+    result = -value if value < 0 else value
+    if result < -(1 << 63) or result > (1 << 63) - 1:
+        raise RuntimeTinyOneError("Runtime.Memory_Overflow: math_abs")
+    return result
+
+
+def _b_math_min(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return min(
+        runtime_expect_int(args[0], "math_min"),
+        runtime_expect_int(args[1], "math_min"),
+    )
+
+
+def _b_math_max(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return max(
+        runtime_expect_int(args[0], "math_max"),
+        runtime_expect_int(args[1], "math_max"),
+    )
+
+
+def _b_logic_and(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    a = runtime_expect_int(args[0], "logic_and")
+    b = runtime_expect_int(args[1], "logic_and")
+    return 1 if a != 0 and b != 0 else 0
+
+
+def _b_logic_or(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    a = runtime_expect_int(args[0], "logic_or")
+    b = runtime_expect_int(args[1], "logic_or")
+    return 1 if a != 0 or b != 0 else 0
+
+
+def _b_logic_not(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return 1 if runtime_expect_int(args[0], "logic_not") == 0 else 0
+
+
+def _b_logic_xor(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    a = runtime_expect_int(args[0], "logic_xor") != 0
+    b = runtime_expect_int(args[1], "logic_xor") != 0
+    return 1 if a != b else 0
+
+
+# Typing-system builtins.
+
+def _b_type_of(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    value = args[0]
+    if isinstance(value, int):
+        return ctx.heap.alloc_string(TypeKind.I64)
+    if isinstance(value, RawPointer):
+        if runtime_is_null(value):
+            return ctx.heap.alloc_string(TypeKind.NULL)
+        return ctx.heap.alloc_string(TypeKind.POINTER)
+    if isinstance(value, HeapRef):
+        obj = ctx.heap.get(value)
+        if obj.kind == "string":
+            return ctx.heap.alloc_string(TypeKind.STRING)
+        if obj.kind == "array":
+            return ctx.heap.alloc_string(TypeKind.VEC)
+        if obj.kind == "buffer":
+            return ctx.heap.alloc_string(TypeKind.BUFFER)
+        if obj.kind == "map":
+            return ctx.heap.alloc_string(TypeKind.MAP)
+        if obj.kind == "cell":
+            return ctx.heap.alloc_string(TypeKind.ALLOC)
+        if obj.kind == "struct":
+            if obj.type_name == "tinyone.result.Result":
+                return ctx.heap.alloc_string(TypeKind.RESULT)
+            if obj.type_name == "tinyone.option.Option":
+                return ctx.heap.alloc_string(TypeKind.OPTION)
+            if obj.type_name == "tinyone.sync.Mutex":
+                return ctx.heap.alloc_string(TypeKind.MUTEX)
+            if obj.type_name == "tinyone.sync.Atomic":
+                return ctx.heap.alloc_string(TypeKind.ATOMIC)
+            return ctx.heap.alloc_string(TypeKind.STRUCT)
+    raise RuntimeTinyOneError("type_of: unsupported value")
+
+
+def _b_type_id(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    name = runtime_expect_string(ctx, args[0], "type_id")
+    if name not in _TYPE_KIND_IDS:
+        raise RuntimeTinyOneError(f"type_id: unknown type {name!r}")
+    return _TYPE_KIND_IDS[name]
+
+
+def _b_smallest_fit(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    value = runtime_expect_int(args[0], "smallest_fit")
+    return ctx.heap.alloc_string(typing_smallest_fit(value))
+
+
+def _b_promote(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    lhs = runtime_expect_string(ctx, args[0], "promote")
+    rhs = runtime_expect_string(ctx, args[1], "promote")
+    return ctx.heap.alloc_string(typing_promote(lhs, rhs))
+
+
+def _b_check_int_range(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    value = runtime_expect_int(args[0], "check_int_range")
+    name = runtime_expect_string(ctx, args[1], "check_int_range")
+    return typing_check_range(name, value)
+
+
+def _typed_arith(
+    ctx: TinyRuntimeContext,
+    args: list[Value],
+    operation: str,
+    op: Callable[[int, int], int],
+) -> Value:
+    lhs = runtime_expect_int(args[0], operation)
+    rhs = runtime_expect_int(args[1], operation)
+    name = runtime_expect_string(ctx, args[2], operation)
+    if name not in _INT_RANGES:
+        raise RuntimeTinyOneError(f"{operation}: {name!r} is not an integer type")
+    if operation == "typed_div" and rhs == 0:
+        raise RuntimeTinyOneError("Runtime.Division_By_Zero")
+    result = op(lhs, rhs)
+    return typing_check_range(name, result)
+
+
+def _b_typed_add(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return _typed_arith(ctx, args, "typed_add", lambda a, b: a + b)
+
+
+def _b_typed_sub(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return _typed_arith(ctx, args, "typed_sub", lambda a, b: a - b)
+
+
+def _b_typed_mul(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return _typed_arith(ctx, args, "typed_mul", lambda a, b: a * b)
+
+
+def _b_typed_div(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    return _typed_arith(ctx, args, "typed_div", lambda a, b: a // b)
+
+
+def _b_typed_neg(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    value = runtime_expect_int(args[0], "typed_neg")
+    name = runtime_expect_string(ctx, args[1], "typed_neg")
+    if not _is_signed(name):
+        raise RuntimeTinyOneError(f"typed_neg: {name} is not signed")
+    return typing_check_range(name, -value)
+
+
+def _b_assert(ctx: TinyRuntimeContext, args: list[Value]) -> Value:
+    value = runtime_expect_int(args[0], "assert")
+    if value == 0:
+        if len(args) > 1:
+            detail = runtime_expect_string(ctx, args[1], "assert")
+        else:
+            detail = "assertion failed"
+        raise RuntimeTinyOneError(f"Assertion failed: {detail}")
+    return 1
+
+
 _BUILTIN_DISPATCH: Final[dict[str, Callable[[TinyRuntimeContext, list[Value]], Value]]] = {
     "len":        _b_len,
     "array":      _b_array,
@@ -2559,6 +3556,85 @@ _BUILTIN_DISPATCH: Final[dict[str, Callable[[TinyRuntimeContext, list[Value]], V
     "read32":     _b_read32,
     "write32":    _b_write32,
     "cast_ptr":   _b_cast_ptr,
+    "push":       _b_push,
+    "pop":        _b_pop,
+    # Phase 2 stdlib bridge handlers (must be present for every BuiltinDef
+    # entry added after slot 34).
+    "vec_new":          _b_vec_new,
+    "vec_clear":        _b_vec_clear,
+    "map_new":          _b_map_new,
+    "map_set":          _b_map_set,
+    "map_get":          _b_map_get,
+    "map_has":          _b_map_has,
+    "map_del":          _b_map_del,
+    "map_len":          _b_map_len,
+    "map_keys":         _b_map_keys,
+    "map_values":       _b_map_values,
+    "io_stdout":        _b_io_stdout,
+    "io_stderr":        _b_io_stderr,
+    "io_stdin":         _b_io_stdin,
+    "io_write":         _b_io_write,
+    "io_writeln":       _b_io_writeln,
+    "io_read_line":     _b_io_read_line,
+    "io_flush":         _b_io_flush,
+    "io_capture_stdout": _b_io_capture_stdout,
+    "io_capture_stderr": _b_io_capture_stderr,
+    "str_byte_len":     _b_str_byte_len,
+    "str_char_len":     _b_str_char_len,
+    "str_byte_at":      _b_str_byte_at,
+    "str_char_at":      _b_str_char_at,
+    "str_slice":        _b_str_slice,
+    "str_concat":       _b_str_concat,
+    "str_is_utf8":      _b_str_is_utf8,
+    "str_from_buffer":  _b_str_from_buffer,
+    "mutex_new":        _b_mutex_new,
+    "mutex_lock":       _b_mutex_lock,
+    "mutex_unlock":     _b_mutex_unlock,
+    "atomic_new":       _b_atomic_new,
+    "atomic_load":      _b_atomic_load,
+    "atomic_store":     _b_atomic_store,
+    "atomic_add":       _b_atomic_add,
+    "result_ok":        _b_result_ok,
+    "result_err":       _b_result_err,
+    "result_is_ok":     _b_result_is_ok,
+    "result_is_err":    _b_result_is_err,
+    "result_unwrap":    _b_result_unwrap,
+    "result_unwrap_err": _b_result_unwrap_err,
+    "option_some":      _b_option_some,
+    "option_none":      _b_option_none,
+    "option_is_some":   _b_option_is_some,
+    "option_is_none":   _b_option_is_none,
+    "option_unwrap":    _b_option_unwrap,
+    "sys_argc":         _b_sys_argc,
+    "sys_argv":         _b_sys_argv,
+    "sys_env_has":      _b_sys_env_has,
+    "sys_env_get":      _b_sys_env_get,
+    "path_join":        _b_path_join,
+    "path_basename":    _b_path_basename,
+    "path_dirname":     _b_path_dirname,
+    "fs_read":          _b_fs_read,
+    "fs_write":         _b_fs_write,
+    "fs_exists":        _b_fs_exists,
+    "fs_list_dir":      _b_fs_list_dir,
+    "math_const":       _b_math_const,
+    "math_abs":         _b_math_abs,
+    "math_min":         _b_math_min,
+    "math_max":         _b_math_max,
+    "logic_and":        _b_logic_and,
+    "logic_or":         _b_logic_or,
+    "logic_not":        _b_logic_not,
+    "logic_xor":        _b_logic_xor,
+    "type_of":          _b_type_of,
+    "type_id":          _b_type_id,
+    "smallest_fit":     _b_smallest_fit,
+    "promote":          _b_promote,
+    "check_int_range": _b_check_int_range,
+    "typed_add":        _b_typed_add,
+    "typed_sub":        _b_typed_sub,
+    "typed_mul":        _b_typed_mul,
+    "typed_div":        _b_typed_div,
+    "typed_neg":        _b_typed_neg,
+    "assert":           _b_assert,
 }
 
 def runtime_call_builtin(
@@ -2632,6 +3708,15 @@ def _runtime_format(context: TinyRuntimeContext, value: Value, seen: set[int]) -
         if obj.kind == "cell":
             inner = obj.value if isinstance(obj.value, (int, HeapRef, RawPointer)) else 0
             return f"&{value.address}({_runtime_format(context, inner, seen)})"
+        if obj.kind == "map":
+            entries = obj.value
+            if not isinstance(entries, list):
+                raise RuntimeTinyOneError("Corrupt map object")
+            rendered = ", ".join(
+                f"{_runtime_format(context, k, seen)}: {_runtime_format(context, v, seen)}"
+                for k, v in entries
+            )
+            return f"map{{{rendered}}}"
         raise RuntimeTinyOneError(f"Cannot format heap object {obj.kind!r}")
     finally:
         seen.remove(value.address)
@@ -3621,9 +4706,11 @@ def run_program(
     mode: str,
     stdout: TextIO,
     inputs: Iterable[object] | None = None,
+    sys_args: Iterable[str] | None = None,
+    sys_env: dict[str, str] | None = None,
 ) -> TinyMemory:
     memory = TinyMemory(program.slot_count)
-    context = TinyRuntimeContext(inputs)
+    context = TinyRuntimeContext(inputs, sys_args=sys_args, sys_env=sys_env)
 
     if mode == "vm":
         VM(program, memory, stdout, context).run()

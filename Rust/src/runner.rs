@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
@@ -26,11 +27,27 @@ pub fn run_program(
     stdout: &mut dyn Write,
     inputs: Vec<String>,
 ) -> Result<TinyMemory> {
+    run_program_with_env(program, mode, stdout, inputs, Vec::new(), HashMap::new())
+}
+
+pub fn run_program_with_env(
+    program: &Program,
+    mode: &str,
+    stdout: &mut dyn Write,
+    inputs: Vec<String>,
+    sys_args: Vec<String>,
+    sys_env: HashMap<String, String>,
+) -> Result<TinyMemory> {
     match RunMode::parse(mode)? {
-        RunMode::Vm => VM::new(program, TinyMemory::new(program.slot_count), inputs).run(stdout),
+        RunMode::Vm => {
+            let mut vm = VM::new(program, TinyMemory::new(program.slot_count), inputs);
+            vm.set_sys_args(sys_args);
+            vm.set_sys_env(sys_env);
+            vm.run(stdout)
+        }
         RunMode::Jit => {
             let mut cache = JitCache::new();
-            cache.run_program(program, stdout, inputs)
+            cache.run_program_with_env(program, stdout, inputs, sys_args, sys_env)
         }
     }
 }

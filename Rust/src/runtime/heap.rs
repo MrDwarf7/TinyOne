@@ -10,6 +10,7 @@ pub(crate) enum HeapData {
     Buffer(Vec<u8>),
     Struct(Vec<(String, Value)>),
     Cell(Value),
+    Map(Vec<(Value, Value)>),
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,7 @@ impl HeapObject {
             HeapData::Buffer(_) => "buffer",
             HeapData::Struct(_) => "struct",
             HeapData::Cell(_) => "cell",
+            HeapData::Map(_) => "map",
         }
     }
 }
@@ -50,6 +52,17 @@ pub(crate) struct TinyHeap {
     pub(crate) shutdown: bool,
 }
 
+fn expect_heap_ref(value: &Value) -> Result<&HeapRef> {
+    match value {
+        Value::Heap(reference) => Ok(reference),
+        _ => Err(TinyOneError::runtime("Expected heap pointer")),
+    }
+}
+
+fn checked_or<T>(opt: Option<T>, error: &'static str) -> Result<T> {
+    opt.ok_or_else(|| TinyOneError::runtime(error))
+}
+
 impl TinyHeap {
     pub(crate) fn new() -> Self {
         Self {
@@ -68,9 +81,10 @@ impl TinyHeap {
         let bytes = heap_object_bytes(&object);
         self.ensure_can_allocate(bytes)?;
         if let Some(address) = self.free.pop() {
-            self.generations[address] = self.generations[address]
-                .checked_add(1)
-                .ok_or_else(|| TinyOneError::runtime("Heap generation exhausted"))?;
+            self.generations[address] = checked_or(
+                self.generations[address].checked_add(1),
+                "Heap generation exhausted",
+            )?;
             self.objects[address] = Some(object);
             self.record_alloc(bytes)?;
             Ok(HeapRef {
@@ -100,11 +114,10 @@ impl TinyHeap {
                 "Heap object limit {MAX_HEAP_OBJECTS} exceeded"
             )));
         }
-        let next_bytes = self
-            .stats
-            .live_bytes
-            .checked_add(bytes)
-            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting overflow"))?;
+        let next_bytes = checked_or(
+            self.stats.live_bytes.checked_add(bytes),
+            "Heap byte accounting overflow",
+        )?;
         if next_bytes > MAX_HEAP_BYTES {
             return Err(TinyOneError::runtime(format!(
                 "Heap byte limit {MAX_HEAP_BYTES} exceeded"
@@ -114,49 +127,41 @@ impl TinyHeap {
     }
 
     pub(crate) fn record_alloc(&mut self, bytes: usize) -> Result<()> {
-        self.stats.live_objects = self
-            .stats
-            .live_objects
-            .checked_add(1)
-            .ok_or_else(|| TinyOneError::runtime("Heap object accounting overflow"))?;
-        self.stats.live_bytes = self
-            .stats
-            .live_bytes
-            .checked_add(bytes)
-            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting overflow"))?;
-        self.stats.total_allocations = self
-            .stats
-            .total_allocations
-            .checked_add(1)
-            .ok_or_else(|| TinyOneError::runtime("Heap allocation counter overflow"))?;
+        self.stats.live_objects = checked_or(
+            self.stats.live_objects.checked_add(1),
+            "Heap object accounting overflow",
+        )?;
+        self.stats.live_bytes = checked_or(
+            self.stats.live_bytes.checked_add(bytes),
+            "Heap byte accounting overflow",
+        )?;
+        self.stats.total_allocations = checked_or(
+            self.stats.total_allocations.checked_add(1),
+            "Heap allocation counter overflow",
+        )?;
         self.stats.peak_objects = self.stats.peak_objects.max(self.stats.live_objects);
         self.stats.peak_bytes = self.stats.peak_bytes.max(self.stats.live_bytes);
         Ok(())
     }
 
     pub(crate) fn record_free(&mut self, bytes: usize) -> Result<()> {
-        self.stats.live_objects = self
-            .stats
-            .live_objects
-            .checked_sub(1)
-            .ok_or_else(|| TinyOneError::runtime("Heap object accounting underflow"))?;
-        self.stats.live_bytes = self
-            .stats
-            .live_bytes
-            .checked_sub(bytes)
-            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting underflow"))?;
-        self.stats.total_frees = self
-            .stats
-            .total_frees
-            .checked_add(1)
-            .ok_or_else(|| TinyOneError::runtime("Heap free counter overflow"))?;
+        self.stats.live_objects = checked_or(
+            self.stats.live_objects.checked_sub(1),
+            "Heap object accounting underflow",
+        )?;
+        self.stats.live_bytes = checked_or(
+            self.stats.live_bytes.checked_sub(bytes),
+            "Heap byte accounting underflow",
+        )?;
+        self.stats.total_frees = checked_or(
+            self.stats.total_frees.checked_add(1),
+            "Heap free counter overflow",
+        )?;
         Ok(())
     }
 
     pub(crate) fn grow_array(&mut self, target: &Value, value: Value) -> Result<usize> {
-        let Value::Heap(reference) = target else {
-            return Err(TinyOneError::runtime("Expected heap pointer"));
-        };
+        let reference = expect_heap_ref(target)?;
         self.get_address(reference.address, reference.generation)?;
         let object = self.objects[reference.address]
             .as_ref()
@@ -188,9 +193,7 @@ impl TinyHeap {
     }
 
     pub(crate) fn shrink_array(&mut self, target: &Value) -> Result<Value> {
-        let Value::Heap(reference) = target else {
-            return Err(TinyOneError::runtime("Expected heap pointer"));
-        };
+        let reference = expect_heap_ref(target)?;
         self.get_address(reference.address, reference.generation)?;
         let object = self.objects[reference.address]
             .as_ref()
@@ -215,11 +218,10 @@ impl TinyHeap {
     }
 
     pub(crate) fn ensure_can_allocate_delta(&self, bytes: usize) -> Result<()> {
-        let next_bytes = self
-            .stats
-            .live_bytes
-            .checked_add(bytes)
-            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting overflow"))?;
+        let next_bytes = checked_or(
+            self.stats.live_bytes.checked_add(bytes),
+            "Heap byte accounting overflow",
+        )?;
         if next_bytes > MAX_HEAP_BYTES {
             return Err(TinyOneError::runtime(format!(
                 "Heap byte limit {MAX_HEAP_BYTES} exceeded"
@@ -229,43 +231,47 @@ impl TinyHeap {
     }
 
     pub(crate) fn record_growth(&mut self, bytes: usize) -> Result<()> {
-        self.stats.live_bytes = self
-            .stats
-            .live_bytes
-            .checked_add(bytes)
-            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting overflow"))?;
+        self.stats.live_bytes = checked_or(
+            self.stats.live_bytes.checked_add(bytes),
+            "Heap byte accounting overflow",
+        )?;
         self.stats.peak_bytes = self.stats.peak_bytes.max(self.stats.live_bytes);
         Ok(())
     }
 
     pub(crate) fn record_shrink(&mut self, bytes: usize) -> Result<()> {
-        self.stats.live_bytes = self
-            .stats
-            .live_bytes
-            .checked_sub(bytes)
-            .ok_or_else(|| TinyOneError::runtime("Heap byte accounting underflow"))?;
+        self.stats.live_bytes = checked_or(
+            self.stats.live_bytes.checked_sub(bytes),
+            "Heap byte accounting underflow",
+        )?;
         Ok(())
     }
 
-    pub(crate) fn alloc_string(&mut self, text: impl Into<String>) -> Result<HeapRef> {
+    fn alloc_data(&mut self, data: HeapData) -> Result<HeapRef> {
         self.alloc(HeapObject {
-            data: HeapData::String(text.into()),
+            data,
             type_name: String::new(),
         })
+    }
+
+    pub(crate) fn alloc_string(&mut self, text: impl Into<String>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::String(text.into()))
     }
 
     pub(crate) fn alloc_array(&mut self, values: Vec<Value>) -> Result<HeapRef> {
-        self.alloc(HeapObject {
-            data: HeapData::Array(values),
-            type_name: String::new(),
-        })
+        self.alloc_data(HeapData::Array(values))
     }
 
     pub(crate) fn alloc_buffer(&mut self, size: usize) -> Result<HeapRef> {
-        self.alloc(HeapObject {
-            data: HeapData::Buffer(vec![0; size]),
-            type_name: String::new(),
-        })
+        self.alloc_data(HeapData::Buffer(vec![0; size]))
+    }
+
+    pub(crate) fn alloc_buffer_with(&mut self, data: Vec<u8>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Buffer(data))
+    }
+
+    pub(crate) fn alloc_map(&mut self, entries: Vec<(Value, Value)>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Map(entries))
     }
 
     pub(crate) fn alloc_struct(
@@ -280,23 +286,16 @@ impl TinyHeap {
     }
 
     pub(crate) fn alloc_cell(&mut self, value: Value) -> Result<HeapRef> {
-        self.alloc(HeapObject {
-            data: HeapData::Cell(value),
-            type_name: String::new(),
-        })
+        self.alloc_data(HeapData::Cell(value))
     }
 
     pub(crate) fn get(&self, value: &Value) -> Result<&HeapObject> {
-        let Value::Heap(reference) = value else {
-            return Err(TinyOneError::runtime("Expected heap pointer"));
-        };
+        let reference = expect_heap_ref(value)?;
         self.get_address(reference.address, reference.generation)
     }
 
     pub(crate) fn get_mut(&mut self, value: &Value) -> Result<&mut HeapObject> {
-        let Value::Heap(reference) = value else {
-            return Err(TinyOneError::runtime("Expected heap pointer"));
-        };
+        let reference = expect_heap_ref(value)?;
         self.get_address_mut(reference.address, reference.generation)
     }
 
@@ -348,9 +347,7 @@ impl TinyHeap {
     }
 
     pub(crate) fn free(&mut self, value: &Value) -> Result<()> {
-        let Value::Heap(reference) = value else {
-            return Err(TinyOneError::runtime("Expected heap pointer"));
-        };
+        let reference = expect_heap_ref(value)?;
         self.get_address(reference.address, reference.generation)?;
         let bytes = heap_object_bytes(
             self.objects[reference.address]
@@ -398,5 +395,6 @@ pub(crate) fn heap_object_bytes(object: &HeapObject) -> usize {
                     .sum::<usize>()
         }
         HeapData::Cell(_) => VALUE_BYTES,
+        HeapData::Map(entries) => entries.len().saturating_mul(VALUE_BYTES * 2),
     }
 }

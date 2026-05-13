@@ -7,6 +7,8 @@ pub(crate) mod heap;
 pub(crate) mod limits;
 pub(crate) mod memory;
 pub(crate) mod pointers;
+pub(crate) mod stdlib;
+pub(crate) mod typing;
 pub(crate) mod value;
 pub(crate) mod vm;
 
@@ -16,8 +18,8 @@ pub(crate) use aggregate::{
 };
 pub(crate) use arithmetic::{
     checked_bounded_len, checked_byte_range, checked_collection_index, checked_div,
-    checked_div_int, checked_non_negative_usize, checked_payload_bytes, checked_stack_count,
-    expect_int, floor_div, runtime_add, runtime_add_int, runtime_compare, runtime_compare_int,
+    checked_div_int, checked_non_negative_usize, checked_payload_bytes, expect_int, floor_div,
+    pop_args, runtime_add, runtime_add_int, runtime_compare, runtime_compare_int,
     runtime_is_false, runtime_mul, runtime_mul_int, runtime_neg, runtime_null, runtime_sub,
     runtime_sub_int,
 };
@@ -38,6 +40,7 @@ pub(crate) use pointers::{
     runtime_pointer_load, runtime_pointer_offset, runtime_pointer_store, runtime_pointer_type,
     runtime_read_uint, runtime_write_uint, validate_pointer_base,
 };
+pub use typing::TypeKind;
 pub(crate) use value::Value;
 pub use value::{HeapRef, RawPointer, RuntimeValue};
 pub use vm::{TinyRunReport, VM};

@@ -76,6 +76,18 @@ impl JitCache {
         compiled.run(stdout, inputs)
     }
 
+    pub fn run_program_with_env(
+        &mut self,
+        program: &Program,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+        sys_args: Vec<String>,
+        sys_env: HashMap<String, String>,
+    ) -> Result<TinyMemory> {
+        let compiled = self.compile_mut(program);
+        compiled.run_with_env(stdout, inputs, sys_args, sys_env)
+    }
+
     pub fn run_program_report(
         &mut self,
         program: &Program,

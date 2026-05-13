@@ -1,0 +1,22 @@
+# tinyone-stdlib/option.to
+# Option variants. Tag 1 = Some, tag 0 = None.
+
+export fn some(value) {
+  return option_some(value)
+}
+
+export fn none() {
+  return option_none()
+}
+
+export fn is_some(o) {
+  return option_is_some(o)
+}
+
+export fn is_none(o) {
+  return option_is_none(o)
+}
+
+export fn unwrap(o) {
+  return option_unwrap(o)
+}

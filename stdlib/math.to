@@ -1,0 +1,38 @@
+# tinyone-stdlib/math.to
+# Math constants and integer helpers.
+#
+# Floats are not yet modelled by the typed runtime; therefore mathematical
+# constants are exposed as integer fixed-point thousandths (multiply by 1000).
+# Example: math.pi_thousandths() returns 3142, which represents 3.142.
+
+export fn pi_thousandths() {
+  return math_const("PI_THOUSANDTHS")
+}
+
+export fn e_thousandths() {
+  return math_const("E_THOUSANDTHS")
+}
+
+export fn tau_thousandths() {
+  return math_const("TAU_THOUSANDTHS")
+}
+
+export fn max_i64() {
+  return math_const("MAX_I64")
+}
+
+export fn min_i64() {
+  return math_const("MIN_I64")
+}
+
+export fn abs(value) {
+  return math_abs(value)
+}
+
+export fn min(lhs, rhs) {
+  return math_min(lhs, rhs)
+}
+
+export fn max(lhs, rhs) {
+  return math_max(lhs, rhs)
+}

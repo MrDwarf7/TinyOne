@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -98,6 +99,19 @@ impl JitProgram {
 
     pub fn run(&mut self, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyMemory> {
         JitVm::new(self, inputs).run(stdout)
+    }
+
+    pub fn run_with_env(
+        &mut self,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+        sys_args: Vec<String>,
+        sys_env: HashMap<String, String>,
+    ) -> Result<TinyMemory> {
+        let mut vm = JitVm::new(self, inputs);
+        vm.set_sys_args(sys_args);
+        vm.set_sys_env(sys_env);
+        vm.run(stdout)
     }
 
     pub fn run_report(

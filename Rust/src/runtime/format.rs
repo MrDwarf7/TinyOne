@@ -20,26 +20,13 @@ fn runtime_format_inner(
             } else {
                 format!(":{}", pointer.cast)
             };
-            if pointer.kind == "null" && pointer.address == 0 {
-                Ok("null".to_string())
-            } else if pointer.kind == "array" {
-                Ok(format!(
-                    "ptr(array@{}[{}]{suffix})",
-                    pointer.address, pointer.index
-                ))
-            } else if pointer.kind == "buffer" {
-                Ok(format!(
-                    "ptr(buffer@{}+{}{suffix})",
-                    pointer.address, pointer.index
-                ))
-            } else if pointer.kind == "field" {
-                Ok(format!(
-                    "ptr(field@{}.{}{suffix})",
-                    pointer.address, pointer.field
-                ))
-            } else {
-                Ok(format!("ptr({}@{}{suffix})", pointer.kind, pointer.address))
-            }
+            Ok(match pointer.kind.as_str() {
+                "null" if pointer.address == 0 => "null".to_string(),
+                "array" => format!("ptr(array@{}[{}]{suffix})", pointer.address, pointer.index),
+                "buffer" => format!("ptr(buffer@{}+{}{suffix})", pointer.address, pointer.index),
+                "field" => format!("ptr(field@{}.{}{suffix})", pointer.address, pointer.field),
+                kind => format!("ptr({kind}@{}{suffix})", pointer.address),
+            })
         }
         Value::Heap(reference) => {
             let object = context.heap.get(value)?.clone();
@@ -50,10 +37,10 @@ fn runtime_format_inner(
             let rendered = match object.data {
                 HeapData::String(text) => Ok(text),
                 HeapData::Array(values) => {
-                    let mut parts = Vec::with_capacity(values.len());
-                    for item in &values {
-                        parts.push(runtime_format_inner(context, item, seen)?);
-                    }
+                    let parts = values
+                        .iter()
+                        .map(|item| runtime_format_inner(context, item, seen))
+                        .collect::<Result<Vec<_>>>()?;
                     Ok(format!("[{}]", parts.join(", ")))
                 }
                 HeapData::Buffer(data) => Ok(format!(
@@ -64,13 +51,13 @@ fn runtime_format_inner(
                         .join(" ")
                 )),
                 HeapData::Struct(fields) => {
-                    let mut parts = Vec::with_capacity(fields.len());
-                    for (name, value) in &fields {
-                        parts.push(format!(
-                            "{name}: {}",
-                            runtime_format_inner(context, value, seen)?
-                        ));
-                    }
+                    let parts = fields
+                        .iter()
+                        .map(|(name, value)| {
+                            runtime_format_inner(context, value, seen)
+                                .map(|rendered| format!("{name}: {rendered}"))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     Ok(format!("{}{{{}}}", object.type_name, parts.join(", ")))
                 }
                 HeapData::Cell(value) => Ok(format!(
@@ -78,6 +65,17 @@ fn runtime_format_inner(
                     reference.address,
                     runtime_format_inner(context, &value, seen)?
                 )),
+                HeapData::Map(entries) => {
+                    let parts = entries
+                        .iter()
+                        .map(|(key, value)| {
+                            let key = runtime_format_inner(context, key, seen)?;
+                            let value = runtime_format_inner(context, value, seen)?;
+                            Ok(format!("{key}: {value}"))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(format!("map{{{}}}", parts.join(", ")))
+                }
             };
             seen.remove(&reference.address);
             rendered

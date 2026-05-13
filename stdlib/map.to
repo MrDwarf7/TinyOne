@@ -1,0 +1,36 @@
+# tinyone-stdlib/map.to
+# Ordered associative map keyed by hashable scalar values.
+#
+# `set` is a TinyOne keyword, so the put/get pair is used.
+
+export fn new() {
+  return map_new()
+}
+
+export fn put(m, key, value) {
+  return map_set(m, key, value)
+}
+
+export fn get(m, key) {
+  return map_get(m, key)
+}
+
+export fn has(m, key) {
+  return map_has(m, key)
+}
+
+export fn remove(m, key) {
+  return map_del(m, key)
+}
+
+export fn size(m) {
+  return map_len(m)
+}
+
+export fn keys(m) {
+  return map_keys(m)
+}
+
+export fn values(m) {
+  return map_values(m)
+}

@@ -1,0 +1,22 @@
+# tinyone-stdlib/fs.to
+# Filesystem ops. Per phase_2.md "If it could hurt the system, it is unsafe",
+# read/write/list ops are gated by the `unsafe` keyword at the call site.
+#
+# `read` is an existing builtin (deterministic stdin), so `read_file` is
+# used here.
+
+export fn read_file(path) {
+  return unsafe fs_read(path)
+}
+
+export fn write_file(path, buffer) {
+  return unsafe fs_write(path, buffer)
+}
+
+export fn exists(path) {
+  return fs_exists(path)
+}
+
+export fn list_dir(path) {
+  return unsafe fs_list_dir(path)
+}
