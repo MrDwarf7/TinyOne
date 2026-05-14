@@ -5,8 +5,8 @@ use crate::{
     Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory, TinyOneError,
     TinyRuntimeContext, Value, checked_div, checked_non_negative_usize, pop_args, runtime_add,
     runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index, runtime_is_false,
-    runtime_make_array, runtime_make_struct, runtime_mul, runtime_neg, runtime_null,
-    runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
+    runtime_make_array, runtime_make_struct, runtime_mul, runtime_neg, runtime_null, runtime_print,
+    runtime_set_field, runtime_set_index, runtime_sub,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

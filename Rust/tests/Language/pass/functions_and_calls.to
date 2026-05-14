@@ -1,0 +1,16 @@
+# expect_stdout:
+# 26
+# 36
+# end_expect_stdout
+
+fn add_twice(base, step) {
+  let next = base + step
+  return next + step
+}
+
+fn fold_three(seed) {
+  return add_twice(seed, 3) + add_twice(seed, 5)
+}
+
+print fold_three(5)
+print add_twice(fold_three(5), 5)

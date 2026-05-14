@@ -717,6 +717,18 @@ Run the Rust correctness suite:
 cargo test --manifest-path Rust/Cargo.toml
 ```
 
+Run the feature-gated Rust language fixture suite and testing hooks:
+
+```sh
+cargo test --manifest-path Rust/Cargo.toml --features testing-hooks
+```
+
+This command prints an explicit per-fixture report for every `.to` file in the
+language suite, grouped by passing programs, module/import programs,
+compile-fail programs, and runtime-fail programs. It covers both the newer
+`Rust/tests/Language/` fixtures and the legacy compatibility fixtures under
+`Rust/tests/Programs/`.
+
 The Rust tests cover VM/adaptive-JIT parity for straight-line code, loops,
 conditionals, function calls, nested control flow, runtime errors, memory slot
 behavior, heap arrays, dynamic array storage, structs, strings, buffers, pointer
@@ -724,7 +736,10 @@ cells, raw pointers, null checks, pointer metadata, stale pointer rejection,
 deterministic input, namespaced imports, export visibility, package manifest
 resolution, artifact round trips, diagnostics, lexical scopes, hot-loop
 quickening, JIT listing emission, cache reuse, and verifier failures. The
-Python validation suite remains under `Python/Tests/`.
+`testing-hooks` feature adds non-default external and internal Rust inspection
+hooks plus `.to` language fixtures under `Rust/tests/Language/` and
+`Rust/tests/Programs/`; it is for testing only, not the production API
+contract. The Python validation suite remains under `Python/Tests/`.
 
 Run the Python validation correctness suite:
 

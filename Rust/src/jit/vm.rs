@@ -4,9 +4,9 @@ use std::io::Write;
 use crate::{
     JitOp, JitProgram, MAX_CALL_DEPTH, Result, TinyMemory, TinyOneError, TinyRunReport,
     TinyRuntimeContext, Value, checked_div, checked_div_int, pop_args, runtime_add,
-    runtime_add_int, runtime_call_builtin, runtime_compare, runtime_compare_int,
-    runtime_get_field, runtime_index, runtime_is_false, runtime_make_array, runtime_make_struct,
-    runtime_mul, runtime_mul_int, runtime_neg, runtime_null, runtime_print, runtime_set_field,
+    runtime_add_int, runtime_call_builtin, runtime_compare, runtime_compare_int, runtime_get_field,
+    runtime_index, runtime_is_false, runtime_make_array, runtime_make_struct, runtime_mul,
+    runtime_mul_int, runtime_neg, runtime_null, runtime_print, runtime_set_field,
     runtime_set_index, runtime_sub, runtime_sub_int,
 };
 

@@ -19,9 +19,8 @@ pub(crate) use aggregate::{
 pub(crate) use arithmetic::{
     checked_bounded_len, checked_byte_range, checked_collection_index, checked_div,
     checked_div_int, checked_non_negative_usize, checked_payload_bytes, expect_int, floor_div,
-    pop_args, runtime_add, runtime_add_int, runtime_compare, runtime_compare_int,
-    runtime_is_false, runtime_mul, runtime_mul_int, runtime_neg, runtime_null, runtime_sub,
-    runtime_sub_int,
+    pop_args, runtime_add, runtime_add_int, runtime_compare, runtime_compare_int, runtime_is_false,
+    runtime_mul, runtime_mul_int, runtime_neg, runtime_null, runtime_sub, runtime_sub_int,
 };
 pub(crate) use builtins::runtime_call_builtin;
 pub(crate) use context::TinyRuntimeContext;

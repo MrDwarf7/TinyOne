@@ -1,0 +1,5 @@
+# expect_error: Expected statement
+
+unsafe {
+  print 1
+}

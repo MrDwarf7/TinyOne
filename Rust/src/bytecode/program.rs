@@ -80,7 +80,10 @@ impl Program {
             hash_string_list(&mut hasher, module.imports.iter().map(|item| &item.alias));
             hash_string_list(&mut hasher, module.imports.iter().map(|item| &item.path));
             hash_string_list(&mut hasher, module.imports.iter().map(|item| &item.module));
-            hash_string_list(&mut hasher, module.imports.iter().map(|item| &item.resolved));
+            hash_string_list(
+                &mut hasher,
+                module.imports.iter().map(|item| &item.resolved),
+            );
             hash_string_list(&mut hasher, module.exported_functions.iter());
             hash_string_list(&mut hasher, module.exported_structs.iter());
         }

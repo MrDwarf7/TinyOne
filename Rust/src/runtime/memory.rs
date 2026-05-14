@@ -51,8 +51,8 @@ impl TinyMemory {
                 "{op_name} expects integer operands"
             )));
         };
-        *current = op(*current)
-            .ok_or_else(|| TinyOneError::runtime(format!("{op_name} overflow")))?;
+        *current =
+            op(*current).ok_or_else(|| TinyOneError::runtime(format!("{op_name} overflow")))?;
         Ok(())
     }
 

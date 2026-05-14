@@ -1,0 +1,23 @@
+# expect_stdout:
+# 3
+# 42
+# 4
+# 42
+# 4
+# 4
+# end_expect_stdout
+
+struct Box { value, count }
+
+let values = [1, 2, 3]
+print len(values)
+set values[1] = 42
+print values[1]
+print push(values, 4)
+
+let box = Box(values[1], len(values))
+print box.value
+print box.count
+
+let pointer = fieldptr(box, "count")
+print unsafe ptr_load(pointer)

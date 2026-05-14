@@ -3,6 +3,10 @@ name = "tinyone"
 version = "0.2.0"
 edition = "2024"
 
+[features]
+default = []
+testing-hooks = []
+
 [lib]
 name = "tinyone"
 crate-type = ["rlib", "cdylib"]
@@ -10,6 +14,12 @@ crate-type = ["rlib", "cdylib"]
 [[bin]]
 name = "tinyone"
 path = "src/main.rs"
+
+[[test]]
+name = "language_suite"
+path = "tests/language_suite.rs"
+harness = false
+required-features = ["testing-hooks"]
 
 [dependencies]
 thiserror = "2"
