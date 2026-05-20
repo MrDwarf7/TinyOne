@@ -690,7 +690,7 @@ mod tests {
     /// The first 35 builtin slots are bytecode-stable: artifacts emitted in
     /// Phase 1 keep working. Any reordering of those slots is a breaking
     /// change. Stdlib bridge builtins (Phase 2) are appended after slot 34
-    /// and must not change order without coordinated Python updates.
+    /// and must not change order.
     #[test]
     fn builtin_phase1_indexes_remain_stable() {
         let names: Vec<&str> = BUILTINS.iter().take(35).map(|item| item.name).collect();

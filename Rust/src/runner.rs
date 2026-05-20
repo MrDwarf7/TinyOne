@@ -40,16 +40,17 @@ pub fn run_program_with_env(
     sys_env: HashMap<String, String>,
 ) -> Result<TinyMemory> {
     BytecodeVerifier::verify(program)?;
-    match RunMode::parse(mode)? {
+    let mode = RunMode::parse(mode)?;
+    match mode {
         RunMode::Vm => {
-            let mut vm = VM::new(program, TinyMemory::new(program.slot_count), inputs)?;
+            let mut vm = VM::new_unchecked(program, TinyMemory::new(program.slot_count), inputs);
             vm.set_sys_args(sys_args);
             vm.set_sys_env(sys_env);
             vm.run(stdout)
         }
         RunMode::Jit => {
             let mut cache = JitCache::new();
-            cache.run_program_with_env(program, stdout, inputs, sys_args, sys_env)
+            cache.run_program_with_env_unchecked(program, stdout, inputs, sys_args, sys_env)
         }
     }
 }
@@ -61,13 +62,15 @@ pub fn run_program_report(
     inputs: Vec<String>,
 ) -> Result<TinyRunReport> {
     BytecodeVerifier::verify(program)?;
-    match RunMode::parse(mode)? {
+    let mode = RunMode::parse(mode)?;
+    match mode {
         RunMode::Vm => {
-            VM::new(program, TinyMemory::new(program.slot_count), inputs)?.run_report(stdout)
+            VM::new_unchecked(program, TinyMemory::new(program.slot_count), inputs)
+                .run_report(stdout)
         }
         RunMode::Jit => {
             let mut cache = JitCache::new();
-            cache.run_program_report(program, stdout, inputs)
+            cache.run_program_report_unchecked(program, stdout, inputs)
         }
     }
 }

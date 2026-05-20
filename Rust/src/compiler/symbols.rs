@@ -37,9 +37,7 @@ impl SymbolTable {
             return None;
         }
         let slot = self.names.len();
-        let Some(scope) = self.scopes.last_mut() else {
-            return None;
-        };
+        let scope = self.scopes.last_mut()?;
         scope.insert(name.to_string(), slot);
         self.names.push(name.to_string());
         Some(slot)
