@@ -3,10 +3,6 @@
 //! All builtins added after the initial 35 are dispatched from
 //! [`runtime_call_stdlib_builtin`]. They are bytecode-stable: their
 //! definitions live in [`crate::builtins::BUILTINS`] after index 34.
-//!
-//! Each function here mirrors the equivalent Python implementation in
-//! `Python/main.py` (see `_b_*` helpers). The Rust and Python helpers must
-//! return identical observable values for identical inputs.
 
 use std::collections::BTreeMap;
 use std::fs::File;

@@ -45,12 +45,22 @@ fn lookup_field(fields: &[String], index: usize) -> Result<&str> {
 impl<'a> VM<'a> {
     pub fn new(program: &'a Program, memory: TinyMemory, inputs: Vec<String>) -> Result<Self> {
         BytecodeVerifier::verify(program)?;
-        Ok(Self {
+        Ok(Self::new_unchecked(program, memory, inputs))
+    }
+
+    /// Construct a VM without re-verifying. Only call this when the caller
+    /// has already run `BytecodeVerifier::verify` on the same program.
+    pub(crate) fn new_unchecked(
+        program: &'a Program,
+        memory: TinyMemory,
+        inputs: Vec<String>,
+    ) -> Self {
+        Self {
             program,
             memory,
             context: TinyRuntimeContext::new(inputs),
             call_depth: 0,
-        })
+        }
     }
 
     pub fn set_sys_args(&mut self, args: Vec<String>) {

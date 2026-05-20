@@ -80,8 +80,7 @@ impl JitCache {
         inputs: Vec<String>,
     ) -> Result<TinyMemory> {
         BytecodeVerifier::verify(program)?;
-        let compiled = self.compile_mut(program)?;
-        compiled.run(stdout, inputs)
+        self.run_program_unchecked(program, stdout, inputs)
     }
 
     pub fn run_program_with_env(
@@ -93,8 +92,7 @@ impl JitCache {
         sys_env: HashMap<String, String>,
     ) -> Result<TinyMemory> {
         BytecodeVerifier::verify(program)?;
-        let compiled = self.compile_mut(program)?;
-        compiled.run_with_env(stdout, inputs, sys_args, sys_env)
+        self.run_program_with_env_unchecked(program, stdout, inputs, sys_args, sys_env)
     }
 
     pub fn run_program_report(
@@ -104,6 +102,39 @@ impl JitCache {
         inputs: Vec<String>,
     ) -> Result<TinyRunReport> {
         BytecodeVerifier::verify(program)?;
+        self.run_program_report_unchecked(program, stdout, inputs)
+    }
+
+    /// Run without re-verifying. Only call when the caller has already run
+    /// `BytecodeVerifier::verify` on the same program.
+    pub(crate) fn run_program_unchecked(
+        &mut self,
+        program: &Program,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+    ) -> Result<TinyMemory> {
+        let compiled = self.compile_mut(program)?;
+        compiled.run(stdout, inputs)
+    }
+
+    pub(crate) fn run_program_with_env_unchecked(
+        &mut self,
+        program: &Program,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+        sys_args: Vec<String>,
+        sys_env: HashMap<String, String>,
+    ) -> Result<TinyMemory> {
+        let compiled = self.compile_mut(program)?;
+        compiled.run_with_env(stdout, inputs, sys_args, sys_env)
+    }
+
+    pub(crate) fn run_program_report_unchecked(
+        &mut self,
+        program: &Program,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+    ) -> Result<TinyRunReport> {
         let compiled = self.compile_mut(program)?;
         compiled.run_report(stdout, inputs)
     }
