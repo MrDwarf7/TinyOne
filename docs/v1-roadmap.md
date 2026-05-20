@@ -78,7 +78,8 @@ functions. Any future void entry points added before v1 must install their own
 **Required action:** Decide the policy before v1: either (a) require all FFI
 entry points to return `char *` and use `respond()`, or (b) document a
 `void_respond()` helper and use it consistently. Document the chosen policy in
-`docs/ffi.md` and `docs/contributing.md`. Enforce it in code review.
+`docs/ffi/c-integration.md` and `docs/contributing.md`. Enforce it in code
+review.
 
 ---
 
@@ -186,12 +187,13 @@ The following steps must be completed in order before tagging v1:
    — zero warnings
 5. `cargo fmt --manifest-path Rust/Cargo.toml --all --check` — no formatting
    issues
-6. `tinyone.h` header reviewed and frozen; `docs/ffi.md` matches exactly
+6. `tinyone.h` header reviewed and frozen; `docs/ffi/c-integration.md`
+   matches exactly
 7. JSON response schema file committed and contract tests pass
 8. `docs/language-reference.md` written and covering at minimum: types, all
    operators, all statements, module system, builtin categories, overflow
    behavior, bounds-checking behavior
 9. CHANGELOG or release notes written
 10. Version bumped from `0.5.0` to `1.0.0` in `Rust/Cargo.toml`
-11. Git tag `v1.0.0` pushed; ABI stability formally declared in `docs/ffi.md`
-    and README
+11. Git tag `v1.0.0` pushed; ABI stability formally declared in
+    `docs/ffi/c-integration.md` and README

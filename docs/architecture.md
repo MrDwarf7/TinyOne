@@ -150,7 +150,7 @@ instruction and rejects programs where:
 - Stack depth exceeds `MAX_STACK_DEPTH` (65,536).
 - A branch target is out of range.
 - A slot index, string index, field index, or struct index is out of range.
-- Builtin arity does not match the expected argument count.
+- Builtin argument count is outside the declared `[min_args, max_args]` range.
 - A chunk does not end with the required terminal opcode (`HALT` for main,
   `RETURN` for functions).
 - Work steps exceed `MAX_VERIFIER_STEPS` (10,000,000) — guards against
@@ -241,7 +241,7 @@ index or offset bounds.
 `response_cstring` wraps the actual callback in a second `catch_unwind`. If
 either unwind guard fires, the fallback is a static byte literal that requires
 no allocation. All JSON responses follow `{"ok": true/false, "kind": "…",
-"value"/"error": …}`. See `docs/ffi.md` for the full contract.
+"value"/"error": …}`. See `docs/ffi/c-integration.md` for the full contract.
 
 ## Key Invariants
 

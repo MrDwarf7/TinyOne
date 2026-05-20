@@ -194,8 +194,8 @@ following hold for every chunk (main and all functions):
 9. **Function indexes** — all `CALL` operands are in
    `[0, program.functions.len())`, and the arity matches `function.param_count`.
 10. **Builtin indexes** — all `BUILTIN` operands are in
-    `[0, BUILTINS.len())`, and the arity matches the builtin's declared
-    argument count.
+    `[0, BUILTINS.len())`, and the argument count is within the builtin's
+    declared range `[min_args, max_args]`.
 11. **Budget limits** — total ops across all chunks ≤ 262,144; function count ≤
     4,096; per-chunk slot count ≤ 65,536; string/field/name count ≤ 65,536;
     struct count ≤ 4,096; module count ≤ 256; imports/exports per module ≤ 4,096;
