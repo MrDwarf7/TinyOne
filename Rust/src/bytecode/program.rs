@@ -121,3 +121,31 @@ where
         hash_string_u32(hasher, item);
     }
 }
+
+/// A `Program` that has been validated by `BytecodeVerifier`.
+///
+/// Construct via `VerifiedProgram::verify(program)` to guarantee the
+/// verification ran. Public execution APIs accept `&VerifiedProgram` or
+/// `&Program` (with internal re-verification) — this type is provided for
+/// callers that want to verify once and reuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedProgram(Program);
+
+impl VerifiedProgram {
+    /// Verify `program` and wrap it. Returns `Err` if verification fails.
+    pub fn verify(program: Program) -> crate::Result<Self> {
+        crate::BytecodeVerifier::verify(&program)?;
+        Ok(Self(program))
+    }
+
+    /// Borrow the inner program.
+    pub fn program(&self) -> &Program {
+        &self.0
+    }
+
+    /// Consume and return the inner program. The caller is responsible
+    /// for not passing the result to APIs that require a `VerifiedProgram`.
+    pub fn into_program(self) -> Program {
+        self.0
+    }
+}

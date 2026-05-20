@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::{Result, TinyOneError};
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SymbolTable {
     pub(crate) scopes: Vec<HashMap<String, usize>>,
@@ -18,11 +20,12 @@ impl SymbolTable {
         self.scopes.push(HashMap::new());
     }
 
-    pub(crate) fn exit_scope(&mut self) {
+    pub(crate) fn exit_scope(&mut self) -> Result<()> {
         if self.scopes.len() <= 1 {
-            panic!("cannot exit root symbol scope");
+            return Err(TinyOneError::compile("Internal compiler scope underflow"));
         }
         self.scopes.pop();
+        Ok(())
     }
 
     pub(crate) fn define_current(&mut self, name: &str) -> Option<usize> {
@@ -34,10 +37,10 @@ impl SymbolTable {
             return None;
         }
         let slot = self.names.len();
-        self.scopes
-            .last_mut()
-            .expect("scope")
-            .insert(name.to_string(), slot);
+        let Some(scope) = self.scopes.last_mut() else {
+            return None;
+        };
+        scope.insert(name.to_string(), slot);
         self.names.push(name.to_string());
         Some(slot)
     }

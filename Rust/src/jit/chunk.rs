@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{Instr, JitOp, Op};
+use crate::{Instr, JitOp, Op, Result, TinyOneError, checked_non_negative_usize};
 
 pub(crate) const HOT_BACK_EDGE_THRESHOLD: u16 = 8;
 
@@ -13,14 +13,18 @@ pub(crate) struct JitChunk {
 }
 
 impl JitChunk {
-    pub(crate) fn compile(name: impl Into<String>, slot_count: usize, code: &[Instr]) -> Self {
-        let ops = compile_ops(code);
-        Self {
+    pub(crate) fn compile(
+        name: impl Into<String>,
+        slot_count: usize,
+        code: &[Instr],
+    ) -> Result<Self> {
+        let ops = compile_ops(code)?;
+        Ok(Self {
             name: name.into(),
             slot_count,
             edge_counts: vec![0; ops.len()],
             ops,
-        }
+        })
     }
 
     pub(crate) fn promote_range(&mut self, start: usize, end: usize) -> usize {
@@ -38,7 +42,7 @@ impl JitChunk {
     }
 }
 
-fn compile_ops(code: &[Instr]) -> Vec<JitOp> {
+fn compile_ops(code: &[Instr]) -> Result<Vec<JitOp>> {
     let branch_targets = branch_targets(code);
     let mut original_to_compiled = vec![0usize; code.len() + 1];
     let mut ops = Vec::with_capacity(code.len());
@@ -54,7 +58,7 @@ fn compile_ops(code: &[Instr]) -> Vec<JitOp> {
             pc += width;
             continue;
         }
-        ops.push(JitOp::from_instr(code[pc]));
+        ops.push(JitOp::from_instr(code[pc])?);
         pc += 1;
     }
     original_to_compiled[code.len()] = ops.len();
@@ -62,13 +66,13 @@ fn compile_ops(code: &[Instr]) -> Vec<JitOp> {
     for op in &mut ops {
         op.remap_targets(&original_to_compiled);
     }
-    ops
+    Ok(ops)
 }
 
 fn branch_targets(code: &[Instr]) -> HashSet<usize> {
     code.iter()
         .filter_map(|instr| match instr.op {
-            Op::Jump | Op::JumpIfZero if instr.arg >= 0 => Some(instr.arg as usize),
+            Op::Jump | Op::JumpIfZero => usize::try_from(instr.arg).ok(),
             _ => None,
         })
         .collect()
@@ -96,7 +100,8 @@ fn assign_literal(code: &[Instr], pc: usize, branch_targets: &HashSet<usize>) ->
         return None;
     }
     if matches!(first.op, Op::PushInt) && matches!(second.op, Op::Store) {
-        return Some(JitOp::StoreInt(second.arg as usize, first.arg));
+        let slot = jit_operand(second.arg).ok()?;
+        return Some(JitOp::StoreInt(slot, first.arg));
     }
     None
 }
@@ -120,10 +125,15 @@ fn slot_immediate_update(
         return None;
     }
     match op.op {
-        Op::Add => Some(JitOp::AddSlotInt(load.arg as usize, value.arg)),
-        Op::Sub => Some(JitOp::SubSlotInt(load.arg as usize, value.arg)),
+        Op::Add => Some(JitOp::AddSlotInt(jit_operand(load.arg).ok()?, value.arg)),
+        Op::Sub => Some(JitOp::SubSlotInt(jit_operand(load.arg).ok()?, value.arg)),
         _ => None,
     }
+}
+
+fn jit_operand(value: i64) -> Result<usize> {
+    checked_non_negative_usize(value, "JIT operand")
+        .map_err(|error| TinyOneError::compile(format!("JIT invalid operand: {error}")))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

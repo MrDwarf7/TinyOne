@@ -20,12 +20,17 @@ pub struct JitProgram {
 }
 
 impl JitProgram {
-    pub fn compile(program: &Program) -> Self {
+    pub fn compile(program: &Program) -> crate::Result<Self> {
+        crate::BytecodeVerifier::verify(program)?;
         Self::compile_with_fingerprint(program, program.fingerprint())
     }
 
-    pub(crate) fn compile_with_fingerprint(program: &Program, fingerprint: String) -> Self {
-        let mut chunks = vec![JitChunk::compile("main", program.slot_count, &program.code)];
+    pub(crate) fn compile_with_fingerprint(program: &Program, fingerprint: String) -> Result<Self> {
+        let mut chunks = vec![JitChunk::compile(
+            "main",
+            program.slot_count,
+            &program.code,
+        )?];
         let mut functions = Vec::with_capacity(program.functions.len());
         for function in &program.functions {
             let chunk_index = chunks.len();
@@ -33,7 +38,7 @@ impl JitProgram {
                 function.name.clone(),
                 function.slot_count,
                 &function.code,
-            ));
+            )?);
             functions.push(JitFunction {
                 name: function.name.clone(),
                 param_count: function.param_count,
@@ -43,7 +48,7 @@ impl JitProgram {
         }
         let compiled_ops = chunks.iter().map(|chunk| chunk.ops.len()).sum();
         let compiled_chunks = chunks.len();
-        Self {
+        Ok(Self {
             fingerprint,
             chunks,
             functions,
@@ -55,7 +60,7 @@ impl JitProgram {
                 compiled_ops,
                 ..JitStats::default()
             },
-        }
+        })
     }
 
     pub fn fingerprint(&self) -> &str {
@@ -70,8 +75,8 @@ impl JitProgram {
         use std::fmt::Write as _;
 
         let mut out = String::new();
-        writeln!(&mut out, "; tinyone adaptive-jit {}", self.fingerprint).expect("write string");
-        writeln!(
+        let _ = writeln!(&mut out, "; tinyone adaptive-jit {}", self.fingerprint);
+        let _ = writeln!(
             &mut out,
             "; chunks={} ops={} hot_back_edges={} hot_ranges={} quickened_ops={}",
             self.stats.compiled_chunks,
@@ -79,19 +84,17 @@ impl JitProgram {
             self.stats.hot_back_edges,
             self.stats.hot_ranges,
             self.stats.quickened_ops
-        )
-        .expect("write string");
+        );
         for (chunk_index, chunk) in self.chunks.iter().enumerate() {
-            writeln!(
+            let _ = writeln!(
                 &mut out,
                 ".chunk {chunk_index} {} slots={} ops={}",
                 chunk.name,
                 chunk.slot_count,
                 chunk.ops.len()
-            )
-            .expect("write string");
+            );
             for (pc, op) in chunk.ops.iter().enumerate() {
-                writeln!(&mut out, "  {pc:04} {}", op.listing()).expect("write string");
+                let _ = writeln!(&mut out, "  {pc:04} {}", op.listing());
             }
         }
         out
@@ -149,7 +152,7 @@ impl JitProgram {
 }
 
 pub fn write_jit_listing(program: &Program, path: impl AsRef<Path>) -> Result<()> {
-    let compiled = JitProgram::compile(program);
+    let compiled = JitProgram::compile(program)?;
     fs::write(path, compiled.listing())
         .map_err(|error| TinyOneError::compile(format!("JIT listing write error: {error}")))
 }

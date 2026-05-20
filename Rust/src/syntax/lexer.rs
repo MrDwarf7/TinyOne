@@ -61,10 +61,9 @@ impl Lexer {
                         if pos >= bytes.len() {
                             return Err(self.error("Unterminated string escape", start, pos));
                         }
-                        let escaped = self.source[pos..]
-                            .chars()
-                            .next()
-                            .expect("escape byte starts a character");
+                        let Some(escaped) = self.source[pos..].chars().next() else {
+                            return Err(self.error("Unterminated string escape", start, pos));
+                        };
                         match escaped {
                             'n' => text.push('\n'),
                             't' => text.push('\t'),
@@ -80,10 +79,9 @@ impl Lexer {
                         }
                         pos += escaped.len_utf8();
                     } else {
-                        let ch = self.source[pos..]
-                            .chars()
-                            .next()
-                            .expect("string byte starts a character");
+                        let Some(ch) = self.source[pos..].chars().next() else {
+                            return Err(self.error("Unterminated string literal", start, pos));
+                        };
                         text.push(ch);
                         pos += ch.len_utf8();
                         continue;
@@ -121,8 +119,11 @@ impl Lexer {
                 });
                 continue;
             }
-            if pos + 1 < bytes.len() {
-                let pair = &self.source[pos..pos + 2];
+            if pos + 1 < bytes.len() && bytes[pos].is_ascii() && bytes[pos + 1].is_ascii() {
+                let pair = &bytes[pos..pos + 2];
+                let pair = std::str::from_utf8(pair).map_err(|error| {
+                    self.error(format!("Invalid token bytes: {error}"), pos, pos + 2)
+                })?;
                 if let Some(kind) = two_char_token(pair) {
                     tokens.push(Token {
                         kind,

@@ -25,7 +25,10 @@ pub(crate) fn runtime_index(
     match object.data {
         HeapData::Array(values) => {
             let index = checked_collection_index(index, values.len(), "Array")?;
-            Ok(values[index].clone())
+            values
+                .get(index)
+                .cloned()
+                .ok_or_else(|| TinyOneError::runtime("Array index out of bounds"))
         }
         HeapData::String(text) => {
             let index = checked_collection_index(index, text.chars().count(), "String")?;
@@ -57,7 +60,10 @@ pub(crate) fn runtime_set_index(
         )));
     };
     let index = checked_collection_index(index, values.len(), "Array")?;
-    values[index] = value;
+    let target = values
+        .get_mut(index)
+        .ok_or_else(|| TinyOneError::runtime("Array index out of bounds"))?;
+    *target = value;
     Ok(())
 }
 

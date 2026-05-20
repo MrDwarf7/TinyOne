@@ -2,6 +2,21 @@ use std::collections::HashMap;
 
 use crate::{BUILTINS, Function, Instr, Op, Program, Result, StructDef, TinyOneError};
 
+const MAX_VERIFIER_STEPS: usize = 10_000_000;
+const MAX_STACK_DEPTH: i64 = 65_536;
+const MAX_VERIFIER_FUNCTIONS: usize = 4_096;
+const MAX_VERIFIER_TOTAL_OPS: usize = 262_144;
+const MAX_VERIFIER_SLOT_COUNT: usize = 65_536;
+const MAX_VERIFIER_NAMES: usize = 65_536;
+const MAX_VERIFIER_STRINGS: usize = 65_536;
+const MAX_VERIFIER_FIELDS: usize = 65_536;
+const MAX_VERIFIER_STRUCTS: usize = 4_096;
+const MAX_VERIFIER_STRUCT_FIELDS: usize = 256;
+const MAX_VERIFIER_MODULES: usize = 256;
+const MAX_VERIFIER_MODULE_IMPORTS: usize = 4_096;
+const MAX_VERIFIER_MODULE_EXPORTS: usize = 4_096;
+const MAX_VERIFIER_TEXT_BYTES: usize = 1024 * 1024;
+
 pub struct BytecodeVerifier;
 
 struct VerificationContext<'a> {
@@ -13,6 +28,7 @@ struct VerificationContext<'a> {
 
 impl BytecodeVerifier {
     pub fn verify(program: &Program) -> Result<()> {
+        Self::verify_program_budget(program)?;
         let context = VerificationContext {
             functions: &program.functions,
             strings: &program.strings,
@@ -38,6 +54,73 @@ impl BytecodeVerifier {
         Ok(())
     }
 
+    fn verify_program_budget(program: &Program) -> Result<()> {
+        reject_over_limit("slot_count", program.slot_count, MAX_VERIFIER_SLOT_COUNT)?;
+        verify_string_list("names", &program.names, MAX_VERIFIER_NAMES)?;
+        verify_string_list("strings", &program.strings, MAX_VERIFIER_STRINGS)?;
+        verify_string_list("fields", &program.fields, MAX_VERIFIER_FIELDS)?;
+        reject_over_limit("struct count", program.structs.len(), MAX_VERIFIER_STRUCTS)?;
+        reject_over_limit("module count", program.modules.len(), MAX_VERIFIER_MODULES)?;
+        if program.functions.len() > MAX_VERIFIER_FUNCTIONS {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: function count {} exceeds limit {MAX_VERIFIER_FUNCTIONS}",
+                program.functions.len()
+            )));
+        }
+        let mut total_ops = program.code.len();
+        for function in &program.functions {
+            reject_over_limit(
+                &format!("function {:?} slot_count", function.name),
+                function.slot_count,
+                MAX_VERIFIER_SLOT_COUNT,
+            )?;
+            verify_string_list(
+                &format!("function {:?} names", function.name),
+                &function.names,
+                MAX_VERIFIER_NAMES,
+            )?;
+            if function.param_count > function.slot_count {
+                return Err(TinyOneError::compile(format!(
+                    "Verifier: function {:?} has {} parameter(s) but only {} slot(s)",
+                    function.name, function.param_count, function.slot_count
+                )));
+            }
+            total_ops = total_ops.checked_add(function.code.len()).ok_or_else(|| {
+                TinyOneError::compile("Verifier: total instruction count overflow")
+            })?;
+        }
+        for item in &program.structs {
+            verify_string_list(
+                &format!("struct {:?} fields", item.name),
+                &item.fields,
+                MAX_VERIFIER_STRUCT_FIELDS,
+            )?;
+        }
+        for module in &program.modules {
+            reject_over_limit(
+                &format!("module {:?} imports", module.name),
+                module.imports.len(),
+                MAX_VERIFIER_MODULE_IMPORTS,
+            )?;
+            verify_string_list(
+                &format!("module {:?} function exports", module.name),
+                &module.exported_functions,
+                MAX_VERIFIER_MODULE_EXPORTS,
+            )?;
+            verify_string_list(
+                &format!("module {:?} struct exports", module.name),
+                &module.exported_structs,
+                MAX_VERIFIER_MODULE_EXPORTS,
+            )?;
+        }
+        if total_ops > MAX_VERIFIER_TOTAL_OPS {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: total instruction count {total_ops} exceeds limit {MAX_VERIFIER_TOTAL_OPS}"
+            )));
+        }
+        Ok(())
+    }
+
     fn verify_chunk(
         chunk_name: &str,
         code: &[Instr],
@@ -55,25 +138,40 @@ impl BytecodeVerifier {
                 final_op.name()
             )));
         }
+        for (pc, instr) in code.iter().copied().enumerate() {
+            Self::verify_instruction_operands(chunk_name, code, slot_count, context, pc, instr)?;
+        }
         let mut seen: HashMap<usize, i64> = HashMap::new();
         let mut todo = Vec::new();
         visit(&mut seen, &mut todo, code, 0, 0, 0, chunk_name)?;
+        let mut steps: usize = 0;
         while let Some((pc, depth)) = todo.pop() {
-            let instr = code[pc];
+            steps += 1;
+            if steps > MAX_VERIFIER_STEPS {
+                return Err(TinyOneError::compile(format!(
+                    "Verifier: {chunk_name} exceeded step limit ({MAX_VERIFIER_STEPS})"
+                )));
+            }
+            let instr = code.get(pc).copied().ok_or_else(|| {
+                TinyOneError::compile(format!(
+                    "Verifier: internal invalid instruction {pc} in {chunk_name}"
+                ))
+            })?;
             let op = instr.op;
             let arg = instr.arg;
             let arg2 = instr.arg2;
-            if matches!(op, Op::Load | Op::Store) && !valid_index(arg, slot_count) {
+            if matches!(op, Op::Load | Op::Store) && checked_index(arg, slot_count).is_err() {
                 return Err(TinyOneError::compile(format!(
                     "Verifier: invalid slot {arg} at instruction {pc} in {chunk_name}"
                 )));
             }
-            if op == Op::PushString && !valid_index(arg, context.strings.len()) {
+            if op == Op::PushString && checked_index(arg, context.strings.len()).is_err() {
                 return Err(TinyOneError::compile(format!(
                     "Verifier: invalid string index {arg} at instruction {pc} in {chunk_name}"
                 )));
             }
-            if matches!(op, Op::GetField | Op::SetField) && !valid_index(arg, context.fields.len())
+            if matches!(op, Op::GetField | Op::SetField)
+                && checked_index(arg, context.fields.len()).is_err()
             {
                 return Err(TinyOneError::compile(format!(
                     "Verifier: invalid field index {arg} at instruction {pc} in {chunk_name}"
@@ -88,20 +186,25 @@ impl BytecodeVerifier {
                         &mut seen,
                         &mut todo,
                         code,
-                        (pc + 1) as i64,
+                        next_pc(pc)?,
                         depth,
                         pc,
                         chunk_name,
                     )?;
                 }
                 Op::Call => {
-                    if !valid_index(arg, context.functions.len()) {
-                        return Err(TinyOneError::compile(format!(
+                    let function_index = checked_index(arg, context.functions.len()).map_err(|_| {
+                        TinyOneError::compile(format!(
                             "Verifier: invalid function index {arg} at instruction {pc} in {chunk_name}"
-                        )));
-                    }
-                    let function = &context.functions[arg as usize];
-                    if arg2 as usize != function.param_count {
+                        ))
+                    })?;
+                    let arg_count = usize::try_from(arg2).map_err(|_| {
+                        TinyOneError::compile(format!(
+                            "Verifier: invalid function arity {arg2} at instruction {pc} in {chunk_name}"
+                        ))
+                    })?;
+                    let function = &context.functions[function_index];
+                    if arg_count != function.param_count {
                         return Err(TinyOneError::compile(format!(
                             "Function {:?} expects {} argument(s), got {arg2} at instruction {pc} in {chunk_name}",
                             function.name, function.param_count
@@ -111,8 +214,8 @@ impl BytecodeVerifier {
                         &mut seen,
                         &mut todo,
                         code,
-                        (pc + 1) as i64,
-                        next_depth(pc, depth, 1 - arg2, chunk_name)?,
+                        next_pc(pc)?,
+                        next_depth_after_popping_to_one(pc, depth, arg2, chunk_name)?,
                         pc,
                         chunk_name,
                     )?;
@@ -127,42 +230,48 @@ impl BytecodeVerifier {
                         &mut seen,
                         &mut todo,
                         code,
-                        (pc + 1) as i64,
-                        next_depth(pc, depth, 1 - arg, chunk_name)?,
+                        next_pc(pc)?,
+                        next_depth_after_popping_to_one(pc, depth, arg, chunk_name)?,
                         pc,
                         chunk_name,
                     )?;
                 }
                 Op::MakeStruct => {
-                    if !valid_index(arg, context.structs.len()) {
-                        return Err(TinyOneError::compile(format!(
+                    let struct_index = checked_index(arg, context.structs.len()).map_err(|_| {
+                        TinyOneError::compile(format!(
                             "Verifier: invalid struct index {arg} at instruction {pc} in {chunk_name}"
-                        )));
-                    }
-                    let expected = context.structs[arg as usize].fields.len();
-                    if arg2 as usize != expected {
+                        ))
+                    })?;
+                    let field_count = usize::try_from(arg2).map_err(|_| {
+                        TinyOneError::compile(format!(
+                            "Verifier: invalid struct arity {arg2} at instruction {pc} in {chunk_name}"
+                        ))
+                    })?;
+                    let struct_def = &context.structs[struct_index];
+                    let expected = struct_def.fields.len();
+                    if field_count != expected {
                         return Err(TinyOneError::compile(format!(
                             "Struct {:?} expects {expected} field value(s), got {arg2} at instruction {pc} in {chunk_name}",
-                            context.structs[arg as usize].name
+                            struct_def.name
                         )));
                     }
                     visit(
                         &mut seen,
                         &mut todo,
                         code,
-                        (pc + 1) as i64,
-                        next_depth(pc, depth, 1 - arg2, chunk_name)?,
+                        next_pc(pc)?,
+                        next_depth_after_popping_to_one(pc, depth, arg2, chunk_name)?,
                         pc,
                         chunk_name,
                     )?;
                 }
                 Op::Builtin => {
-                    if !valid_index(arg, BUILTINS.len()) {
-                        return Err(TinyOneError::compile(format!(
+                    let builtin_index = checked_index(arg, BUILTINS.len()).map_err(|_| {
+                        TinyOneError::compile(format!(
                             "Verifier: invalid builtin index {arg} at instruction {pc} in {chunk_name}"
-                        )));
-                    }
-                    let builtin = BUILTINS[arg as usize];
+                        ))
+                    })?;
+                    let builtin = BUILTINS[builtin_index];
                     if arg2 < builtin.min_args as i64 || arg2 > builtin.max_args as i64 {
                         return Err(TinyOneError::compile(format!(
                             "Builtin {:?} expects {}..{} argument(s), got {arg2} at instruction {pc} in {chunk_name}",
@@ -173,8 +282,8 @@ impl BytecodeVerifier {
                         &mut seen,
                         &mut todo,
                         code,
-                        (pc + 1) as i64,
-                        next_depth(pc, depth, 1 - arg2, chunk_name)?,
+                        next_pc(pc)?,
+                        next_depth_after_popping_to_one(pc, depth, arg2, chunk_name)?,
                         pc,
                         chunk_name,
                     )?;
@@ -203,12 +312,106 @@ impl BytecodeVerifier {
                         &mut seen,
                         &mut todo,
                         code,
-                        (pc + 1) as i64,
+                        next_pc(pc)?,
                         next_depth(pc, depth, effect, chunk_name)?,
                         pc,
                         chunk_name,
                     )?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_instruction_operands(
+        chunk_name: &str,
+        code: &[Instr],
+        slot_count: usize,
+        context: &VerificationContext<'_>,
+        pc: usize,
+        instr: Instr,
+    ) -> Result<()> {
+        let op = instr.op;
+        let arg = instr.arg;
+        let arg2 = instr.arg2;
+        if matches!(op, Op::Load | Op::Store) && checked_index(arg, slot_count).is_err() {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: invalid slot {arg} at instruction {pc} in {chunk_name}"
+            )));
+        }
+        if op == Op::PushString && checked_index(arg, context.strings.len()).is_err() {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: invalid string index {arg} at instruction {pc} in {chunk_name}"
+            )));
+        }
+        if matches!(op, Op::GetField | Op::SetField)
+            && checked_index(arg, context.fields.len()).is_err()
+        {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: invalid field index {arg} at instruction {pc} in {chunk_name}"
+            )));
+        }
+        if matches!(op, Op::Jump | Op::JumpIfZero) && checked_index(arg, code.len()).is_err() {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: instruction {pc} in {chunk_name} targets {arg}"
+            )));
+        }
+        if op == Op::Call {
+            let function_index = checked_index(arg, context.functions.len()).map_err(|_| {
+                TinyOneError::compile(format!(
+                    "Verifier: invalid function index {arg} at instruction {pc} in {chunk_name}"
+                ))
+            })?;
+            let arg_count = usize::try_from(arg2).map_err(|_| {
+                TinyOneError::compile(format!(
+                    "Verifier: invalid function arity {arg2} at instruction {pc} in {chunk_name}"
+                ))
+            })?;
+            let function = &context.functions[function_index];
+            if arg_count != function.param_count {
+                return Err(TinyOneError::compile(format!(
+                    "Function {:?} expects {} argument(s), got {arg2} at instruction {pc} in {chunk_name}",
+                    function.name, function.param_count
+                )));
+            }
+        }
+        if op == Op::MakeArray && arg < 0 {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: negative array arity {arg} at instruction {pc} in {chunk_name}"
+            )));
+        }
+        if op == Op::MakeStruct {
+            let struct_index = checked_index(arg, context.structs.len()).map_err(|_| {
+                TinyOneError::compile(format!(
+                    "Verifier: invalid struct index {arg} at instruction {pc} in {chunk_name}"
+                ))
+            })?;
+            let field_count = usize::try_from(arg2).map_err(|_| {
+                TinyOneError::compile(format!(
+                    "Verifier: invalid struct arity {arg2} at instruction {pc} in {chunk_name}"
+                ))
+            })?;
+            let struct_def = &context.structs[struct_index];
+            let expected = struct_def.fields.len();
+            if field_count != expected {
+                return Err(TinyOneError::compile(format!(
+                    "Struct {:?} expects {expected} field value(s), got {arg2} at instruction {pc} in {chunk_name}",
+                    struct_def.name
+                )));
+            }
+        }
+        if op == Op::Builtin {
+            let builtin_index = checked_index(arg, BUILTINS.len()).map_err(|_| {
+                TinyOneError::compile(format!(
+                    "Verifier: invalid builtin index {arg} at instruction {pc} in {chunk_name}"
+                ))
+            })?;
+            let builtin = BUILTINS[builtin_index];
+            if arg2 < builtin.min_args as i64 || arg2 > builtin.max_args as i64 {
+                return Err(TinyOneError::compile(format!(
+                    "Builtin {:?} expects {}..{} argument(s), got {arg2} at instruction {pc} in {chunk_name}",
+                    builtin.name, builtin.min_args, builtin.max_args
+                )));
             }
         }
         Ok(())
@@ -224,12 +427,17 @@ fn visit(
     origin: usize,
     chunk_name: &str,
 ) -> Result<()> {
-    if pc < 0 || pc as usize >= code.len() {
+    let Ok(pc_usize) = usize::try_from(pc) else {
+        return Err(TinyOneError::compile(format!(
+            "Verifier: instruction {origin} in {chunk_name} targets {pc}"
+        )));
+    };
+    if pc_usize >= code.len() {
         return Err(TinyOneError::compile(format!(
             "Verifier: instruction {origin} in {chunk_name} targets {pc}"
         )));
     }
-    let pc = pc as usize;
+    let pc = pc_usize;
     if let Some(old_depth) = seen.get(&pc) {
         if *old_depth != depth {
             return Err(TinyOneError::compile(format!(
@@ -244,17 +452,80 @@ fn visit(
 }
 
 fn next_depth(pc: usize, depth: i64, delta: i64, chunk_name: &str) -> Result<i64> {
-    let depth = depth + delta;
+    let depth = depth.checked_add(delta).ok_or_else(|| {
+        TinyOneError::compile(format!(
+            "Verifier: stack depth overflow at instruction {pc} in {chunk_name}"
+        ))
+    })?;
     if depth < 0 {
         return Err(TinyOneError::compile(format!(
             "Verifier: stack underflow at instruction {pc} in {chunk_name}"
         )));
     }
+    if depth > MAX_STACK_DEPTH {
+        return Err(TinyOneError::compile(format!(
+            "Verifier: stack depth {depth} exceeds limit in {chunk_name} at instruction {pc}"
+        )));
+    }
     Ok(depth)
 }
 
-fn valid_index(index: i64, len: usize) -> bool {
-    index >= 0 && (index as usize) < len
+fn next_depth_after_popping_to_one(
+    pc: usize,
+    depth: i64,
+    count: i64,
+    chunk_name: &str,
+) -> Result<i64> {
+    let delta = 1i64.checked_sub(count).ok_or_else(|| {
+        TinyOneError::compile(format!(
+            "Verifier: stack effect overflow at instruction {pc} in {chunk_name}"
+        ))
+    })?;
+    next_depth(pc, depth, delta, chunk_name)
+}
+
+fn next_pc(pc: usize) -> Result<i64> {
+    let next = pc
+        .checked_add(1)
+        .ok_or_else(|| TinyOneError::compile("Verifier: instruction index overflow"))?;
+    i64::try_from(next).map_err(|_| TinyOneError::compile("Verifier: instruction index too large"))
+}
+
+fn checked_index(index: i64, len: usize) -> Result<usize> {
+    if index < 0 {
+        return Err(TinyOneError::compile("negative index"));
+    }
+    let index = usize::try_from(index)
+        .map_err(|_| TinyOneError::compile("index is too large for this platform"))?;
+    if index >= len {
+        return Err(TinyOneError::compile("index out of bounds"));
+    }
+    Ok(index)
+}
+
+fn reject_over_limit(name: &str, got: usize, max: usize) -> Result<()> {
+    if got > max {
+        return Err(TinyOneError::compile(format!(
+            "Verifier: {name} {got} exceeds limit {max}"
+        )));
+    }
+    Ok(())
+}
+
+fn verify_string_list(name: &str, values: &[String], max_count: usize) -> Result<()> {
+    reject_over_limit(name, values.len(), max_count)?;
+    let mut bytes = 0usize;
+    for value in values {
+        bytes = bytes
+            .checked_add(value.len())
+            .ok_or_else(|| TinyOneError::compile(format!("Verifier: {name} text overflow")))?;
+        reject_over_limit(
+            &format!("{name} text bytes"),
+            bytes,
+            MAX_VERIFIER_TEXT_BYTES,
+        )?;
+    }
+    Ok(())
 }
 
 fn stack_effect(op: Op) -> Option<i64> {

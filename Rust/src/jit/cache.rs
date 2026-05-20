@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use crate::{JitProgram, Program, Result, TinyMemory, TinyRunReport, compile_source};
+use crate::{
+    BytecodeVerifier, JitProgram, Program, Result, TinyMemory, TinyRunReport, compile_source,
+};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct JitStats {
@@ -40,15 +42,20 @@ impl JitCache {
         self.cache.is_empty()
     }
 
-    pub fn compile(&mut self, program: &Program) -> &JitProgram {
-        &*self.compile_mut(program)
+    pub fn compile(&mut self, program: &Program) -> crate::Result<&JitProgram> {
+        BytecodeVerifier::verify(program)?;
+        Ok(&*self.compile_mut(program)?)
     }
 
-    fn compile_mut(&mut self, program: &Program) -> &mut JitProgram {
+    fn compile_mut(&mut self, program: &Program) -> Result<&mut JitProgram> {
         let key = program.fingerprint();
+        if !self.cache.contains_key(&key) {
+            let compiled = JitProgram::compile_with_fingerprint(program, key.clone())?;
+            self.cache.insert(key.clone(), compiled);
+        }
         self.cache
-            .entry(key.clone())
-            .or_insert_with(|| JitProgram::compile_with_fingerprint(program, key))
+            .get_mut(&key)
+            .ok_or_else(|| crate::TinyOneError::compile("JIT cache insertion failed"))
     }
 
     pub fn stats(&self) -> JitCacheStats {
@@ -72,7 +79,8 @@ impl JitCache {
         stdout: &mut dyn Write,
         inputs: Vec<String>,
     ) -> Result<TinyMemory> {
-        let compiled = self.compile_mut(program);
+        BytecodeVerifier::verify(program)?;
+        let compiled = self.compile_mut(program)?;
         compiled.run(stdout, inputs)
     }
 
@@ -84,7 +92,8 @@ impl JitCache {
         sys_args: Vec<String>,
         sys_env: HashMap<String, String>,
     ) -> Result<TinyMemory> {
-        let compiled = self.compile_mut(program);
+        BytecodeVerifier::verify(program)?;
+        let compiled = self.compile_mut(program)?;
         compiled.run_with_env(stdout, inputs, sys_args, sys_env)
     }
 
@@ -94,7 +103,8 @@ impl JitCache {
         stdout: &mut dyn Write,
         inputs: Vec<String>,
     ) -> Result<TinyRunReport> {
-        let compiled = self.compile_mut(program);
+        BytecodeVerifier::verify(program)?;
+        let compiled = self.compile_mut(program)?;
         compiled.run_report(stdout, inputs)
     }
 

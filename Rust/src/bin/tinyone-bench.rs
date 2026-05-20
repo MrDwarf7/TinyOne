@@ -360,7 +360,9 @@ fn run_source_mode(source: &str, mode: &str, inputs: Vec<String>) {
 }
 
 fn compile_jit(program: &Program, cache: &mut JitCache) {
-    let compiled = cache.compile(program) as *const _;
+    let compiled = cache
+        .compile(program)
+        .expect("benchmark program should compile") as *const _;
     black_box(compiled);
 }
 
@@ -560,27 +562,33 @@ fn build_benchmarks() -> Vec<Benchmark> {
             move || run_mode(&program, "vm", Vec::new())
         }),
         bench("runtime.jit_straightline", 10_000, {
-            let mut program = JitProgram::compile(&straightline.program);
+            let mut program = JitProgram::compile(&straightline.program)
+                .expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_loop_control", 2_000, {
-            let mut program = JitProgram::compile(&loop_fixture.program);
+            let mut program = JitProgram::compile(&loop_fixture.program)
+                .expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_function_calls", 600, {
-            let mut program = JitProgram::compile(&functions.program);
+            let mut program =
+                JitProgram::compile(&functions.program).expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_control_interrupts", 2_000, {
-            let mut program = JitProgram::compile(&interrupts.program);
+            let mut program =
+                JitProgram::compile(&interrupts.program).expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_heap_structs", 1_000, {
-            let mut program = JitProgram::compile(&heap.program);
+            let mut program =
+                JitProgram::compile(&heap.program).expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_builtin_heavy", 2_000, {
-            let mut program = JitProgram::compile(&builtins.program);
+            let mut program =
+                JitProgram::compile(&builtins.program).expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("api.run_source_vm", 500, || {

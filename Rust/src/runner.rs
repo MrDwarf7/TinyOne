@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
-    JitCache, Program, Result, TinyMemory, TinyOneError, TinyRunReport, VM, compile_source,
+    BytecodeVerifier, JitCache, Program, Result, TinyMemory, TinyOneError, TinyRunReport, VM,
+    compile_source,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +39,10 @@ pub fn run_program_with_env(
     sys_args: Vec<String>,
     sys_env: HashMap<String, String>,
 ) -> Result<TinyMemory> {
+    BytecodeVerifier::verify(program)?;
     match RunMode::parse(mode)? {
         RunMode::Vm => {
-            let mut vm = VM::new(program, TinyMemory::new(program.slot_count), inputs);
+            let mut vm = VM::new(program, TinyMemory::new(program.slot_count), inputs)?;
             vm.set_sys_args(sys_args);
             vm.set_sys_env(sys_env);
             vm.run(stdout)
@@ -58,9 +60,10 @@ pub fn run_program_report(
     stdout: &mut dyn Write,
     inputs: Vec<String>,
 ) -> Result<TinyRunReport> {
+    BytecodeVerifier::verify(program)?;
     match RunMode::parse(mode)? {
         RunMode::Vm => {
-            VM::new(program, TinyMemory::new(program.slot_count), inputs).run_report(stdout)
+            VM::new(program, TinyMemory::new(program.slot_count), inputs)?.run_report(stdout)
         }
         RunMode::Jit => {
             let mut cache = JitCache::new();
