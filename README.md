@@ -4,25 +4,20 @@ TinyOne is a tiny systems-language sketch implemented in Rust. It includes a
 lexer, recursive-descent compiler, bytecode optimizer, verifier, portable VM,
 heap/runtime model, bytecode artifact support, and CLI.
 
-`Rust/` is the source of truth and test plane for language development. New
-syntax, bytecode, VM, JIT, and runtime behavior is built in Rust first. The
-Python implementation under `Python/` is maintained as the validation plane and
-portable runtime: it follows Rust semantics, catches portability drift, and
-keeps a compile-less implementation available.
+`Rust/` is the source of truth and test plane for language development.
 
 Future maintained implementations are planned for Go and C++.
 
-## Compatibility Notice
+## Status
 
-Rust owns TinyOne behavior. Python validates that behavior and keeps a portable
-runtime aligned with the Rust implementation. Minor implementation differences
-and edge-case inconsistencies may still exist between runtimes.
+Current version: **0.5.0**. TinyOne v1 is targeted for release on **August 1, 2026**.
 
-The VM architecture is specifically designed to reduce behavioral divergence
-across implementations, but exact parity is not yet guaranteed in all cases.
-
-If you encounter compatibility issues, runtime inconsistencies, or unexpected
-edge-case behavior between implementations, please report them on [GitHub](https://github.com/ConnerAdamsMaine/TinyOne):
+The language, bytecode format, and CLI are stable enough for experimentation and
+educational use. All 101 tests pass on a clean `cargo test`. The C FFI ABI is
+explicitly marked **UNSTABLE** — do not depend on it across library versions
+until v1 is tagged and the ABI is declared stable. See
+[Known Failure Points](#known-failure-points) for the outstanding design issues
+tracked for v1.
 
 ## Features
 
@@ -60,10 +55,10 @@ edge-case behavior between implementations, please report them on [GitHub](https
   bytecode into a lower-level adaptive bytecode tier, caches it by program
   fingerprint, and quickens hot loop paths in-place.
 - Rust benchmark runner with correctness preflight and timing table
-- Rust unit tests under `Rust/src/lib.rs` and integration tests under
-  `Rust/tests/`
-- Python validation tests and portable-runtime benchmark harness under
-  `Python/Tests/`
+- Rust unit and integration tests under `Rust/tests/` (92 tests across four
+  suites; see [Tests and Benchmarks](#tests-and-benchmarks))
+- C FFI shared library (`libtinyone`) with a JSON-over-C-string API and a
+  machine-readable header (`tinyone.h`); all entry points are panic-safe
 
 ## Project Goals
 
@@ -88,8 +83,6 @@ GitHub repository in the future.
 ## Requirements
 
 - Rust toolchain with Cargo
-or
-- Python 3.10 or newer
 
 ## Quick Start
 
@@ -187,10 +180,10 @@ digest or tree file count mismatches, and status `2` for usage, manifest, file,
 or hashing errors.
 
 `Tools/` is reserved for future repo-maintenance utilities: release manifest
-generation, compatibility/audit helpers, benchmark result summarizers,
-cross-implementation parity scripts, and source-tree integrity checks. Tools in
-this directory should remain optional, deterministic where practical, and
-separate from the runtime semantics of the Rust and Python implementations.
+generation, audit helpers, benchmark result summarizers, and source-tree
+integrity checks. Tools in this directory should remain optional, deterministic
+where practical, and separate from the runtime semantics of the Rust
+implementation.
 
 ## Language
 
@@ -556,7 +549,7 @@ Operator precedence is:
 5. Addition and subtraction
 6. Comparisons and equality
 
-Division uses Python-style integer floor division through `//`. Division by zero
+Division uses floor division (truncating toward negative infinity) through `//`. Division by zero
 is reported as a TinyOne runtime error. Comparisons evaluate to integer `1` for
 true and `0` for false, which makes them usable as bounded loop conditions.
 Arithmetic and comparisons require integer operands.
@@ -697,55 +690,49 @@ publishing hashes, or changing language behavior:
 cargo fmt --manifest-path Rust/Cargo.toml --all --check
 cargo test --manifest-path Rust/Cargo.toml
 cargo clippy --manifest-path Rust/Cargo.toml --all-targets -- -D warnings
-python3 -m unittest discover -s Python/Tests -p 'test_*.py'
-python3 -m py_compile Python/main.py Tools/hash.py Python/Tests/test_vm_jit.py Python/Tests/bench_vm_jit.py
 ./Tools/hash.py --tree . --include .py --include .rs --include .toml --include .md --format json
 ```
 
-The Rust check covers the source-of-truth implementation: compiler, verifier,
-heap, VM, adaptive JIT, artifact round trips, CLI-facing APIs,
-benchmark-surface coverage, and VM/JIT runtime parity. The Python check
-validates that the portable runtime still follows Rust semantics across the
-same broad semantic categories. The `py_compile` pass catches Python syntax and
-import-time parse errors in the portable runtime, tests, benchmark harness, and
-tool scripts. The tree hash command is not a semantic test; it is an integrity
-checkpoint for the source-like files that should change intentionally.
+The tree hash command is not a semantic test; it is an integrity checkpoint for
+the source-like files that should change intentionally.
 
-Run the Rust correctness suite:
+### Test Suites
+
+There are four default test suites (101 tests total, all pass):
+
+| Suite | Tests | Notes |
+| --- | --- | --- |
+| `runtime_parity` | 35 | VM/JIT parity, heap, structs, imports, artifacts, diagnostics |
+| `abi_api_soundness` | 31 | FFI, artifact limits, verifier stress, ABI contracts; C FFI smoke skips gracefully if cdylib not pre-built |
+| `stdlib_parity` | 17 | Stdlib modules, FS round-trips, map/vec semantics |
+| `lib_smoke` | 1 | Crate-level public API smoke test |
+
+Run the default suite:
 
 ```sh
 cargo test --manifest-path Rust/Cargo.toml
 ```
 
-Run the feature-gated Rust language fixture suite and testing hooks:
+Run the feature-gated language fixture suite:
 
 ```sh
 cargo test --manifest-path Rust/Cargo.toml --features testing-hooks
 ```
 
-This command prints an explicit per-fixture report for every `.to` file in the
-language suite, grouped by passing programs, module/import programs,
-compile-fail programs, and runtime-fail programs. It covers both the newer
-`Rust/tests/Language/` fixtures and the legacy compatibility fixtures under
-`Rust/tests/Programs/`.
+This prints a per-fixture report for every `.to` file in `Rust/tests/Language/`
+and `Rust/tests/Programs/`, grouped by passing programs, compile-fail programs,
+and runtime-fail programs. The `testing-hooks` feature is not part of the
+production API contract.
 
-The Rust tests cover VM/adaptive-JIT parity for straight-line code, loops,
+The test suites cover VM/adaptive-JIT parity for straight-line code, loops,
 conditionals, function calls, nested control flow, runtime errors, memory slot
 behavior, heap arrays, dynamic array storage, structs, strings, buffers, pointer
 cells, raw pointers, null checks, pointer metadata, stale pointer rejection,
 deterministic input, namespaced imports, export visibility, package manifest
 resolution, artifact round trips, diagnostics, lexical scopes, hot-loop
-quickening, JIT listing emission, cache reuse, and verifier failures. The
-`testing-hooks` feature adds non-default external and internal Rust inspection
-hooks plus `.to` language fixtures under `Rust/tests/Language/` and
-`Rust/tests/Programs/`; it is for testing only, not the production API
-contract. The Python validation suite remains under `Python/Tests/`.
-
-Run the Python validation correctness suite:
-
-```sh
-python3 -m unittest discover -s Python/Tests -p 'test_*.py'
-```
+quickening, JIT listing emission, cache reuse, verifier failures, FFI null
+handling, artifact size limits, adversarial artifact fuzzing, and stdlib
+filesystem budgets.
 
 Run the Rust benchmark suite:
 
@@ -766,11 +753,70 @@ cache hits, VM execution, JIT execution, full compile-and-run APIs, function
 calls, heap/struct workloads, input-backed standard-library calls, and
 control-transfer opcodes.
 
+## C FFI
+
+TinyOne builds as a `cdylib` (`libtinyone.so` / `libtinyone.dylib` /
+`tinyone.dll`). All entry points are declared in `tinyone.h` and follow a
+uniform JSON-over-C-string contract. Every returned `char *` must be freed with
+`tinyone_free_string`; calling the C standard `free()` on it is undefined
+behavior. `tinyone_free_string(NULL)` is always a no-op.
+
+**ABI STATUS: UNSTABLE.** Do not depend on binary compatibility across versions
+until v1 is tagged.
+
+### Entry points
+
+| Function | Description |
+| --- | --- |
+| `tinyone_free_string(char *)` | Free any string returned by a `tinyone_*` call |
+| `tinyone_lex_source_json(source)` | Lex source and return `{"tokens": N}` |
+| `tinyone_compile_source_json(source)` | Compile source to `{"artifact":{...},"fingerprint":"..."}` |
+| `tinyone_compile_file_json(path)` | Compile file to artifact JSON |
+| `tinyone_run_source_json(source, mode, inputs_json)` | Compile and run source; return stdout + heap report |
+| `tinyone_run_file_json(path, mode, inputs_json)` | Compile and run file |
+| `tinyone_run_artifact_json(artifact_json, mode, inputs_json)` | Run pre-compiled artifact (8 MiB byte limit enforced before parse) |
+| `tinyone_jit_listing_json(artifact_json)` | Return the JIT assembly listing for an artifact |
+
+`mode` must be `"vm"` or `"jit"`. `inputs_json` is nullable; when non-null it
+must be a JSON array of strings. Null for a non-nullable parameter returns a
+structured `{"ok":false,"kind":"compile","error":"..."}` JSON object rather than
+crashing. Internal panics are caught at the FFI boundary and reported as
+`{"ok":false,"kind":"panic","error":"..."}`.
+
+### Response format
+
+```json
+{"ok": true,  "value": {...}}
+{"ok": false, "kind": "compile",  "error": "..."}
+{"ok": false, "kind": "runtime",  "error": "..."}
+{"ok": false, "kind": "panic",    "error": "..."}
+```
+
 ## Programmatic Use
 
-The Rust crate exposes `compile_source`, `compile_file`, `run_source`,
-`run_program`, `run_source_report`, `run_program_report`, `load_artifact`, and
-`write_artifact` from `tinyone`.
+The Rust crate exposes the following public API from `tinyone`:
+
+**Compilation:**
+`compile_source`, `compile_source_with_filename`,
+`compile_source_unoptimized`, `compile_source_unoptimized_with_filename`,
+`compile_file`, `lex_source`, `optimize_program`
+
+**Execution:**
+`run_source`, `run_source_report`, `run_program`, `run_program_report`,
+`run_program_with_env`
+
+**Artifacts:**
+`load_artifact`, `write_artifact`
+
+**JIT:**
+`JitProgram`, `JitCache` (fingerprint-keyed cache), `write_jit_listing`
+
+**Verification:**
+`BytecodeVerifier`, `VerifiedProgram` (type-safe wrapper produced after
+verification; use to verify once and reuse across calls)
+
+**Direct VM construction:**
+`VM::new` (accepts `&Program` and re-verifies internally)
 
 ```rust
 let mut stdout = Vec::new();
@@ -782,6 +828,66 @@ tinyone::run_source(
 )?;
 assert_eq!(String::from_utf8(stdout).unwrap(), "42\n");
 ```
+
+Using `JitCache` to compile once and run repeatedly:
+
+```rust
+let program = tinyone::compile_source("print 42")?;
+let mut cache = tinyone::JitCache::new();
+cache.run_program(&program, &mut stdout, Vec::new())?;
+```
+
+## Known Failure Points
+
+### Test notes
+
+**`c_header_ffi_smoke_covers_ownership_null_and_mode_contracts`** (in
+`Rust/tests/abi_api_soundness.rs`) compiles a small C program against the
+TinyOne debug `cdylib` and runs it. If the `cdylib` has not been built, the
+test skips with a diagnostic message rather than failing. To exercise the full
+test, run `cargo build --manifest-path Rust/Cargo.toml` before `cargo test`.
+All 101 tests pass in a clean `cargo test` run regardless.
+
+### Phase 2 ABI risks (tracked for v1)
+
+These are known gaps identified during the Phase 1 soundness review
+(`docs/release-gate-phase1.md`). They do not affect correctness for normal use
+but must be resolved before the ABI is declared stable:
+
+1. **`Program` struct fields are all `pub`.** A caller that holds an owned
+   `Program` can mutate its fields after `BytecodeVerifier::verify` succeeds,
+   defeating any TOCTOU invariant on future cached-verification paths.
+2. **`VerifiedProgram::into_program` loses type-system enforcement.** The method
+   returns the inner `Program` with no static guarantee that it stays verified.
+   A doc-comment warns about this, but the type cannot enforce it.
+3. **`VerifiedProgram` is not yet the canonical execution-path type.** The
+   public `run_*` APIs in `runner.rs` verify once and then call internal
+   unchecked constructors, so there is no double-verification on the hot path.
+   Full enforcement via `VerifiedProgram` as the input type is a Phase 2
+   stable-ABI task.
+4. **`tinyone_free_string` has no `catch_unwind` guard.** This matches the
+   conventional Rust FFI deallocator pattern, but passing a double-freed or
+   non-NUL-terminated pointer is UB rather than a clean panic. Callers must
+   obey the ownership contract in `tinyone.h`.
+5. **Future void `extern "C"` functions cannot use `respond()`.** Any new
+   void-returning FFI entry point requires its own `catch_unwind` guard.
+   Maintainers adding new FFI functions must not skip this.
+
+### Language constraints (by design)
+
+These are intentional design decisions, not bugs:
+
+- Variables cannot be redeclared with `let` in the same scope.
+- `return` is not valid at the top level.
+- Nested function definitions are not supported.
+- Functions cannot directly read or write top-level variables; values must be
+  passed as arguments.
+- `else if` chains are not supported; use nested `if`/`else` blocks.
+- Module source files may only contain `import`, `struct`, `fn`, and `export`
+  declarations; top-level executable statements in a module are a compile error.
+- `import` declarations must appear before any executable statements or
+  declarations in the importing file.
+- The `unsafe` keyword gates only single expressions, not blocks.
 
 ## Current Limitations
 
@@ -800,14 +906,23 @@ assert_eq!(String::from_utf8(stdout).unwrap(), "42\n");
 
 ```text
 .
+├── tinyone.h              C FFI header and ownership contract
 ├── Tools/
-│   └── hash.py
-├── Python/
-│   ├── main.py
-│   └── Tests/
-│       ├── README.md
-│       ├── bench_vm_jit.py
-│       └── test_vm_jit.py
+│   └── hash.py            Release manifest and source-tree integrity tool
+├── stdlib/
+│   ├── tinyone.json       Package manifest for stdlib modules
+│   └── *.to               vec, map, io, string, sync, result, option,
+│                          sys, path, fs, math, logic, typing
+├── docs/
+│   ├── architecture.md        Pipeline overview, module map, key invariants
+│   ├── bytecode.md            Opcode reference, artifact format, verifier rules
+│   ├── ffi/c-integration.md   C FFI integration guide and entry-point reference
+│   ├── stdlib.md              Phase-1 and Phase-2 builtin reference
+│   ├── contributing.md        Build, test, and contribution workflow
+│   ├── v1-roadmap.md          Work required before the v1 ABI-stable release
+│   ├── release-gate-phase1.md
+│   ├── audit-findings.md
+│   └── adversarial-findings.md
 ├── Rust/
 │   ├── Cargo.toml
 │   ├── src/
@@ -816,12 +931,20 @@ assert_eq!(String::from_utf8(stdout).unwrap(), "42\n");
 │   │   ├── lib.rs
 │   │   └── main.rs
 │   └── tests/
-│       └── runtime_parity.rs
-├── README.md
+│       ├── abi_api_soundness.rs
+│       ├── bench_stdlib.rs
+│       ├── language_suite.rs
+│       ├── lib_smoke.rs
+│       ├── runtime_parity.rs
+│       ├── stdlib_parity.rs
+│       ├── Language/          .to fixtures (testing-hooks only)
+│       └── Programs/          legacy compliance .to fixtures
+└── README.md
 ```
 
 `Rust/src/lib.rs` contains the compiler, verifier, bytecode runtime, heap, and
-public API. `Rust/src/main.rs` contains the CLI entrypoint. `Python/` keeps the
-portable runtime and validation tests aligned with Rust. `Tools/` contains
+public API. `Rust/src/main.rs` contains the CLI entrypoint. `stdlib/` contains
+the TinyOne-language source modules for the Phase-2 stdlib bridge; they are
+loaded via `import` and a `tinyone.json` package manifest. `Tools/` contains
 optional repo-maintenance utilities that support release, audit, and parity
 work without becoming part of the language runtime.
