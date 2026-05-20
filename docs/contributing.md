@@ -19,7 +19,7 @@ cargo build --release --manifest-path Rust/Cargo.toml
 ## Running Tests
 
 ```sh
-# Standard test suite (101 tests, all should pass)
+# Standard test suite (100 tests, all should pass)
 cargo test --manifest-path Rust/Cargo.toml
 
 # Language fixture suite (requires testing-hooks feature)
@@ -146,8 +146,18 @@ do not insert into or reorder them.
 
 To add a Phase-2 stdlib bridge builtin:
 
-1. **`builtins.rs`** — append a new `Builtin { name, arg_count }` entry after
-   index 34 in `BUILTINS`. The name must not conflict with any existing builtin.
+1. **`Rust/src/builtins.rs`** — append a new entry after index 34 in
+   `BUILTINS`. The name must not conflict with any existing builtin.
+
+   ```rust
+   BuiltinDef {
+       name: "your_fn",
+       min_args: N,
+       max_args: N,
+       requires_unsafe: false,
+   }
+   ```
+
 2. **`runtime/builtins.rs`** — add a dispatch arm in
    `runtime_call_stdlib_builtin` that calls your new function.
 3. **`runtime/stdlib.rs`** — implement the function as `pub fn b_your_name(…)`

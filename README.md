@@ -13,9 +13,10 @@ Future maintained implementations are planned for Go and C++.
 Current version: **0.5.0**. TinyOne v1 is targeted for release on **August 1, 2026**.
 
 The language, bytecode format, and CLI are stable enough for experimentation and
-educational use. All 101 tests pass on a clean `cargo test`. The C FFI ABI is
-explicitly marked **UNSTABLE** — do not depend on it across library versions
-until v1 is tagged and the ABI is declared stable. See
+educational use. The four named `Rust/tests/` suites have 91 passing tests;
+counting `bench_stdlib`, all 92 `Rust/tests/` cases pass as part of a clean
+`cargo test`. The C FFI ABI is explicitly marked **UNSTABLE** — do not depend on
+it across library versions until v1 is tagged and the ABI is declared stable. See
 [Known Failure Points](#known-failure-points) for the outstanding design issues
 tracked for v1.
 
@@ -55,8 +56,9 @@ tracked for v1.
   bytecode into a lower-level adaptive bytecode tier, caches it by program
   fingerprint, and quickens hot loop paths in-place.
 - Rust benchmark runner with correctness preflight and timing table
-- Rust unit and integration tests under `Rust/tests/` (92 tests across four
-  suites; see [Tests and Benchmarks](#tests-and-benchmarks))
+- Rust unit tests in `Rust/src/` plus integration suites under `Rust/tests/`
+  (91 tests across four named suites; 92 `Rust/tests/` cases when
+  `bench_stdlib` is included; see [Tests and Benchmarks](#tests-and-benchmarks))
 - C FFI shared library (`libtinyone`) with a JSON-over-C-string API and a
   machine-readable header (`tinyone.h`); all entry points are panic-safe
 
@@ -402,7 +404,7 @@ allocation.
 ### Standard Library
 
 TinyOne reserves these builtin names. Phase-1 (core) builtins occupy
-slots 0..34 in the canonical builtin table; Phase-2 stdlib bridge builtins
+slots 0..=34 in the canonical builtin table; Phase-2 stdlib bridge builtins
 follow them and are also bytecode-stable.
 
 Phase-1 (core):
@@ -410,7 +412,6 @@ Phase-1 (core):
 ```text
 len(value)
 array(count, fill)
-buffer(size)
 alloc(value)
 load(ptr)
 store(ptr, value)
@@ -419,8 +420,7 @@ read()
 read_int()
 read_str()
 to_int(value)
-ptr(value)
-ptr(array, index)
+ptr(value[, index])
 fieldptr(struct, field_name)
 ptr_addr(value)
 unsafe ptr_at(address)
@@ -428,6 +428,7 @@ unsafe ptr_add(ptr, offset)
 unsafe ptr_load(ptr)
 unsafe ptr_store(ptr, value)
 ptr_type(ptr)
+buffer(size)
 is_null(ptr)
 ptr_eq(left, right)
 ptr_ne(left, right)
@@ -698,14 +699,16 @@ the source-like files that should change intentionally.
 
 ### Test Suites
 
-There are four default test suites (101 tests total, all pass):
+There are four named default integration suites (91 tests total, all pass);
+`bench_stdlib` is a fifth `Rust/tests/` file, bringing that directory to 92
+passing cases:
 
 | Suite | Tests | Notes |
 | --- | --- | --- |
 | `runtime_parity` | 35 | VM/JIT parity, heap, structs, imports, artifacts, diagnostics |
 | `abi_api_soundness` | 31 | FFI, artifact limits, verifier stress, ABI contracts; C FFI smoke skips gracefully if cdylib not pre-built |
 | `stdlib_parity` | 17 | Stdlib modules, FS round-trips, map/vec semantics |
-| `lib_smoke` | 1 | Crate-level public API smoke test |
+| `lib_smoke` | 8 | Crate-level public API smoke test |
 
 Run the default suite:
 
@@ -846,7 +849,8 @@ cache.run_program(&program, &mut stdout, Vec::new())?;
 TinyOne debug `cdylib` and runs it. If the `cdylib` has not been built, the
 test skips with a diagnostic message rather than failing. To exercise the full
 test, run `cargo build --manifest-path Rust/Cargo.toml` before `cargo test`.
-All 101 tests pass in a clean `cargo test` run regardless.
+The 91 named integration-suite tests pass in a clean `cargo test` run regardless;
+counting `bench_stdlib`, the `Rust/tests/` inventory is 92 passing cases.
 
 ### Phase 2 ABI risks (tracked for v1)
 
