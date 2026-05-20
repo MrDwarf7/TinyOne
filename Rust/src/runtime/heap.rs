@@ -1,7 +1,10 @@
+use std::sync::{Arc, atomic::AtomicI64};
+
 use crate::{
     HeapRef, MAX_ARRAY_LENGTH, MAX_HEAP_BYTES, MAX_HEAP_OBJECTS, Result, TinyOneError, VALUE_BYTES,
     Value,
 };
+use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
 
 #[derive(Debug, Clone)]
 pub(crate) enum HeapData {
@@ -11,6 +14,9 @@ pub(crate) enum HeapData {
     Struct(Vec<(String, Value)>),
     Cell(Value),
     Map(Vec<(Value, Value)>),
+    Mutex(Arc<TinyMutex>),
+    Atomic(Arc<AtomicI64>),
+    Thread(Arc<TinyThreadHandle>),
 }
 
 #[derive(Debug, Clone)]
@@ -22,12 +28,15 @@ pub(crate) struct HeapObject {
 impl HeapObject {
     pub(crate) fn kind(&self) -> &'static str {
         match self.data {
-            HeapData::String(_) => "string",
-            HeapData::Array(_) => "array",
-            HeapData::Buffer(_) => "buffer",
-            HeapData::Struct(_) => "struct",
-            HeapData::Cell(_) => "cell",
-            HeapData::Map(_) => "map",
+            HeapData::String(_)  => "string",
+            HeapData::Array(_)   => "array",
+            HeapData::Buffer(_)  => "buffer",
+            HeapData::Struct(_)  => "struct",
+            HeapData::Cell(_)    => "cell",
+            HeapData::Map(_)     => "map",
+            HeapData::Mutex(_)   => "mutex",
+            HeapData::Atomic(_)  => "atomic",
+            HeapData::Thread(_)  => "thread",
         }
     }
 }
@@ -291,6 +300,18 @@ impl TinyHeap {
         self.alloc_data(HeapData::Cell(value))
     }
 
+    pub(crate) fn alloc_mutex(&mut self, m: Arc<TinyMutex>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Mutex(m))
+    }
+
+    pub(crate) fn alloc_atomic(&mut self, a: Arc<AtomicI64>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Atomic(a))
+    }
+
+    pub(crate) fn alloc_thread(&mut self, h: Arc<TinyThreadHandle>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Thread(h))
+    }
+
     pub(crate) fn get(&self, value: &Value) -> Result<&HeapObject> {
         let reference = expect_heap_ref(value)?;
         self.get_address(reference.address, reference.generation)
@@ -408,7 +429,32 @@ pub(crate) fn heap_object_bytes(object: &HeapObject) -> usize {
                     .map(|(name, _)| name.len() + VALUE_BYTES)
                     .sum::<usize>()
         }
-        HeapData::Cell(_) => VALUE_BYTES,
+        HeapData::Cell(_)    => VALUE_BYTES,
         HeapData::Map(entries) => entries.len().saturating_mul(VALUE_BYTES * 2),
+        HeapData::Mutex(_)   => std::mem::size_of::<TinyMutex>(),
+        HeapData::Atomic(_)  => std::mem::size_of::<AtomicI64>(),
+        HeapData::Thread(_)  => std::mem::size_of::<TinyThreadHandle>(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heap_can_alloc_mutex_atomic_thread_variants() {
+        use std::sync::{Arc, atomic::AtomicI64};
+        use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
+        let mut heap = TinyHeap::new();
+
+        let m = TinyMutex::new();
+        let hr = heap.alloc_mutex(m).unwrap();
+        let obj = heap.get_address(hr.address, hr.generation).unwrap();
+        assert_eq!(obj.kind(), "mutex");
+
+        let a = Arc::new(AtomicI64::new(7));
+        let hr = heap.alloc_atomic(a).unwrap();
+        let obj = heap.get_address(hr.address, hr.generation).unwrap();
+        assert_eq!(obj.kind(), "atomic");
     }
 }
