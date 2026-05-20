@@ -1,0 +1,4 @@
+enum Bad {
+  Item(tag),
+}
+# expect_error: Enum variant field "tag" is reserved
