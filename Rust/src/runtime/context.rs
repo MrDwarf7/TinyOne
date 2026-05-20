@@ -30,7 +30,11 @@ impl TinyRuntimeContext {
         if self.input_index >= self.inputs.len() {
             return Err(TinyOneError::runtime("Input exhausted"));
         }
-        let value = self.inputs[self.input_index].clone();
+        let value = self
+            .inputs
+            .get(self.input_index)
+            .cloned()
+            .ok_or_else(|| TinyOneError::runtime("Input exhausted"))?;
         self.input_index += 1;
         Ok(value)
     }

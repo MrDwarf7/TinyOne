@@ -226,7 +226,10 @@ pub(crate) fn runtime_pointer_load(context: &TinyRuntimeContext, pointer: &Value
                 ));
             };
             let index = checked_collection_index(pointer.index, values.len(), "Array pointer")?;
-            Ok(values[index].clone())
+            values
+                .get(index)
+                .cloned()
+                .ok_or_else(|| TinyOneError::runtime("Array pointer out of bounds"))
         }
         "buffer" => Err(TinyOneError::runtime(
             "Use read8/read16/read32 for buffer pointers",
@@ -290,7 +293,10 @@ pub(crate) fn runtime_pointer_store(
                 ));
             };
             let index = checked_collection_index(pointer.index, values.len(), "Array pointer")?;
-            values[index] = value.clone();
+            let target = values
+                .get_mut(index)
+                .ok_or_else(|| TinyOneError::runtime("Array pointer out of bounds"))?;
+            *target = value.clone();
             Ok(value)
         }
         "buffer" => Err(TinyOneError::runtime(
@@ -465,9 +471,12 @@ pub(crate) fn runtime_read_uint(
 ) -> Result<Value> {
     let (data, offset) = buffer_pointer(context, pointer, operation)?;
     let offset = checked_byte_range(offset, width, data.len(), operation)?;
+    let bytes = data.get(offset..offset + width).ok_or_else(|| {
+        TinyOneError::runtime(format!("{operation} out of bounds at byte offset {offset}"))
+    })?;
     let mut value = 0u32;
-    for i in 0..width {
-        value |= (data[offset + i] as u32) << (i * 8);
+    for (i, byte) in bytes.iter().enumerate() {
+        value |= (*byte as u32) << (i * 8);
     }
     Ok(Value::Int(value as i64))
 }
@@ -488,8 +497,11 @@ pub(crate) fn runtime_write_uint(
     }
     let (data, offset) = buffer_pointer(context, pointer, operation)?;
     let offset = checked_byte_range(offset, width, data.len(), operation)?;
-    for i in 0..width {
-        data[offset + i] = ((value_int >> (i * 8)) & 0xff) as u8;
+    let bytes = data.get_mut(offset..offset + width).ok_or_else(|| {
+        TinyOneError::runtime(format!("{operation} out of bounds at byte offset {offset}"))
+    })?;
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = ((value_int >> (i * 8)) & 0xff) as u8;
     }
     Ok(Value::Int(value_int))
 }

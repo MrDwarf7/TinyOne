@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
-    Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory, TinyOneError,
-    TinyRuntimeContext, Value, checked_div, checked_non_negative_usize, pop_args, runtime_add,
-    runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index, runtime_is_false,
-    runtime_make_array, runtime_make_struct, runtime_mul, runtime_neg, runtime_null, runtime_print,
-    runtime_set_field, runtime_set_index, runtime_sub,
+    BytecodeVerifier, Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory,
+    TinyOneError, TinyRuntimeContext, Value, checked_div, checked_non_negative_usize, pop_args,
+    runtime_add, runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index,
+    runtime_is_false, runtime_make_array, runtime_make_struct, runtime_mul, runtime_neg,
+    runtime_null, runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,13 +43,14 @@ fn lookup_field(fields: &[String], index: usize) -> Result<&str> {
 }
 
 impl<'a> VM<'a> {
-    pub fn new(program: &'a Program, memory: TinyMemory, inputs: Vec<String>) -> Self {
-        Self {
+    pub fn new(program: &'a Program, memory: TinyMemory, inputs: Vec<String>) -> Result<Self> {
+        BytecodeVerifier::verify(program)?;
+        Ok(Self {
             program,
             memory,
             context: TinyRuntimeContext::new(inputs),
             call_depth: 0,
-        }
+        })
     }
 
     pub fn set_sys_args(&mut self, args: Vec<String>) {

@@ -9,11 +9,18 @@
 //! return identical observable values for identical inputs.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
 
 use crate::runtime::typing::{
     TypeKind, check_integer_range, integer_range, promote_integer, smallest_fit_literal,
 };
-use crate::{HeapData, Result, TinyOneError, TinyRuntimeContext, Value, expect_int, expect_string};
+use crate::{
+    HeapData, Result, TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, expect_int,
+    expect_string, validate_pointer_base,
+};
+
+const MAX_FS_LIST_DIR_ENTRIES: usize = 65_536;
 
 fn expect_kind(value: &Value, kind: &str, operation: &str) -> Result<i64> {
     let Value::Int(value) = value else {
@@ -40,11 +47,18 @@ pub fn b_vec_new(context: &mut TinyRuntimeContext) -> Result<Value> {
 }
 
 pub fn b_vec_clear(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
-    let object = context.heap.get_mut(target)?;
-    let HeapData::Array(values) = &mut object.data else {
-        return Err(TinyOneError::runtime("vec_clear expects a vec/array"));
+    let cleared = {
+        let object = context.heap.get_mut(target)?;
+        let HeapData::Array(values) = &mut object.data else {
+            return Err(TinyOneError::runtime("vec_clear expects a vec/array"));
+        };
+        let cleared = values.len();
+        values.clear();
+        cleared
     };
-    values.clear();
+    context
+        .heap
+        .record_shrink(cleared.saturating_mul(VALUE_BYTES))?;
     Ok(Value::Int(0))
 }
 
@@ -73,20 +87,35 @@ pub fn b_map_set(
             return Err(TinyOneError::runtime("map_set expects a map"));
         };
         for (idx, (k, _)) in entries.iter().enumerate() {
-            if map_key_equal(context, k, &key) {
+            if map_key_equal(context, k, &key)? {
                 existing = Some(idx);
                 break;
             }
         }
     }
-    let object = context.heap.get_mut(target)?;
-    let HeapData::Map(entries) = &mut object.data else {
-        return Err(TinyOneError::runtime("map_set expects a map"));
-    };
-    if let Some(idx) = existing {
-        entries[idx].1 = value.clone();
-    } else {
-        entries.push((key, value.clone()));
+    if existing.is_none() {
+        context
+            .heap
+            .ensure_can_allocate_delta(VALUE_BYTES.saturating_mul(2))?;
+    }
+    let mut inserted = false;
+    {
+        let object = context.heap.get_mut(target)?;
+        let HeapData::Map(entries) = &mut object.data else {
+            return Err(TinyOneError::runtime("map_set expects a map"));
+        };
+        if let Some(idx) = existing {
+            let Some((_, existing_value)) = entries.get_mut(idx) else {
+                return Err(TinyOneError::runtime("map_set: internal index error"));
+            };
+            *existing_value = value.clone();
+        } else {
+            entries.push((key, value.clone()));
+            inserted = true;
+        }
+    }
+    if inserted {
+        context.heap.record_growth(VALUE_BYTES.saturating_mul(2))?;
     }
     Ok(value)
 }
@@ -97,7 +126,7 @@ pub fn b_map_get(context: &mut TinyRuntimeContext, target: &Value, key: &Value) 
         return Err(TinyOneError::runtime("map_get expects a map"));
     };
     for (k, v) in entries.iter() {
-        if map_key_equal(context, k, key) {
+        if map_key_equal(context, k, key)? {
             return Ok(v.clone());
         }
     }
@@ -109,8 +138,12 @@ pub fn b_map_has(context: &TinyRuntimeContext, target: &Value, key: &Value) -> R
     let HeapData::Map(entries) = &object.data else {
         return Err(TinyOneError::runtime("map_has expects a map"));
     };
-    let found = entries.iter().any(|(k, _)| map_key_equal(context, k, key));
-    Ok(Value::Int(found as i64))
+    for (k, _) in entries {
+        if map_key_equal(context, k, key)? {
+            return Ok(Value::Int(1));
+        }
+    }
+    Ok(Value::Int(0))
 }
 
 pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
@@ -119,16 +152,27 @@ pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) 
         let HeapData::Map(entries) = &object.data else {
             return Err(TinyOneError::runtime("map_del expects a map"));
         };
-        entries
-            .iter()
-            .position(|(k, _)| map_key_equal(context, k, key))
+        let mut found = None;
+        for (idx, (k, _)) in entries.iter().enumerate() {
+            if map_key_equal(context, k, key)? {
+                found = Some(idx);
+                break;
+            }
+        }
+        found
     };
-    let object = context.heap.get_mut(target)?;
-    let HeapData::Map(entries) = &mut object.data else {
-        return Err(TinyOneError::runtime("map_del expects a map"));
-    };
-    if let Some(idx) = to_remove {
+    let removed = if let Some(idx) = to_remove {
+        let object = context.heap.get_mut(target)?;
+        let HeapData::Map(entries) = &mut object.data else {
+            return Err(TinyOneError::runtime("map_del expects a map"));
+        };
         entries.remove(idx);
+        true
+    } else {
+        false
+    };
+    if removed {
+        context.heap.record_shrink(VALUE_BYTES.saturating_mul(2))?;
         Ok(Value::Int(1))
     } else {
         Ok(Value::Int(0))
@@ -165,11 +209,17 @@ pub fn b_map_values(context: &mut TinyRuntimeContext, target: &Value) -> Result<
     Ok(Value::Heap(context.heap.alloc_array(values)?))
 }
 
-fn map_key_equal(context: &TinyRuntimeContext, lhs: &Value, rhs: &Value) -> bool {
+fn map_key_equal(context: &TinyRuntimeContext, lhs: &Value, rhs: &Value) -> Result<bool> {
     match (lhs, rhs) {
-        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Int(a), Value::Int(b)) => Ok(a == b),
         (Value::Pointer(a), Value::Pointer(b)) => {
-            a.kind == b.kind && a.address == b.address && a.index == b.index && a.field == b.field
+            validate_pointer_base(context, a, "map key")?;
+            validate_pointer_base(context, b, "map key")?;
+            Ok(a.kind == b.kind
+                && a.address == b.address
+                && a.generation == b.generation
+                && a.index == b.index
+                && a.field == b.field)
         }
         (Value::Heap(_), Value::Heap(_)) => {
             // Strings are interned by content for map equality; this matches
@@ -178,18 +228,18 @@ fn map_key_equal(context: &TinyRuntimeContext, lhs: &Value, rhs: &Value) -> bool
             let rhs_obj = context.heap.get(rhs);
             match (lhs_obj, rhs_obj) {
                 (Ok(a), Ok(b)) => match (&a.data, &b.data) {
-                    (HeapData::String(left), HeapData::String(right)) => left == right,
+                    (HeapData::String(left), HeapData::String(right)) => Ok(left == right),
                     _ => match (lhs, rhs) {
                         (Value::Heap(la), Value::Heap(rb)) => {
-                            la.address == rb.address && la.generation == rb.generation
+                            Ok(la.address == rb.address && la.generation == rb.generation)
                         }
-                        _ => false,
+                        _ => Ok(false),
                     },
                 },
-                _ => false,
+                _ => Ok(false),
             }
         }
-        _ => false,
+        _ => Ok(false),
     }
 }
 
@@ -312,12 +362,16 @@ pub fn b_str_byte_at(context: &TinyRuntimeContext, target: &Value, index: &Value
     if index < 0 {
         return Err(TinyOneError::runtime("str_byte_at: negative index"));
     }
-    let index = index as usize;
+    let index = usize::try_from(index)
+        .map_err(|_| TinyOneError::runtime("str_byte_at: index is too large"))?;
     let bytes = text.as_bytes();
     if index >= bytes.len() {
         return Err(TinyOneError::runtime("str_byte_at: index out of bounds"));
     }
-    Ok(Value::Int(bytes[index] as i64))
+    let byte = bytes
+        .get(index)
+        .ok_or_else(|| TinyOneError::runtime("str_byte_at: index out of bounds"))?;
+    Ok(Value::Int(*byte as i64))
 }
 
 pub fn b_str_char_at(
@@ -330,9 +384,11 @@ pub fn b_str_char_at(
     if index < 0 {
         return Err(TinyOneError::runtime("str_char_at: negative index"));
     }
+    let index = usize::try_from(index)
+        .map_err(|_| TinyOneError::runtime("str_char_at: index is too large"))?;
     let ch = text
         .chars()
-        .nth(index as usize)
+        .nth(index)
         .ok_or_else(|| TinyOneError::runtime("str_char_at: index out of bounds"))?;
     Ok(Value::Heap(context.heap.alloc_string(ch.to_string())?))
 }
@@ -353,22 +409,25 @@ pub fn b_str_slice(
         return Err(TinyOneError::runtime("str_slice: end < start"));
     }
     let text_bytes = text.len();
-    let total_chars = text.chars().count() as i64;
+    let total_chars = i64::try_from(text.chars().count())
+        .map_err(|_| TinyOneError::runtime("str_slice: string is too large"))?;
     if start > total_chars || end > total_chars {
         return Err(TinyOneError::runtime("str_slice: bound out of range"));
     }
-    let char_byte_offset = |target: i64| -> usize {
+    let char_byte_offset = |target: i64| -> Result<usize> {
         if target == total_chars {
-            text_bytes
+            Ok(text_bytes)
         } else {
+            let target = usize::try_from(target)
+                .map_err(|_| TinyOneError::runtime("str_slice: bound is too large"))?;
             text.char_indices()
-                .nth(target as usize)
+                .nth(target)
                 .map(|(byte_index, _)| byte_index)
-                .unwrap_or(text_bytes)
+                .ok_or_else(|| TinyOneError::runtime("str_slice: bound out of range"))
         }
     };
-    let byte_start = char_byte_offset(start);
-    let byte_end = char_byte_offset(end);
+    let byte_start = char_byte_offset(start)?;
+    let byte_end = char_byte_offset(end)?;
     let sliced = text
         .get(byte_start..byte_end)
         .ok_or_else(|| TinyOneError::runtime("str_slice: byte boundary not on char boundary"))?
@@ -712,10 +771,17 @@ pub fn b_sys_argc(context: &TinyRuntimeContext) -> Result<Value> {
 
 pub fn b_sys_argv(context: &mut TinyRuntimeContext, index: &Value) -> Result<Value> {
     let index = expect_int(index, "sys_argv")?;
-    if index < 0 || (index as usize) >= context.sys_args.len() {
+    let Ok(index) = usize::try_from(index) else {
+        return Err(TinyOneError::runtime("sys_argv: index out of range"));
+    };
+    if index >= context.sys_args.len() {
         return Err(TinyOneError::runtime("sys_argv: index out of range"));
     }
-    let text = context.sys_args[index as usize].clone();
+    let text = context
+        .sys_args
+        .get(index)
+        .cloned()
+        .ok_or_else(|| TinyOneError::runtime("sys_argv: index out of range"))?;
     Ok(Value::Heap(context.heap.alloc_string(text)?))
 }
 
@@ -772,8 +838,29 @@ pub fn b_path_dirname(context: &mut TinyRuntimeContext, target: &Value) -> Resul
 
 pub fn b_fs_read(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
     let path = expect_string(context, target, "fs_read")?;
-    let bytes =
-        std::fs::read(&path).map_err(|error| TinyOneError::runtime(format!("fs_read: {error}")))?;
+    let meta = std::fs::metadata(&path)
+        .map_err(|error| TinyOneError::runtime(format!("fs_read: {error}")))?;
+    if meta.len() > crate::MAX_BUFFER_BYTES as u64 {
+        return Err(TinyOneError::runtime(format!(
+            "fs_read: file size {} exceeds limit {}",
+            meta.len(),
+            crate::MAX_BUFFER_BYTES
+        )));
+    }
+    let mut file =
+        File::open(&path).map_err(|error| TinyOneError::runtime(format!("fs_read: {error}")))?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take((crate::MAX_BUFFER_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| TinyOneError::runtime(format!("fs_read: {error}")))?;
+    if bytes.len() > crate::MAX_BUFFER_BYTES {
+        return Err(TinyOneError::runtime(format!(
+            "fs_read: file size {} exceeds limit {}",
+            bytes.len(),
+            crate::MAX_BUFFER_BYTES
+        )));
+    }
     Ok(Value::Heap(context.heap.alloc_buffer_with(bytes)?))
 }
 
@@ -803,18 +890,33 @@ pub fn b_fs_exists(context: &TinyRuntimeContext, target: &Value) -> Result<Value
 pub fn b_fs_list_dir(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
     let path = expect_string(context, target, "fs_list_dir")?;
     let mut sorted = BTreeMap::new();
+    let mut name_bytes = 0usize;
     let entries = std::fs::read_dir(&path)
         .map_err(|error| TinyOneError::runtime(format!("fs_list_dir: {error}")))?;
     for entry in entries {
         let entry =
             entry.map_err(|error| TinyOneError::runtime(format!("fs_list_dir: {error}")))?;
+        if sorted.len() >= MAX_FS_LIST_DIR_ENTRIES {
+            return Err(TinyOneError::runtime(format!(
+                "fs_list_dir: directory entry count exceeds limit {MAX_FS_LIST_DIR_ENTRIES}"
+            )));
+        }
         let name = entry.file_name().to_string_lossy().into_owned();
+        name_bytes = name_bytes
+            .checked_add(name.len())
+            .ok_or_else(|| TinyOneError::runtime("fs_list_dir: directory name budget overflow"))?;
+        if name_bytes > crate::MAX_BUFFER_BYTES {
+            return Err(TinyOneError::runtime(format!(
+                "fs_list_dir: directory name bytes exceed limit {}",
+                crate::MAX_BUFFER_BYTES
+            )));
+        }
         sorted.insert(name, ());
     }
-    let names: Vec<Value> = sorted
-        .keys()
-        .map(|name| Value::Heap(context.heap.alloc_string(name.clone()).unwrap()))
-        .collect();
+    let mut names: Vec<Value> = Vec::with_capacity(sorted.len());
+    for name in sorted.into_keys() {
+        names.push(Value::Heap(context.heap.alloc_string(name)?));
+    }
     Ok(Value::Heap(context.heap.alloc_array(names)?))
 }
 

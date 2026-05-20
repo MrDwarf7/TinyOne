@@ -16,6 +16,7 @@ struct LoopContext {
 pub(crate) struct Compiler {
     tokens: Vec<Token>,
     index: usize,
+    eof_token: Token,
     source_map: SourceMap,
     filename: String,
     resolver: Option<Resolver>,
@@ -46,6 +47,7 @@ impl Compiler {
     ) -> Result<Self> {
         let source = source.into();
         let filename = filename.into();
+        let source_len = source.len();
         let source_map = SourceMap::new(source.clone(), filename.clone());
         let tokens = Lexer::new(source, filename.clone()).tokenize()?;
         let mut module_filename = None;
@@ -79,6 +81,12 @@ impl Compiler {
         Ok(Self {
             tokens,
             index: 0,
+            eof_token: Token {
+                kind: TokenKind::Eof,
+                text: String::new(),
+                pos: source_len,
+                end: source_len,
+            },
             source_map,
             filename,
             resolver,
@@ -128,7 +136,7 @@ impl Compiler {
             }
         }
         self.emit(Op::Halt, 0, 0);
-        self.finalize_module();
+        self.finalize_module()?;
         let state = self.shared.borrow();
         Ok(Program {
             code: self.code.clone(),
@@ -154,15 +162,17 @@ impl Compiler {
         }
     }
 
-    fn finalize_module(&mut self) {
+    fn finalize_module(&mut self) -> Result<()> {
         let Some(filename) = self.module_filename.clone() else {
-            return;
+            return Ok(());
         };
         let mut state = self.shared.borrow_mut();
         let def = {
-            let info = state.modules.get_mut(&filename).expect("module info");
+            let Some(info) = state.modules.get_mut(&filename) else {
+                return Err(TinyOneError::compile("Internal module state error"));
+            };
             if info.finalized {
-                return;
+                return Ok(());
             }
             info.imports = self.module_imports.clone();
             let mut exported_functions = info.function_exports.keys().cloned().collect::<Vec<_>>();
@@ -179,6 +189,7 @@ impl Compiler {
             }
         };
         state.module_defs.push(def);
+        Ok(())
     }
 
     fn statement(&mut self) -> Result<()> {
@@ -269,12 +280,15 @@ impl Compiler {
         });
         let result = self.block();
         result?;
-        let loop_context = self.loops.pop().expect("loop context");
+        let loop_context = self
+            .loops
+            .pop()
+            .ok_or_else(|| TinyOneError::compile("Internal loop state error"))?;
         self.emit(Op::Jump, loop_start as i64, 0);
         let loop_end = self.code.len() as i64;
-        self.patch(exit_jump, loop_end);
+        self.patch(exit_jump, loop_end)?;
         for break_jump in loop_context.breaks {
-            self.patch(break_jump, loop_end);
+            self.patch(break_jump, loop_end)?;
         }
         Ok(())
     }
@@ -286,12 +300,12 @@ impl Compiler {
         self.block()?;
         if self.current().kind == TokenKind::Else {
             let end_jump = self.emit_placeholder(Op::Jump);
-            self.patch(false_jump, self.code.len() as i64);
+            self.patch(false_jump, self.code.len() as i64)?;
             self.eat(TokenKind::Else)?;
             self.block()?;
-            self.patch(end_jump, self.code.len() as i64);
+            self.patch(end_jump, self.code.len() as i64)?;
         } else {
-            self.patch(false_jump, self.code.len() as i64);
+            self.patch(false_jump, self.code.len() as i64)?;
         }
         Ok(())
     }
@@ -302,11 +316,10 @@ impl Compiler {
             return Err(self.error("Break outside loop", token));
         }
         let break_jump = self.emit_placeholder(Op::Jump);
-        self.loops
-            .last_mut()
-            .expect("loop context")
-            .breaks
-            .push(break_jump);
+        let Some(loop_context) = self.loops.last_mut() else {
+            return Err(TinyOneError::compile("Internal loop state error"));
+        };
+        loop_context.breaks.push(break_jump);
         Ok(())
     }
 
@@ -520,7 +533,9 @@ impl Compiler {
         self.local_struct_indexes.insert(name.clone(), struct_index);
         if let Some(filename) = &self.module_filename {
             let mut state = self.shared.borrow_mut();
-            let info = state.modules.get_mut(filename).expect("module info");
+            let Some(info) = state.modules.get_mut(filename) else {
+                return Err(TinyOneError::compile("Internal module state error"));
+            };
             info.all_structs.insert(name.clone());
             if exported {
                 info.struct_exports.insert(name, struct_index);
@@ -570,7 +585,9 @@ impl Compiler {
             .insert(name.clone(), function_index);
         if let Some(filename) = &self.module_filename {
             let mut state = self.shared.borrow_mut();
-            let info = state.modules.get_mut(filename).expect("module info");
+            let Some(info) = state.modules.get_mut(filename) else {
+                return Err(TinyOneError::compile("Internal module state error"));
+            };
             info.all_functions.insert(name.clone());
             if exported {
                 info.function_exports.insert(name.clone(), function_index);
@@ -641,7 +658,7 @@ impl Compiler {
             self.eat(TokenKind::RBrace)?;
             Ok(())
         })();
-        self.symbols.exit_scope();
+        self.symbols.exit_scope()?;
         result
     }
 
@@ -893,7 +910,7 @@ impl Compiler {
     }
 
     fn current(&self) -> &Token {
-        &self.tokens[self.index]
+        self.tokens.get(self.index).unwrap_or(&self.eof_token)
     }
 
     fn peek_kind(&self, offset: usize) -> Option<TokenKind> {
@@ -922,8 +939,14 @@ impl Compiler {
         index
     }
 
-    fn patch(&mut self, index: usize, arg: i64) {
-        self.code[index].arg = arg;
+    fn patch(&mut self, index: usize, arg: i64) -> Result<()> {
+        let Some(instr) = self.code.get_mut(index) else {
+            return Err(TinyOneError::compile(
+                "Internal compiler patch target error",
+            ));
+        };
+        instr.arg = arg;
+        Ok(())
     }
 
     fn get_slot(&self, token: &Token) -> Result<usize> {

@@ -266,10 +266,10 @@ fn jit_cache_reuses_straightline_dispatch_and_heap_programs() {
         let mut cache = JitCache::new();
 
         assert!(cache.is_empty(), "{name}");
-        let first = cache.compile(&program) as *const _;
+        let first = cache.compile(&program).expect("jit compile") as *const _;
         assert_eq!(1, cache.len(), "{name}");
 
-        let second = cache.compile(&program) as *const _;
+        let second = cache.compile(&program).expect("jit compile") as *const _;
         assert_eq!(first, second, "{name}");
         assert_eq!(1, cache.len(), "{name}");
     }
@@ -285,7 +285,7 @@ fn jit_compiles_to_lowered_bytecode_listing() {
     )
     .expect("source should compile");
     let mut cache = JitCache::new();
-    let compiled = cache.compile(&program);
+    let compiled = cache.compile(&program).expect("jit compile");
 
     assert_eq!(program.fingerprint(), compiled.fingerprint());
     assert!(compiled.listing().contains(".chunk 0 main"));
@@ -339,7 +339,7 @@ fn jit_quickens_hot_back_edges_after_warm_runs() {
     assert!(stats.hot_ranges >= 1);
     assert!(stats.quickened_ops > 0);
 
-    let listing = cache.compile(&program).listing();
+    let listing = cache.compile(&program).expect("jit compile").listing();
     assert!(listing.contains("add.int"));
     assert!(listing.contains("jmp.hot"));
 }

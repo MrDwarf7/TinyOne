@@ -8,5 +8,5 @@ pub(crate) mod verifier;
 pub use instr::Instr;
 pub use opcode::Op;
 pub use peephole::PeepholeOptimizer;
-pub use program::{Function, ModuleDef, ModuleImportDef, Program, StructDef};
+pub use program::{Function, ModuleDef, ModuleImportDef, Program, StructDef, VerifiedProgram};
 pub use verifier::BytecodeVerifier;

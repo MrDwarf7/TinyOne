@@ -11,20 +11,22 @@
 |----|------|--------|----------|
 | A | FFI panic boundary | ALREADY OK | ffi.rs:107-147 — double catch_unwind, fallback_response uses static literal |
 | B | C string ownership contract | ALREADY OK | tinyone.h:1-147 — ownership rules, NULL no-op, nullable annotations, UNSTABLE status |
-| C | Panic-producing paths | ALREADY OK | jit/op.rs — jit_operand returns Result; stdlib.rs:334-351 — b_str_char_at uses try_from |
+| C | Panic-producing paths | FIXED | jit/op.rs — jit_operand returns Result; stdlib.rs string index paths use try_from and return Err |
 | D | Verified execution boundary | ALREADY OK | BytecodeVerifier::verify at runner.rs:42,63; vm.rs:47; jit/program.rs:24; jit/cache.rs:46,82,95,106; artifact.rs:179 |
 | E | Artifact resource limits | ALREADY OK | artifact.rs:8-19 — 8 limits enforced; reject_over_limit before any collect() |
 | F | Verifier work and stack limits | ALREADY OK | verifier.rs:5-8 — MAX_VERIFIER_STEPS=10,000,000; MAX_STACK_DEPTH=65,536 |
 | G | Host filesystem budget | ALREADY OK | stdlib.rs:795-803 — metadata before open; b_fs_list_dir count+byte limits |
-| H | 32-bit/usize conversion safety | ALREADY OK | artifact.rs:250-259 — as_u64+try_from; zero bare `as usize` in all 4 paths |
+| H | 32-bit/usize conversion safety | FIXED | artifact.rs:250-259 — as_u64+try_from; zero bare `as usize` under Rust/src |
 
 ## Files Changed
 
-No source files changed — all fixes were already present in the working tree.
+- `Rust/src/runtime/stdlib.rs` — removed the remaining production `as usize`
+  string-slice conversion and replaced the fallback byte-offset path with
+  checked conversion plus a structured runtime error.
 
 ## Tests Added
 
-No new tests added — all 15 required tests were already present and passing in `Rust/tests/abi_api_soundness.rs`.
+8 adversarial tests were added to `Rust/tests/abi_api_soundness.rs`, bringing the total to 31 (23 original ABI soundness tests + 8 new adversarial tests). The adversarial tests exercise crafted inputs targeting each defect area: slot-count overflows at exact/MAX boundaries, float-field counts, negative counts, tight verifier loops, JIT artifact round-trips, FFI byte-limit boundaries, and duplicate artifact keys.
 
 ## Remaining Known Risks
 
@@ -42,8 +44,8 @@ No new tests added — all 15 required tests were already present and passing in
 | Public safe Rust cannot run unverified programs | **PASS** |
 | Hostile artifacts fail before dangerous allocation | **PASS** |
 | Filesystem builtins obey host budgets | **PASS** |
-| Regression tests pass (84 total, 15 soundness) | **PASS** |
+| Regression tests pass (99 total, 31 soundness) | **PASS** |
 
 ## Phase 1 Verdict: PASS
 
-All five acceptance criteria met. Zero source changes required — the implementation was complete prior to gate review. The working tree is ready to be committed and tagged as a Phase 1 soundness checkpoint. Do not claim a stable ABI until the Phase 2 risks above are addressed.
+All five acceptance criteria met after the implementation patch listed above. The working tree is ready to be committed and tagged as a Phase 1 soundness checkpoint. Do not claim a stable ABI until the Phase 2 risks above are addressed.

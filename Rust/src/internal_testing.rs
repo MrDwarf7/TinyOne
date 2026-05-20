@@ -82,16 +82,23 @@ pub(crate) fn inspect_program(program: &Program) -> ProgramInspection {
 }
 
 pub(crate) fn inspect_jit(program: &Program) -> JitInspection {
-    let compiled = JitProgram::compile(program);
-    JitInspection {
-        fingerprint: compiled.fingerprint().to_string(),
-        listing: compiled.listing(),
-        chunk_count: compiled.chunks.len(),
-        op_count: compiled
-            .chunks
-            .iter()
-            .map(|chunk| chunk.ops.len())
-            .sum::<usize>(),
+    match JitProgram::compile(program) {
+        Ok(compiled) => JitInspection {
+            fingerprint: compiled.fingerprint().to_string(),
+            listing: compiled.listing(),
+            chunk_count: compiled.chunks.len(),
+            op_count: compiled
+                .chunks
+                .iter()
+                .map(|chunk| chunk.ops.len())
+                .sum::<usize>(),
+        },
+        Err(error) => JitInspection {
+            fingerprint: program.fingerprint(),
+            listing: format!("; tinyone adaptive-jit unavailable: {error}"),
+            chunk_count: 0,
+            op_count: 0,
+        },
     }
 }
 

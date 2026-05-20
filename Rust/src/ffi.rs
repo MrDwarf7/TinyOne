@@ -5,13 +5,18 @@ use std::path::Path;
 
 use serde_json::{Value as JsonValue, json};
 
+use crate::bytecode::artifact::MAX_ARTIFACT_BYTES;
 use crate::{
     JitProgram, Program, Result, RuntimeValue, TinyHeapStats, TinyMemory, TinyOneError,
     compile_file, compile_source, lex_source, run_program_report, run_source_report,
 };
 
+/// # Safety
+///
+/// `value` must be null or a pointer returned by a TinyOne C-ABI function
+/// that has not already been freed.
 #[unsafe(no_mangle)]
-pub extern "C" fn tinyone_free_string(value: *mut c_char) {
+pub unsafe extern "C" fn tinyone_free_string(value: *mut c_char) {
     if value.is_null() {
         return;
     }
@@ -20,32 +25,48 @@ pub extern "C" fn tinyone_free_string(value: *mut c_char) {
     }
 }
 
+/// # Safety
+///
+/// `source` may be null. If non-null, it must point to a valid
+/// NUL-terminated UTF-8 C string for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn tinyone_lex_source_json(source: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn tinyone_lex_source_json(source: *const c_char) -> *mut c_char {
     respond(|| {
         let source = read_string(source, "source")?;
         Ok(json!({"tokens": lex_source(&source)?}))
     })
 }
 
+/// # Safety
+///
+/// `source` may be null. If non-null, it must point to a valid
+/// NUL-terminated UTF-8 C string for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn tinyone_compile_source_json(source: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn tinyone_compile_source_json(source: *const c_char) -> *mut c_char {
     respond(|| {
         let source = read_string(source, "source")?;
         program_payload(compile_source(&source)?)
     })
 }
 
+/// # Safety
+///
+/// `path` may be null. If non-null, it must point to a valid NUL-terminated
+/// UTF-8 C string for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn tinyone_compile_file_json(path: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn tinyone_compile_file_json(path: *const c_char) -> *mut c_char {
     respond(|| {
         let path = read_string(path, "path")?;
         program_payload(compile_file(Path::new(&path))?)
     })
 }
 
+/// # Safety
+///
+/// `source`, `mode`, and `inputs_json` may be null. Any non-null pointer must
+/// point to a valid NUL-terminated UTF-8 C string for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn tinyone_run_source_json(
+pub unsafe extern "C" fn tinyone_run_source_json(
     source: *const c_char,
     mode: *const c_char,
     inputs_json: *const c_char,
@@ -65,8 +86,12 @@ pub extern "C" fn tinyone_run_source_json(
     })
 }
 
+/// # Safety
+///
+/// `path`, `mode`, and `inputs_json` may be null. Any non-null pointer must
+/// point to a valid NUL-terminated UTF-8 C string for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn tinyone_run_file_json(
+pub unsafe extern "C" fn tinyone_run_file_json(
     path: *const c_char,
     mode: *const c_char,
     inputs_json: *const c_char,
@@ -80,14 +105,19 @@ pub extern "C" fn tinyone_run_file_json(
     })
 }
 
+/// # Safety
+///
+/// `artifact_json`, `mode`, and `inputs_json` may be null. Any non-null pointer
+/// must point to a valid NUL-terminated UTF-8 C string for the duration of the
+/// call. `artifact_json` must not exceed the documented artifact byte limit.
 #[unsafe(no_mangle)]
-pub extern "C" fn tinyone_run_artifact_json(
+pub unsafe extern "C" fn tinyone_run_artifact_json(
     artifact_json: *const c_char,
     mode: *const c_char,
     inputs_json: *const c_char,
 ) -> *mut c_char {
     respond(|| {
-        let artifact = read_json(artifact_json, "artifact")?;
+        let artifact = read_artifact_json(artifact_json)?;
         let mode = read_string(mode, "mode")?;
         let inputs = read_inputs(inputs_json)?;
         let program = Program::from_artifact(artifact)?;
@@ -95,32 +125,60 @@ pub extern "C" fn tinyone_run_artifact_json(
     })
 }
 
+/// # Safety
+///
+/// `artifact_json` may be null. If non-null, it must point to a valid
+/// NUL-terminated UTF-8 C string for the duration of the call and must not
+/// exceed the documented artifact byte limit.
 #[unsafe(no_mangle)]
-pub extern "C" fn tinyone_jit_listing_json(artifact_json: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn tinyone_jit_listing_json(artifact_json: *const c_char) -> *mut c_char {
     respond(|| {
-        let artifact = read_json(artifact_json, "artifact")?;
+        let artifact = read_artifact_json(artifact_json)?;
         let program = Program::from_artifact(artifact)?;
-        Ok(json!({"listing": JitProgram::compile(&program).listing()}))
+        Ok(json!({"listing": JitProgram::compile(&program)?.listing()}))
     })
 }
 
 fn respond(callback: impl FnOnce() -> Result<JsonValue>) -> *mut c_char {
+    match catch_unwind(AssertUnwindSafe(|| response_cstring(callback))) {
+        Ok(response) => response.into_raw(),
+        Err(_) => fallback_response().into_raw(),
+    }
+}
+
+fn response_cstring(callback: impl FnOnce() -> Result<JsonValue>) -> CString {
     let payload = match catch_unwind(AssertUnwindSafe(callback)) {
         Ok(Ok(value)) => json!({"ok": true, "value": value}),
-        Ok(Err(error)) => {
-            let kind = match error {
-                TinyOneError::Compile(_) => "compile",
-                TinyOneError::Runtime(_) => "runtime",
-            };
-            json!({"ok": false, "kind": kind, "error": error.to_string()})
-        }
-        Err(_) => {
-            json!({"ok": false, "kind": "panic", "error": "TinyOne panicked across the FFI boundary"})
-        }
+        Ok(Err(error)) => error_payload(&error),
+        Err(_) => json!({
+            "ok": false,
+            "kind": "panic",
+            "error": "TinyOne panicked across the FFI boundary"
+        }),
     };
-    CString::new(payload.to_string())
-        .expect("serde_json output never contains interior NUL bytes")
-        .into_raw()
+    match serde_json::to_string(&payload) {
+        Ok(text) => cstring_or_fallback(text),
+        Err(_) => fallback_response(),
+    }
+}
+
+fn error_payload(error: &TinyOneError) -> JsonValue {
+    let kind = match error {
+        TinyOneError::Compile(_) => "compile",
+        TinyOneError::Runtime(_) => "runtime",
+    };
+    json!({"ok": false, "kind": kind, "error": error.to_string()})
+}
+
+fn cstring_or_fallback(text: String) -> CString {
+    CString::new(text).unwrap_or_else(|_| fallback_response())
+}
+
+fn fallback_response() -> CString {
+    const FALLBACK: &[u8] =
+        b"{\"ok\":false,\"kind\":\"panic\",\"error\":\"response serialization failed\"}\0";
+    // The byte string above is static valid JSON followed by exactly one NUL.
+    unsafe { CString::from_vec_with_nul_unchecked(FALLBACK.to_vec()) }
 }
 
 fn read_string(value: *const c_char, name: &str) -> Result<String> {
@@ -137,6 +195,30 @@ fn read_json(value: *const c_char, name: &str) -> Result<JsonValue> {
     let text = read_string(value, name)?;
     serde_json::from_str(&text)
         .map_err(|error| TinyOneError::compile(format!("{name} must be valid JSON: {error}")))
+}
+
+fn read_artifact_json(value: *const c_char) -> Result<JsonValue> {
+    let text = read_string_limited(value, "artifact", MAX_ARTIFACT_BYTES)?;
+    serde_json::from_str(&text)
+        .map_err(|error| TinyOneError::compile(format!("artifact must be valid JSON: {error}")))
+}
+
+fn read_string_limited(value: *const c_char, name: &str, max_bytes: usize) -> Result<String> {
+    if value.is_null() {
+        return Err(TinyOneError::compile(format!("{name} pointer was null")));
+    }
+    for len in 0..=max_bytes {
+        let byte = unsafe { *value.add(len) };
+        if byte == 0 {
+            let bytes = unsafe { std::slice::from_raw_parts(value.cast::<u8>(), len) };
+            return std::str::from_utf8(bytes)
+                .map(ToOwned::to_owned)
+                .map_err(|error| TinyOneError::compile(format!("{name} must be UTF-8: {error}")));
+        }
+    }
+    Err(TinyOneError::compile(format!(
+        "{name} exceeds byte limit {max_bytes}"
+    )))
 }
 
 fn read_inputs(value: *const c_char) -> Result<Vec<String>> {

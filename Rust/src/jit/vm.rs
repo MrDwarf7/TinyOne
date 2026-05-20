@@ -50,7 +50,12 @@ impl<'a> JitVm<'a> {
     }
 
     pub(crate) fn run_report(mut self, stdout: &mut dyn Write) -> Result<TinyRunReport> {
-        let slot_count = self.program.chunks[0].slot_count;
+        let slot_count = self
+            .program
+            .chunks
+            .first()
+            .ok_or_else(|| TinyOneError::runtime("JIT program has no main chunk"))?
+            .slot_count;
         let mut memory = TinyMemory::new(slot_count);
         self.run_chunk(0, &mut memory, stdout)?;
         let heap_before_shutdown = self.context.heap_stats();
@@ -68,7 +73,14 @@ impl<'a> JitVm<'a> {
         memory: &mut TinyMemory,
         stdout: &mut dyn Write,
     ) -> Result<Option<Value>> {
-        let stack_capacity = self.program.chunks[chunk_index].ops.len().min(32);
+        let stack_capacity = self
+            .program
+            .chunks
+            .get(chunk_index)
+            .ok_or_else(|| TinyOneError::runtime(format!("Invalid JIT chunk {chunk_index}")))?
+            .ops
+            .len()
+            .min(32);
         let mut stack: Vec<Value> = Vec::with_capacity(stack_capacity);
         let mut pc = 0usize;
         loop {
@@ -244,7 +256,12 @@ impl<'a> JitVm<'a> {
                 }
                 JitOp::Halt => {
                     if !stack.is_empty() {
-                        let chunk_name = &self.program.chunks[chunk_index].name;
+                        let chunk_name = self
+                            .program
+                            .chunks
+                            .get(chunk_index)
+                            .map(|chunk| chunk.name.as_str())
+                            .unwrap_or("<invalid>");
                         return Err(TinyOneError::runtime(format!(
                             "Internal stack imbalance at halt in {chunk_name}"
                         )));

@@ -81,15 +81,21 @@ impl TinyHeap {
         let bytes = heap_object_bytes(&object);
         self.ensure_can_allocate(bytes)?;
         if let Some(address) = self.free.pop() {
-            self.generations[address] = checked_or(
-                self.generations[address].checked_add(1),
-                "Heap generation exhausted",
-            )?;
-            self.objects[address] = Some(object);
+            let generation = {
+                let generation = self.generations.get_mut(address).ok_or_else(|| {
+                    TinyOneError::runtime(format!("Invalid heap free slot {address}"))
+                })?;
+                *generation = checked_or(generation.checked_add(1), "Heap generation exhausted")?;
+                *generation
+            };
+            let target = self.objects.get_mut(address).ok_or_else(|| {
+                TinyOneError::runtime(format!("Invalid heap free slot {address}"))
+            })?;
+            *target = Some(object);
             self.record_alloc(bytes)?;
             Ok(HeapRef {
                 address,
-                generation: self.generations[address],
+                generation,
             })
         } else {
             if self.objects.len() >= MAX_HEAP_OBJECTS {
@@ -163,9 +169,7 @@ impl TinyHeap {
     pub(crate) fn grow_array(&mut self, target: &Value, value: Value) -> Result<usize> {
         let reference = expect_heap_ref(target)?;
         self.get_address(reference.address, reference.generation)?;
-        let object = self.objects[reference.address]
-            .as_ref()
-            .expect("current object");
+        let object = self.current_object(reference.address)?;
         let HeapData::Array(values) = &object.data else {
             return Err(TinyOneError::runtime(format!(
                 "push() expects an array, got {}",
@@ -195,9 +199,7 @@ impl TinyHeap {
     pub(crate) fn shrink_array(&mut self, target: &Value) -> Result<Value> {
         let reference = expect_heap_ref(target)?;
         self.get_address(reference.address, reference.generation)?;
-        let object = self.objects[reference.address]
-            .as_ref()
-            .expect("current object");
+        let object = self.current_object(reference.address)?;
         let HeapData::Array(_) = &object.data else {
             return Err(TinyOneError::runtime(format!(
                 "pop() expects an array, got {}",
@@ -308,12 +310,16 @@ impl TinyHeap {
 
     pub(crate) fn current_generation(&self, address: usize) -> Result<u64> {
         self.current_object(address)?;
-        Ok(self.generations[address])
+        self.generations
+            .get(address)
+            .copied()
+            .ok_or_else(|| TinyOneError::runtime(format!("Invalid heap pointer {address}")))
     }
 
     pub(crate) fn get_address(&self, address: usize, generation: u64) -> Result<&HeapObject> {
         let obj = self.current_object(address)?;
-        if generation != 0 && self.generations[address] != generation {
+        let current_generation = self.current_generation(address)?;
+        if generation != 0 && current_generation != generation {
             return Err(TinyOneError::runtime(format!(
                 "Stale heap pointer {address}"
             )));
@@ -327,12 +333,18 @@ impl TinyHeap {
         generation: u64,
     ) -> Result<&mut HeapObject> {
         self.current_object(address)?;
-        if generation != 0 && self.generations[address] != generation {
+        let current_generation = self.current_generation(address)?;
+        if generation != 0 && current_generation != generation {
             return Err(TinyOneError::runtime(format!(
                 "Stale heap pointer {address}"
             )));
         }
-        Ok(self.objects[address].as_mut().expect("current object"))
+        self.objects
+            .get_mut(address)
+            .and_then(Option::as_mut)
+            .ok_or_else(|| {
+                TinyOneError::runtime(format!("Use after free for heap pointer {address}"))
+            })
     }
 
     pub(crate) fn current_object(&self, address: usize) -> Result<&HeapObject> {
@@ -341,20 +353,22 @@ impl TinyHeap {
                 "Invalid heap pointer {address}"
             )));
         }
-        self.objects[address].as_ref().ok_or_else(|| {
-            TinyOneError::runtime(format!("Use after free for heap pointer {address}"))
-        })
+        self.objects
+            .get(address)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| {
+                TinyOneError::runtime(format!("Use after free for heap pointer {address}"))
+            })
     }
 
     pub(crate) fn free(&mut self, value: &Value) -> Result<()> {
         let reference = expect_heap_ref(value)?;
         self.get_address(reference.address, reference.generation)?;
-        let bytes = heap_object_bytes(
-            self.objects[reference.address]
-                .as_ref()
-                .expect("current object"),
-        );
-        self.objects[reference.address] = None;
+        let bytes = heap_object_bytes(self.current_object(reference.address)?);
+        let target = self.objects.get_mut(reference.address).ok_or_else(|| {
+            TinyOneError::runtime(format!("Invalid heap pointer {}", reference.address))
+        })?;
+        *target = None;
         self.free.push(reference.address);
         self.record_free(bytes)?;
         Ok(())

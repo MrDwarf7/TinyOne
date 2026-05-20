@@ -24,7 +24,7 @@ pub use artifact_io::{load_artifact, write_artifact};
 pub(crate) use builtins::{BUILTINS, builtin_index};
 pub use bytecode::{
     BytecodeVerifier, Function, Instr, ModuleDef, ModuleImportDef, Op, PeepholeOptimizer, Program,
-    StructDef,
+    StructDef, VerifiedProgram,
 };
 pub(crate) use compiler::{
     Compiler, CompilerSharedState, ModuleInfo, Resolver, SharedState, SymbolTable,

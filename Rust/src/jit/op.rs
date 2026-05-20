@@ -1,4 +1,4 @@
-use crate::{Instr, Op};
+use crate::{Instr, Op, Result, TinyOneError, checked_non_negative_usize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JitOp {
@@ -39,33 +39,42 @@ pub(crate) enum JitOp {
 }
 
 impl JitOp {
-    pub(crate) fn from_instr(instr: Instr) -> Self {
-        match instr.op {
+    pub(crate) fn from_instr(instr: Instr) -> Result<Self> {
+        Ok(match instr.op {
             Op::PushInt => Self::PushInt(instr.arg),
             Op::PushNull => Self::PushNull,
-            Op::PushString => Self::PushString(instr.arg as usize),
-            Op::Load => Self::Load(instr.arg as usize),
-            Op::Store => Self::Store(instr.arg as usize),
+            Op::PushString => Self::PushString(jit_operand(instr.arg, "string index")?),
+            Op::Load => Self::Load(jit_operand(instr.arg, "load slot")?),
+            Op::Store => Self::Store(jit_operand(instr.arg, "store slot")?),
             Op::Add => Self::Add,
             Op::Sub => Self::Sub,
             Op::Mul => Self::Mul,
             Op::Div => Self::Div,
             Op::Neg => Self::Neg,
             Op::Lt | Op::Lte | Op::Gt | Op::Gte | Op::Eq | Op::Ne => Self::Compare(instr.op),
-            Op::Jump => Self::Jump(instr.arg as usize),
-            Op::JumpIfZero => Self::JumpIfZero(instr.arg as usize),
-            Op::Call => Self::Call(instr.arg as usize, instr.arg2 as usize),
-            Op::MakeArray => Self::MakeArray(instr.arg as usize),
+            Op::Jump => Self::Jump(jit_operand(instr.arg, "jump target")?),
+            Op::JumpIfZero => Self::JumpIfZero(jit_operand(instr.arg, "jump target")?),
+            Op::Call => Self::Call(
+                jit_operand(instr.arg, "function index")?,
+                jit_operand(instr.arg2, "function arity")?,
+            ),
+            Op::MakeArray => Self::MakeArray(jit_operand(instr.arg, "array arity")?),
             Op::Index => Self::Index,
             Op::SetIndex => Self::SetIndex,
-            Op::MakeStruct => Self::MakeStruct(instr.arg as usize, instr.arg2 as usize),
-            Op::GetField => Self::GetField(instr.arg as usize),
-            Op::SetField => Self::SetField(instr.arg as usize),
-            Op::Builtin => Self::Builtin(instr.arg as usize, instr.arg2 as usize),
+            Op::MakeStruct => Self::MakeStruct(
+                jit_operand(instr.arg, "struct index")?,
+                jit_operand(instr.arg2, "struct arity")?,
+            ),
+            Op::GetField => Self::GetField(jit_operand(instr.arg, "field index")?),
+            Op::SetField => Self::SetField(jit_operand(instr.arg, "field index")?),
+            Op::Builtin => Self::Builtin(
+                jit_operand(instr.arg, "builtin index")?,
+                jit_operand(instr.arg2, "builtin arity")?,
+            ),
             Op::Return => Self::Return,
             Op::Print => Self::Print,
             Op::Halt => Self::Halt,
-        }
+        })
     }
 
     pub(crate) fn quickened(self) -> Self {
@@ -135,4 +144,9 @@ impl JitOp {
             _ => {}
         }
     }
+}
+
+fn jit_operand(value: i64, name: &str) -> Result<usize> {
+    checked_non_negative_usize(value, name)
+        .map_err(|error| TinyOneError::compile(format!("JIT invalid {name}: {error}")))
 }
