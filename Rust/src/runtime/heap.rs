@@ -304,8 +304,8 @@ impl TinyHeap {
         self.alloc_data(HeapData::Mutex(m))
     }
 
-    pub(crate) fn alloc_atomic(&mut self, a: Arc<AtomicI64>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Atomic(a))
+    pub(crate) fn alloc_atomic(&mut self, init: i64) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Atomic(Arc::new(AtomicI64::new(init))))
     }
 
     pub(crate) fn alloc_thread(&mut self, h: Arc<TinyThreadHandle>) -> Result<HeapRef> {
@@ -417,6 +417,11 @@ impl TinyHeap {
     }
 }
 
+// Notional heap budget charged per spawned OS thread. Actual OS stack cost is
+// typically 2–8 MB, but we charge a smaller sentinel so the heap byte limit
+// still acts as a thread-count guard without being unusably restrictive.
+const THREAD_HEAP_WEIGHT: usize = 64 * 1024; // 64 KiB per thread
+
 pub(crate) fn heap_object_bytes(object: &HeapObject) -> usize {
     match &object.data {
         HeapData::String(text) => text.len(),
@@ -431,9 +436,9 @@ pub(crate) fn heap_object_bytes(object: &HeapObject) -> usize {
         }
         HeapData::Cell(_)    => VALUE_BYTES,
         HeapData::Map(entries) => entries.len().saturating_mul(VALUE_BYTES * 2),
-        HeapData::Mutex(_)   => std::mem::size_of::<TinyMutex>(),
-        HeapData::Atomic(_)  => std::mem::size_of::<AtomicI64>(),
-        HeapData::Thread(_)  => std::mem::size_of::<TinyThreadHandle>(),
+        HeapData::Mutex(_)   => std::mem::size_of::<TinyMutex>() + 2 * std::mem::size_of::<usize>(),
+        HeapData::Atomic(_)  => std::mem::size_of::<AtomicI64>() + 2 * std::mem::size_of::<usize>(),
+        HeapData::Thread(_)  => THREAD_HEAP_WEIGHT,
     }
 }
 
@@ -443,8 +448,7 @@ mod tests {
 
     #[test]
     fn heap_can_alloc_mutex_atomic_thread_variants() {
-        use std::sync::{Arc, atomic::AtomicI64};
-        use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
+        use crate::runtime::sync::TinyMutex;
         let mut heap = TinyHeap::new();
 
         let m = TinyMutex::new();
@@ -452,8 +456,7 @@ mod tests {
         let obj = heap.get_address(hr.address, hr.generation).unwrap();
         assert_eq!(obj.kind(), "mutex");
 
-        let a = Arc::new(AtomicI64::new(7));
-        let hr = heap.alloc_atomic(a).unwrap();
+        let hr = heap.alloc_atomic(7).unwrap();
         let obj = heap.get_address(hr.address, hr.generation).unwrap();
         assert_eq!(obj.kind(), "atomic");
     }
