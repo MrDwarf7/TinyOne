@@ -1,7 +1,9 @@
 use std::sync::{Arc, Condvar, Mutex};
+use std::fmt;
 
 use crate::{Result, TinyOneError, Value};
 
+#[derive(Debug)]
 pub(crate) struct TinyMutex {
     state: Mutex<bool>, // true = locked
     cond:  Condvar,
@@ -45,6 +47,12 @@ impl TinyMutex {
 
 pub(crate) struct TinyThreadHandle {
     pub(crate) inner: Mutex<Option<std::thread::JoinHandle<(Result<Value>, Vec<u8>)>>>,
+}
+
+impl fmt::Debug for TinyThreadHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TinyThreadHandle")
+    }
 }
 
 impl TinyThreadHandle {

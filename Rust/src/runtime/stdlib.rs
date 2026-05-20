@@ -13,7 +13,8 @@ use crate::runtime::typing::{
 };
 use crate::{
     HeapData, Result, TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, expect_int,
-    expect_string, validate_pointer_base,
+    expect_string, runtime_cast_int, runtime_integer_kind, runtime_integer_value,
+    validate_pointer_base,
 };
 
 const MAX_FS_LIST_DIR_ENTRIES: usize = 65_536;
@@ -28,6 +29,14 @@ fn expect_kind(value: &Value, kind: &str, operation: &str) -> Result<i64> {
 fn parse_type_name(text: &str, operation: &str) -> Result<TypeKind> {
     TypeKind::from_name(text)
         .ok_or_else(|| TinyOneError::runtime(format!("{operation} unknown type name {:?}", text)))
+}
+
+fn runtime_integer_type_name(value: &Value) -> Option<&'static str> {
+    runtime_integer_kind(value).map(TypeKind::name)
+}
+
+pub fn b_int_cast(value: &Value, kind: TypeKind, operation: &str) -> Result<Value> {
+    runtime_cast_int(value, kind, operation)
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +216,10 @@ pub fn b_map_values(context: &mut TinyRuntimeContext, target: &Value) -> Result<
 
 fn map_key_equal(context: &TinyRuntimeContext, lhs: &Value, rhs: &Value) -> Result<bool> {
     match (lhs, rhs) {
-        (Value::Int(a), Value::Int(b)) => Ok(a == b),
+        (
+            Value::Int(_) | Value::U8(_) | Value::U16(_) | Value::U32(_),
+            Value::Int(_) | Value::U8(_) | Value::U16(_) | Value::U32(_),
+        ) => Ok(runtime_integer_value(lhs, "map key")? == runtime_integer_value(rhs, "map key")?),
         (Value::Pointer(a), Value::Pointer(b)) => {
             validate_pointer_base(context, a, "map key")?;
             validate_pointer_base(context, b, "map key")?;
@@ -993,7 +1005,9 @@ pub fn b_logic_xor(lhs: &Value, rhs: &Value) -> Result<Value> {
 
 pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Value> {
     let name = match value {
-        Value::Int(_) => TypeKind::I64.name(),
+        Value::Int(_) | Value::U8(_) | Value::U16(_) | Value::U32(_) => {
+            runtime_integer_type_name(value).unwrap_or(TypeKind::I64.name())
+        }
         Value::Pointer(p) if p.kind == "null" && p.address == 0 => TypeKind::Null.name(),
         Value::Pointer(_) => TypeKind::Pointer.name(),
         Value::Heap(_) => {
@@ -1017,6 +1031,9 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
                 }
                 HeapData::Map(_) => TypeKind::Map.name(),
                 HeapData::Cell(_) => TypeKind::Alloc.name(),
+                HeapData::Mutex(_) => TypeKind::Mutex.name(),
+                HeapData::Atomic(_) => TypeKind::Atomic.name(),
+                HeapData::Thread(_) => "thread",
             }
         }
     };
@@ -1058,8 +1075,7 @@ pub fn b_check_int_range(
     let kind = parse_type_name(&name, "check_int_range")?;
     let _ = integer_range(kind)
         .ok_or_else(|| TinyOneError::runtime(format!("{} is not an integer type", kind.name())))?;
-    let _ = check_integer_range(kind, v as i128)?;
-    Ok(Value::Int(v))
+    runtime_cast_int(&Value::Int(v), kind, "check_int_range")
 }
 
 fn typed_binary(
@@ -1080,7 +1096,7 @@ fn typed_binary(
         ))
     })?;
     let value = check_integer_range(kind, result)?;
-    Ok(Value::Int(value))
+    runtime_cast_int(&Value::Int(value), kind, op_name)
 }
 
 pub fn b_typed_add(
@@ -1125,7 +1141,7 @@ pub fn b_typed_div(
     }
     let quotient = (lhs as i128) / (rhs as i128);
     let value = check_integer_range(kind, quotient)?;
-    Ok(Value::Int(value))
+    runtime_cast_int(&Value::Int(value), kind, "typed_div")
 }
 
 pub fn b_typed_neg(
@@ -1146,7 +1162,7 @@ pub fn b_typed_neg(
         TinyOneError::runtime("Runtime.Memory_Overflow: typed_neg intermediate overflow")
     })?;
     let result = check_integer_range(kind, negated)?;
-    Ok(Value::Int(result))
+    runtime_cast_int(&Value::Int(result), kind, "typed_neg")
 }
 
 pub fn b_assert(

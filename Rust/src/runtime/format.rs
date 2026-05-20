@@ -14,6 +14,9 @@ fn runtime_format_inner(
 ) -> Result<String> {
     match value {
         Value::Int(value) => Ok(value.to_string()),
+        Value::U8(value) => Ok(value.to_string()),
+        Value::U16(value) => Ok(value.to_string()),
+        Value::U32(value) => Ok(value.to_string()),
         Value::Pointer(pointer) => {
             let suffix = if pointer.cast.is_empty() {
                 String::new()
@@ -76,6 +79,12 @@ fn runtime_format_inner(
                         .collect::<Result<Vec<_>>>()?;
                     Ok(format!("map{{{}}}", parts.join(", ")))
                 }
+                HeapData::Mutex(_) => Ok(format!("mutex@{}", reference.address)),
+                HeapData::Atomic(a) => Ok(format!(
+                    "atomic({})",
+                    a.load(std::sync::atomic::Ordering::Relaxed)
+                )),
+                HeapData::Thread(_) => Ok(format!("thread@{}", reference.address)),
             };
             seen.remove(&reference.address);
             rendered

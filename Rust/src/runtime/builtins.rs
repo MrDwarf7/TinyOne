@@ -38,6 +38,12 @@ pub(crate) fn runtime_call_builtin(
                 HeapData::Cell(_) => {
                     return Err(TinyOneError::runtime("len() does not support cell"));
                 }
+                _ => {
+                    return Err(TinyOneError::runtime(format!(
+                        "len() does not support {}",
+                        object.kind()
+                    )));
+                }
             };
             Ok(Value::Int(len as i64))
         }
@@ -100,6 +106,9 @@ pub(crate) fn runtime_call_builtin(
         }
         "to_int" => match &args[0] {
             Value::Int(value) => Ok(Value::Int(*value)),
+            Value::U8(value) => Ok(Value::Int(*value as i64)),
+            Value::U16(value) => Ok(Value::Int(*value as i64)),
+            Value::U32(value) => Ok(Value::Int(*value as i64)),
             _ => {
                 let text = expect_string(context, &args[0], "to_int")?;
                 if !looks_like_int(&text) {
@@ -221,6 +230,10 @@ pub(crate) fn runtime_call_builtin(
         "typed_mul" => stdlib::b_typed_mul(context, &args[0], &args[1], &args[2]),
         "typed_div" => stdlib::b_typed_div(context, &args[0], &args[1], &args[2]),
         "typed_neg" => stdlib::b_typed_neg(context, &args[0], &args[1]),
+        "i64" => stdlib::b_int_cast(&args[0], crate::TypeKind::I64, "i64"),
+        "u8" => stdlib::b_int_cast(&args[0], crate::TypeKind::U8, "u8"),
+        "u16" => stdlib::b_int_cast(&args[0], crate::TypeKind::U16, "u16"),
+        "u32" => stdlib::b_int_cast(&args[0], crate::TypeKind::U32, "u32"),
         "assert" => stdlib::b_assert(&args[0], args.get(1), context),
         _ => Err(TinyOneError::runtime(format!(
             "Missing builtin handler {:?}",
