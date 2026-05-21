@@ -73,7 +73,7 @@ pub(crate) fn runtime_array_push(
     target: &Value,
     value: Value,
 ) -> Result<Value> {
-    Ok(Value::Int(context.heap().grow_array(target, value)? as i64))
+    Ok(Value::I64(context.heap().grow_array(target, value)? as i64))
 }
 
 pub(crate) fn runtime_array_pop(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {

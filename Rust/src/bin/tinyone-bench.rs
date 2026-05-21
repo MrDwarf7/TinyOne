@@ -402,7 +402,7 @@ fn build_benchmarks() -> Vec<Benchmark> {
         bench("memory.load_store_64", 15_000, move || {
             for slot in 0..64 {
                 shared_memory
-                    .store(slot, RuntimeValue::Int((slot * 3) as i64))
+                    .store(slot, RuntimeValue::I64((slot * 3) as i64))
                     .expect("store slot");
                 black_box(shared_memory.load(slot).expect("load slot"));
             }
@@ -410,7 +410,7 @@ fn build_benchmarks() -> Vec<Benchmark> {
         bench("memory.reset_1024", 30_000, {
             let mut memory = TinyMemory::new(1024);
             move || {
-                memory.store(511, RuntimeValue::Int(7)).expect("store slot");
+                memory.store(511, RuntimeValue::I64(7)).expect("store slot");
                 memory.reset();
                 black_box(memory.snapshot());
             }
@@ -419,7 +419,7 @@ fn build_benchmarks() -> Vec<Benchmark> {
             let mut memory = TinyMemory::new(1024);
             for slot in 0..1024 {
                 memory
-                    .store(slot, RuntimeValue::Int(slot as i64))
+                    .store(slot, RuntimeValue::I64(slot as i64))
                     .expect("store slot");
             }
             move || {

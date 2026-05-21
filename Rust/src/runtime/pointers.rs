@@ -140,11 +140,11 @@ pub(crate) fn runtime_pointer_address(
     match value {
         Value::Pointer(pointer) => {
             validate_pointer_base(context, pointer, "ptr_addr")?;
-            Ok(Value::Int(pointer.address as i64))
+            Ok(Value::I64(pointer.address as i64))
         }
         Value::Heap(reference) => {
             context.heap().get(value)?;
-            Ok(Value::Int(reference.address as i64))
+            Ok(Value::I64(reference.address as i64))
         }
         _ => Err(TinyOneError::runtime(
             "ptr_addr() expects a heap value or raw pointer",
@@ -350,7 +350,7 @@ pub(crate) fn runtime_pointer_type(
 pub(crate) fn runtime_pointer_base(context: &TinyRuntimeContext, pointer: &Value) -> Result<Value> {
     let pointer = expect_pointer(pointer, "ptr_base")?;
     validate_pointer_base(context, &pointer, "ptr_base")?;
-    Ok(Value::Int(pointer.address as i64))
+    Ok(Value::I64(pointer.address as i64))
 }
 
 pub(crate) fn runtime_pointer_offset(
@@ -359,7 +359,7 @@ pub(crate) fn runtime_pointer_offset(
 ) -> Result<Value> {
     let pointer = expect_pointer(pointer, "ptr_offset")?;
     validate_pointer_base(context, &pointer, "ptr_offset")?;
-    Ok(Value::Int(
+    Ok(Value::I64(
         if pointer.kind == "array" || pointer.kind == "buffer" {
             pointer.index
         } else {
@@ -400,7 +400,7 @@ pub(crate) fn runtime_pointer_eq(
     let rhs = expect_pointer(rhs, "ptr_eq")?;
     validate_pointer_base(context, &lhs, "ptr_eq")?;
     validate_pointer_base(context, &rhs, "ptr_eq")?;
-    Ok(Value::Int(
+    Ok(Value::I64(
         (pointer_identity(&lhs) == pointer_identity(&rhs)) as i64,
     ))
 }

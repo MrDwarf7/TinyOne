@@ -23,10 +23,8 @@ use crate::{
 const MAX_FS_LIST_DIR_ENTRIES: usize = 65_536;
 
 fn expect_kind(value: &Value, kind: &str, operation: &str) -> Result<i64> {
-    let Value::Int(value) = value else {
-        return Err(TinyOneError::runtime(format!("{operation} expects {kind}")));
-    };
-    Ok(*value)
+    let v = expect_int(value, operation)?;
+    Ok(v)
 }
 
 fn parse_type_name(text: &str, operation: &str) -> Result<TypeKind> {
@@ -68,7 +66,7 @@ pub fn b_vec_clear(context: &mut TinyRuntimeContext, target: &Value) -> Result<V
     context
         .heap()
         .record_shrink(cleared.saturating_mul(VALUE_BYTES))?;
-    Ok(Value::Int(0))
+    Ok(Value::I64(0))
 }
 
 // ---------------------------------------------------------------------------
@@ -164,10 +162,10 @@ pub fn b_map_has(context: &TinyRuntimeContext, target: &Value, key: &Value) -> R
     };
     for (k, _) in &entries_clone {
         if map_key_equal(context, k, key)? {
-            return Ok(Value::Int(1));
+            return Ok(Value::I64(1));
         }
     }
-    Ok(Value::Int(0))
+    Ok(Value::I64(0))
 }
 
 pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
@@ -204,9 +202,9 @@ pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) 
     };
     if removed {
         context.heap().record_shrink(VALUE_BYTES.saturating_mul(2))?;
-        Ok(Value::Int(1))
+        Ok(Value::I64(1))
     } else {
-        Ok(Value::Int(0))
+        Ok(Value::I64(0))
     }
 }
 
@@ -216,7 +214,7 @@ pub fn b_map_len(context: &TinyRuntimeContext, target: &Value) -> Result<Value> 
     let HeapData::Map(entries) = &object.data else {
         return Err(TinyOneError::runtime("map_len expects a map"));
     };
-    Ok(Value::Int(entries.len() as i64))
+    Ok(Value::I64(entries.len() as i64))
 }
 
 pub fn b_map_keys(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -246,8 +244,8 @@ pub fn b_map_values(context: &mut TinyRuntimeContext, target: &Value) -> Result<
 fn map_key_equal(context: &TinyRuntimeContext, lhs: &Value, rhs: &Value) -> Result<bool> {
     match (lhs, rhs) {
         (
-            Value::Int(_) | Value::U8(_) | Value::U16(_) | Value::U32(_),
-            Value::Int(_) | Value::U8(_) | Value::U16(_) | Value::U32(_),
+            Value::I64(_) | Value::U8(_) | Value::U16(_) | Value::U32(_),
+            Value::I64(_) | Value::U8(_) | Value::U16(_) | Value::U32(_),
         ) => Ok(runtime_integer_value(lhs, "map key")? == runtime_integer_value(rhs, "map key")?),
         (Value::Pointer(a), Value::Pointer(b)) => {
             validate_pointer_base(context, a, "map key")?;
@@ -294,13 +292,13 @@ pub const IO_FD_STDERR: i64 = 2;
 pub const IO_FD_STDIN: i64 = 0;
 
 pub fn b_io_stdout() -> Value {
-    Value::Int(IO_FD_STDOUT)
+    Value::I64(IO_FD_STDOUT)
 }
 pub fn b_io_stderr() -> Value {
-    Value::Int(IO_FD_STDERR)
+    Value::I64(IO_FD_STDERR)
 }
 pub fn b_io_stdin() -> Value {
-    Value::Int(IO_FD_STDIN)
+    Value::I64(IO_FD_STDIN)
 }
 
 pub fn b_io_write(
@@ -325,7 +323,7 @@ pub fn b_io_write(
             )));
         }
     }
-    Ok(Value::Int(bytes))
+    Ok(Value::I64(bytes))
 }
 
 pub fn b_io_writeln(
@@ -356,7 +354,7 @@ pub fn b_io_writeln(
             )));
         }
     }
-    Ok(Value::Int(bytes))
+    Ok(Value::I64(bytes))
 }
 
 pub fn b_io_read_line(context: &mut TinyRuntimeContext) -> Result<Value> {
@@ -367,7 +365,7 @@ pub fn b_io_read_line(context: &mut TinyRuntimeContext) -> Result<Value> {
 pub fn b_io_flush(_context: &mut TinyRuntimeContext, _fd: &Value) -> Result<Value> {
     // No-op for deterministic test doubles. Flushing the real stdout still
     // happens through the host once `VM::run` returns.
-    Ok(Value::Int(0))
+    Ok(Value::I64(0))
 }
 
 pub fn b_io_capture_stdout(context: &mut TinyRuntimeContext) -> Result<Value> {
@@ -386,12 +384,12 @@ pub fn b_io_capture_stderr(context: &mut TinyRuntimeContext) -> Result<Value> {
 
 pub fn b_str_byte_len(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
     let text = expect_string(context, target, "str_byte_len")?;
-    Ok(Value::Int(text.len() as i64))
+    Ok(Value::I64(text.len() as i64))
 }
 
 pub fn b_str_char_len(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
     let text = expect_string(context, target, "str_char_len")?;
-    Ok(Value::Int(text.chars().count() as i64))
+    Ok(Value::I64(text.chars().count() as i64))
 }
 
 pub fn b_str_byte_at(context: &TinyRuntimeContext, target: &Value, index: &Value) -> Result<Value> {
@@ -409,7 +407,7 @@ pub fn b_str_byte_at(context: &TinyRuntimeContext, target: &Value, index: &Value
     let byte = bytes
         .get(index)
         .ok_or_else(|| TinyOneError::runtime("str_byte_at: index out of bounds"))?;
-    Ok(Value::Int(*byte as i64))
+    Ok(Value::I64(*byte as i64))
 }
 
 pub fn b_str_char_at(
@@ -491,7 +489,7 @@ pub fn b_str_is_utf8(context: &mut TinyRuntimeContext, target: &Value) -> Result
     // bytes.
     if let Ok(text) = expect_string(context, target, "str_is_utf8") {
         let _ = text;
-        return Ok(Value::Int(1));
+        return Ok(Value::I64(1));
     }
     let heap = context.heap();
     let object = heap.get(target)?;
@@ -500,7 +498,7 @@ pub fn b_str_is_utf8(context: &mut TinyRuntimeContext, target: &Value) -> Result
             "str_is_utf8 expects a String or Buffer",
         ));
     };
-    Ok(Value::Int(std::str::from_utf8(bytes).is_ok() as i64))
+    Ok(Value::I64(std::str::from_utf8(bytes).is_ok() as i64))
 }
 
 pub fn b_str_from_buffer(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -546,7 +544,7 @@ pub fn b_mutex_lock(context: &TinyRuntimeContext, target: &Value) -> Result<Valu
         // heap guard drops here — heap lock released before we block
     };
     mutex_arc.lock()?;
-    Ok(Value::Int(1))
+    Ok(Value::I64(1))
 }
 
 pub fn b_mutex_unlock(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -559,7 +557,7 @@ pub fn b_mutex_unlock(context: &TinyRuntimeContext, target: &Value) -> Result<Va
         Arc::clone(m)
     };
     mutex_arc.unlock()?;
-    Ok(Value::Int(0))
+    Ok(Value::I64(0))
 }
 
 pub fn b_atomic_new(context: &mut TinyRuntimeContext, init: &Value) -> Result<Value> {
@@ -576,7 +574,7 @@ pub fn b_atomic_load(context: &TinyRuntimeContext, target: &Value) -> Result<Val
         };
         Arc::clone(a)
     };
-    Ok(Value::Int(atomic_arc.load(Ordering::SeqCst)))
+    Ok(Value::I64(atomic_arc.load(Ordering::SeqCst)))
 }
 
 pub fn b_atomic_store(
@@ -594,7 +592,7 @@ pub fn b_atomic_store(
         Arc::clone(a)
     };
     atomic_arc.store(new_val, Ordering::SeqCst);
-    Ok(Value::Int(new_val))
+    Ok(Value::I64(new_val))
 }
 
 pub fn b_atomic_add(
@@ -617,7 +615,7 @@ pub fn b_atomic_add(
         let next = current.checked_add(delta_val)
             .ok_or_else(|| TinyOneError::runtime("Runtime.Memory_Overflow: atomic_add overflow"))?;
         if atomic_arc.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            return Ok(Value::Int(next));
+            return Ok(Value::I64(next));
         }
     }
 }
@@ -710,7 +708,7 @@ pub fn b_result_ok(context: &mut TinyRuntimeContext, payload: Value) -> Result<V
     Ok(Value::Heap(context.heap().alloc_struct(
         "tinyone.result.Result",
         vec![
-            ("tag".to_string(), Value::Int(VARIANT_OK)),
+            ("tag".to_string(), Value::I64(VARIANT_OK)),
             ("payload".to_string(), payload),
         ],
     )?))
@@ -720,7 +718,7 @@ pub fn b_result_err(context: &mut TinyRuntimeContext, payload: Value) -> Result<
     Ok(Value::Heap(context.heap().alloc_struct(
         "tinyone.result.Result",
         vec![
-            ("tag".to_string(), Value::Int(VARIANT_ERR)),
+            ("tag".to_string(), Value::I64(VARIANT_ERR)),
             ("payload".to_string(), payload),
         ],
     )?))
@@ -761,7 +759,7 @@ fn variant_tag(
     operation: &str,
 ) -> Result<i64> {
     let tag_value = variant_field(context, target, type_name, "tag", operation)?;
-    let Value::Int(tag) = tag_value else {
+    let Value::I64(tag) = tag_value else {
         return Err(TinyOneError::runtime(format!(
             "{operation}: tag must be an integer"
         )));
@@ -779,14 +777,14 @@ fn variant_payload(
 }
 
 pub fn b_result_is_ok(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
-    Ok(Value::Int(
+    Ok(Value::I64(
         (variant_tag(context, target, "tinyone.result.Result", "result_is_ok")? == VARIANT_OK)
             as i64,
     ))
 }
 
 pub fn b_result_is_err(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
-    Ok(Value::Int(
+    Ok(Value::I64(
         (variant_tag(context, target, "tinyone.result.Result", "result_is_err")? == VARIANT_ERR)
             as i64,
     ))
@@ -822,7 +820,7 @@ pub fn b_option_some(context: &mut TinyRuntimeContext, payload: Value) -> Result
     Ok(Value::Heap(context.heap().alloc_struct(
         "tinyone.option.Option",
         vec![
-            ("tag".to_string(), Value::Int(VARIANT_SOME)),
+            ("tag".to_string(), Value::I64(VARIANT_SOME)),
             ("payload".to_string(), payload),
         ],
     )?))
@@ -832,21 +830,21 @@ pub fn b_option_none(context: &mut TinyRuntimeContext) -> Result<Value> {
     Ok(Value::Heap(context.heap().alloc_struct(
         "tinyone.option.Option",
         vec![
-            ("tag".to_string(), Value::Int(VARIANT_NONE)),
-            ("payload".to_string(), Value::Int(0)),
+            ("tag".to_string(), Value::I64(VARIANT_NONE)),
+            ("payload".to_string(), Value::I64(0)),
         ],
     )?))
 }
 
 pub fn b_option_is_some(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
-    Ok(Value::Int(
+    Ok(Value::I64(
         (variant_tag(context, target, "tinyone.option.Option", "option_is_some")? == VARIANT_SOME)
             as i64,
     ))
 }
 
 pub fn b_option_is_none(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
-    Ok(Value::Int(
+    Ok(Value::I64(
         (variant_tag(context, target, "tinyone.option.Option", "option_is_none")? == VARIANT_NONE)
             as i64,
     ))
@@ -865,7 +863,7 @@ pub fn b_option_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<V
 // ---------------------------------------------------------------------------
 
 pub fn b_sys_argc(context: &TinyRuntimeContext) -> Result<Value> {
-    Ok(Value::Int(context.sys_args.len() as i64))
+    Ok(Value::I64(context.sys_args.len() as i64))
 }
 
 pub fn b_sys_argv(context: &mut TinyRuntimeContext, index: &Value) -> Result<Value> {
@@ -886,7 +884,7 @@ pub fn b_sys_argv(context: &mut TinyRuntimeContext, index: &Value) -> Result<Val
 
 pub fn b_sys_env_has(context: &TinyRuntimeContext, name: &Value) -> Result<Value> {
     let key = expect_string(context, name, "sys_env_has")?;
-    Ok(Value::Int(context.sys_env.contains_key(&key) as i64))
+    Ok(Value::I64(context.sys_env.contains_key(&key) as i64))
 }
 
 pub fn b_sys_env_get(context: &mut TinyRuntimeContext, name: &Value) -> Result<Value> {
@@ -979,12 +977,12 @@ pub fn b_fs_write(
     };
     std::fs::write(&path, &bytes)
         .map_err(|error| TinyOneError::runtime(format!("fs_write: {error}")))?;
-    Ok(Value::Int(bytes.len() as i64))
+    Ok(Value::I64(bytes.len() as i64))
 }
 
 pub fn b_fs_exists(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
     let path = expect_string(context, target, "fs_exists")?;
-    Ok(Value::Int(std::path::Path::new(&path).exists() as i64))
+    Ok(Value::I64(std::path::Path::new(&path).exists() as i64))
 }
 
 pub fn b_fs_list_dir(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -1045,7 +1043,7 @@ pub fn b_math_const(context: &TinyRuntimeContext, name: &Value) -> Result<Value>
     let key = expect_string(context, name, "math_const")?;
     let value = math_constant_lookup(&key)
         .ok_or_else(|| TinyOneError::runtime(format!("math_const: unknown constant {key:?}")))?;
-    Ok(Value::Int(value))
+    Ok(Value::I64(value))
 }
 
 pub fn b_math_abs(value: &Value) -> Result<Value> {
@@ -1053,42 +1051,42 @@ pub fn b_math_abs(value: &Value) -> Result<Value> {
     let result = v
         .checked_abs()
         .ok_or_else(|| TinyOneError::runtime("Runtime.Memory_Overflow: math_abs"))?;
-    Ok(Value::Int(result))
+    Ok(Value::I64(result))
 }
 
 pub fn b_math_min(lhs: &Value, rhs: &Value) -> Result<Value> {
     let a = expect_int(lhs, "math_min")?;
     let b = expect_int(rhs, "math_min")?;
-    Ok(Value::Int(a.min(b)))
+    Ok(Value::I64(a.min(b)))
 }
 
 pub fn b_math_max(lhs: &Value, rhs: &Value) -> Result<Value> {
     let a = expect_int(lhs, "math_max")?;
     let b = expect_int(rhs, "math_max")?;
-    Ok(Value::Int(a.max(b)))
+    Ok(Value::I64(a.max(b)))
 }
 
 pub fn b_logic_and(lhs: &Value, rhs: &Value) -> Result<Value> {
     let a = expect_int(lhs, "logic_and")?;
     let b = expect_int(rhs, "logic_and")?;
-    Ok(Value::Int(((a != 0) && (b != 0)) as i64))
+    Ok(Value::I64(((a != 0) && (b != 0)) as i64))
 }
 
 pub fn b_logic_or(lhs: &Value, rhs: &Value) -> Result<Value> {
     let a = expect_int(lhs, "logic_or")?;
     let b = expect_int(rhs, "logic_or")?;
-    Ok(Value::Int(((a != 0) || (b != 0)) as i64))
+    Ok(Value::I64(((a != 0) || (b != 0)) as i64))
 }
 
 pub fn b_logic_not(value: &Value) -> Result<Value> {
     let v = expect_int(value, "logic_not")?;
-    Ok(Value::Int((v == 0) as i64))
+    Ok(Value::I64((v == 0) as i64))
 }
 
 pub fn b_logic_xor(lhs: &Value, rhs: &Value) -> Result<Value> {
     let a = expect_int(lhs, "logic_xor")?;
     let b = expect_int(rhs, "logic_xor")?;
-    Ok(Value::Int(((a != 0) ^ (b != 0)) as i64))
+    Ok(Value::I64(((a != 0) ^ (b != 0)) as i64))
 }
 
 // ---------------------------------------------------------------------------
@@ -1097,9 +1095,23 @@ pub fn b_logic_xor(lhs: &Value, rhs: &Value) -> Result<Value> {
 
 pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Value> {
     let name = match value {
-        Value::Int(_) | Value::U8(_) | Value::U16(_) | Value::U32(_) => {
+        Value::I8(_) => TypeKind::I8.name(),
+        Value::I16(_) => TypeKind::I16.name(),
+        Value::I32(_) => TypeKind::I32.name(),
+        Value::I64(_) | Value::U8(_) | Value::U16(_) | Value::U32(_) => {
             runtime_integer_type_name(value).unwrap_or(TypeKind::I64.name())
         }
+        Value::U64(_) => TypeKind::U64.name(),
+        Value::Bf16(_) => TypeKind::Bf16.name(),
+        Value::Float { kind, .. } => kind.name(),
+        Value::Bool(_) => TypeKind::Bool.name(),
+        Value::Unit => TypeKind::Unit.name(),
+        Value::Null => TypeKind::Null.name(),
+        Value::Function(_) => TypeKind::Function.name(),
+        Value::Reference(_) => TypeKind::Reference.name(),
+        Value::Phantom => TypeKind::Phantom.name(),
+        Value::Zst(_) => TypeKind::Zst.name(),
+        Value::Unsafe => TypeKind::Unsafe.name(),
         Value::Pointer(p) if p.kind == "null" && p.address == 0 => TypeKind::Null.name(),
         Value::Pointer(_) => TypeKind::Pointer.name(),
         Value::Heap(_) => {
@@ -1133,7 +1145,7 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
 pub fn b_type_id(context: &mut TinyRuntimeContext, type_name: &Value) -> Result<Value> {
     let name = expect_string(context, type_name, "type_id")?;
     let kind = parse_type_name(&name, "type_id")?;
-    Ok(Value::Int(kind.type_id() as i64))
+    Ok(Value::I64(kind.type_id() as i64))
 }
 
 pub fn b_smallest_fit(value: &Value, context: &mut TinyRuntimeContext) -> Result<Value> {
@@ -1165,7 +1177,7 @@ pub fn b_check_int_range(
     let kind = parse_type_name(&name, "check_int_range")?;
     let _ = integer_range(kind)
         .ok_or_else(|| TinyOneError::runtime(format!("{} is not an integer type", kind.name())))?;
-    runtime_cast_int(&Value::Int(v), kind, "check_int_range")
+    runtime_cast_int(&Value::I64(v), kind, "check_int_range")
 }
 
 fn typed_binary(
@@ -1186,7 +1198,7 @@ fn typed_binary(
         ))
     })?;
     let value = check_integer_range(kind, result)?;
-    runtime_cast_int(&Value::Int(value), kind, op_name)
+    runtime_cast_int(&Value::I64(value), kind, op_name)
 }
 
 pub fn b_typed_add(
@@ -1231,7 +1243,7 @@ pub fn b_typed_div(
     }
     let quotient = (lhs as i128) / (rhs as i128);
     let value = check_integer_range(kind, quotient)?;
-    runtime_cast_int(&Value::Int(value), kind, "typed_div")
+    runtime_cast_int(&Value::I64(value), kind, "typed_div")
 }
 
 pub fn b_typed_neg(
@@ -1252,7 +1264,7 @@ pub fn b_typed_neg(
         TinyOneError::runtime("Runtime.Memory_Overflow: typed_neg intermediate overflow")
     })?;
     let result = check_integer_range(kind, negated)?;
-    runtime_cast_int(&Value::Int(result), kind, "typed_neg")
+    runtime_cast_int(&Value::I64(result), kind, "typed_neg")
 }
 
 pub fn b_assert(
@@ -1269,5 +1281,5 @@ pub fn b_assert(
         };
         return Err(TinyOneError::runtime(format!("Assertion failed: {detail}")));
     }
-    Ok(Value::Int(1))
+    Ok(Value::I64(1))
 }

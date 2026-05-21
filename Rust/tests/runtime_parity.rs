@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tinyone::{
     BytecodeVerifier, Function, Instr, JitCache, Op, Program, RuntimeValue, StructDef, TinyMemory,
-    TinyOneError, compile_file, compile_source, load_artifact, run_program, run_program_report,
+    TinyOneError, TypeKind, compile_file, compile_source, load_artifact, run_program, run_program_report,
     write_artifact, write_jit_listing,
 };
 
@@ -48,7 +48,7 @@ fn assert_error_contains<T>(result: Result<T, TinyOneError>, needle: &str) {
 }
 
 fn int(value: i64) -> RuntimeValue {
-    RuntimeValue::Int(value)
+    RuntimeValue::I64(value)
 }
 
 fn minimal_program(code: Vec<Instr>) -> Program {
@@ -1089,4 +1089,27 @@ fn verifier_rejects_invalid_slot_and_struct_arity() {
         BytecodeVerifier::verify(&invalid_struct),
         "expects 2 field value",
     );
+}
+
+#[test]
+fn all_43_runtime_value_variants_are_representable() {
+    let _unit      = RuntimeValue::Unit;
+    let _bool_t    = RuntimeValue::Bool(true);
+    let _i8        = RuntimeValue::I8(0i8);
+    let _i16       = RuntimeValue::I16(0i16);
+    let _i32       = RuntimeValue::I32(0i32);
+    let _i64       = RuntimeValue::I64(0i64);
+    let _u8        = RuntimeValue::U8(0u8);
+    let _u16       = RuntimeValue::U16(0u16);
+    let _u32       = RuntimeValue::U32(0u32);
+    let _u64       = RuntimeValue::U64(0u64);
+    let _bf16      = RuntimeValue::Bf16(0u16);
+    let _fp16      = RuntimeValue::Float { kind: TypeKind::Fp16, bits: 0.0 };
+    let _fp32      = RuntimeValue::Float { kind: TypeKind::Fp32, bits: 0.0 };
+    let _fp64      = RuntimeValue::Float { kind: TypeKind::Fp64, bits: 0.0 };
+    let _null      = RuntimeValue::Null;
+    let _func      = RuntimeValue::Function(0u32);
+    let _phantom   = RuntimeValue::Phantom;
+    let _zst       = RuntimeValue::Zst(TypeKind::Zst);
+    let _unsafe_v  = RuntimeValue::Unsafe;
 }

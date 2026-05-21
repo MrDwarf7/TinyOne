@@ -46,7 +46,7 @@ pub(crate) fn runtime_call_builtin(
                     )));
                 }
             };
-            Ok(Value::Int(len as i64))
+            Ok(Value::I64(len as i64))
         }
         "array" => {
             let count = checked_bounded_len(
@@ -80,12 +80,12 @@ pub(crate) fn runtime_call_builtin(
         }
         "free" => {
             context.heap().free(&args[0])?;
-            Ok(Value::Int(0))
+            Ok(Value::I64(0))
         }
         "read" => {
             let raw = context.read_raw()?;
             if looks_like_int(&raw) {
-                Ok(Value::Int(raw.parse().map_err(|_| {
+                Ok(Value::I64(raw.parse().map_err(|_| {
                     TinyOneError::runtime("read() integer input is out of range")
                 })?))
             } else {
@@ -99,7 +99,7 @@ pub(crate) fn runtime_call_builtin(
                     "read_int() expected integer input, got {raw:?}"
                 )));
             }
-            Ok(Value::Int(raw.parse().map_err(|_| {
+            Ok(Value::I64(raw.parse().map_err(|_| {
                 TinyOneError::runtime("read_int() integer input is out of range")
             })?))
         }
@@ -108,10 +108,10 @@ pub(crate) fn runtime_call_builtin(
             Ok(Value::Heap(context.heap().alloc_string(raw)?))
         }
         "to_int" => match &args[0] {
-            Value::Int(value) => Ok(Value::Int(*value)),
-            Value::U8(value) => Ok(Value::Int(*value as i64)),
-            Value::U16(value) => Ok(Value::Int(*value as i64)),
-            Value::U32(value) => Ok(Value::Int(*value as i64)),
+            Value::I64(value) => Ok(Value::I64(*value)),
+            Value::U8(value) => Ok(Value::I64(*value as i64)),
+            Value::U16(value) => Ok(Value::I64(*value as i64)),
+            Value::U32(value) => Ok(Value::I64(*value as i64)),
             _ => {
                 let text = expect_string(context, &args[0], "to_int")?;
                 if !looks_like_int(&text) {
@@ -119,7 +119,7 @@ pub(crate) fn runtime_call_builtin(
                         "to_int() expects an integer or numeric string",
                     ));
                 }
-                Ok(Value::Int(text.parse().map_err(|_| {
+                Ok(Value::I64(text.parse().map_err(|_| {
                     TinyOneError::runtime("to_int() integer input is out of range")
                 })?))
             }
@@ -136,14 +136,14 @@ pub(crate) fn runtime_call_builtin(
         "is_null" => {
             let pointer = expect_pointer(&args[0], "is_null")?;
             validate_pointer_base(context, &pointer, "is_null")?;
-            Ok(Value::Int(
+            Ok(Value::I64(
                 (pointer.kind == "null" && pointer.address == 0) as i64,
             ))
         }
         "ptr_eq" => runtime_pointer_eq(context, &args[0], &args[1]),
         "ptr_ne" => match runtime_pointer_eq(context, &args[0], &args[1])? {
-            Value::Int(0) => Ok(Value::Int(1)),
-            _ => Ok(Value::Int(0)),
+            Value::I64(0) => Ok(Value::I64(1)),
+            _ => Ok(Value::I64(0)),
         },
         "ptr_base" => runtime_pointer_base(context, &args[0]),
         "ptr_offset" => runtime_pointer_offset(context, &args[0]),

@@ -10,7 +10,7 @@ pub(crate) fn expect_int(value: &Value, operation: &str) -> Result<i64> {
 
 pub(crate) fn runtime_integer_kind(value: &Value) -> Option<TypeKind> {
     match value {
-        Value::Int(_) => Some(TypeKind::I64),
+        Value::I64(_) => Some(TypeKind::I64),
         Value::U8(_) => Some(TypeKind::U8),
         Value::U16(_) => Some(TypeKind::U16),
         Value::U32(_) => Some(TypeKind::U32),
@@ -20,7 +20,7 @@ pub(crate) fn runtime_integer_kind(value: &Value) -> Option<TypeKind> {
 
 pub(crate) fn runtime_integer_value(value: &Value, operation: &str) -> Result<i128> {
     match value {
-        Value::Int(value) => Ok(*value as i128),
+        Value::I64(value) => Ok(*value as i128),
         Value::U8(value) => Ok(*value as i128),
         Value::U16(value) => Ok(*value as i128),
         Value::U32(value) => Ok(*value as i128),
@@ -56,14 +56,14 @@ pub(crate) fn integer_value_from_kind(
         TypeKind::U8 => Value::U8(value as u8),
         TypeKind::U16 => Value::U16(value as u16),
         TypeKind::U32 => Value::U32(value as u32),
-        TypeKind::I8 | TypeKind::I16 | TypeKind::I32 | TypeKind::I64 => Value::Int(value as i64),
+        TypeKind::I8 | TypeKind::I16 | TypeKind::I32 | TypeKind::I64 => Value::I64(value as i64),
         TypeKind::U64 => {
             let value = i64::try_from(value).map_err(|_| {
                 TinyOneError::runtime(
                     "Runtime.Memory_Overflow: u64 values above i64::MAX are not materialized",
                 )
             })?;
-            Value::Int(value)
+            Value::I64(value)
         }
         _ => {
             return Err(TinyOneError::runtime(format!(
@@ -321,13 +321,13 @@ pub(crate) fn runtime_compare(op: Op, lhs: Value, rhs: Value) -> Result<Value> {
             )));
         }
     };
-    Ok(Value::Int(result as i64))
+    Ok(Value::I64(result as i64))
 }
 
 pub(crate) fn runtime_is_false(value: &Value) -> bool {
     matches!(
         value,
-        Value::Int(0) | Value::U8(0) | Value::U16(0) | Value::U32(0)
+        Value::I64(0) | Value::U8(0) | Value::U16(0) | Value::U32(0)
     ) || runtime_is_null(value)
 }
 

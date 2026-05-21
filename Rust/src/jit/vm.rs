@@ -100,7 +100,7 @@ impl<'a> JitVm<'a> {
             let op_pc = pc;
             pc += 1;
             match instr {
-                JitOp::PushInt(value) => stack.push(Value::Int(value)),
+                JitOp::PushInt(value) => stack.push(Value::I64(value)),
                 JitOp::PushNull => stack.push(runtime_null()),
                 JitOp::Pop => {
                     jit_pop(&mut stack)?;

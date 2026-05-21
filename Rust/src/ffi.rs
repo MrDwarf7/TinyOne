@@ -272,7 +272,7 @@ fn memory_to_json(memory: &TinyMemory) -> Vec<JsonValue> {
 
 fn value_to_json(value: &RuntimeValue) -> JsonValue {
     match value {
-        RuntimeValue::Int(value) => json!({"type": "int", "value": value}),
+        RuntimeValue::I64(value) => json!({"type": "int", "value": value}),
         RuntimeValue::U8(value) => json!({"type": "u8", "value": value}),
         RuntimeValue::U16(value) => json!({"type": "u16", "value": value}),
         RuntimeValue::U32(value) => json!({"type": "u32", "value": value}),
@@ -290,6 +290,7 @@ fn value_to_json(value: &RuntimeValue) -> JsonValue {
             "generation": pointer.generation,
             "cast": pointer.cast,
         }),
+        _ => json!({"type": "unsupported"}),
     }
 }
 
