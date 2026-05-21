@@ -42,9 +42,12 @@ print 1
 
 #[test]
 fn thread_spawn_wrong_arity_errors() {
+    // Arity is validated at spawn time; the thread_join is included so the
+    // test catches the error whether the runtime checks eagerly or lazily.
     let src = r#"
 fn add(a, b) { return a + b }
 let t = thread_spawn("add", 1)
+let r = thread_join(t)
 "#;
     let mut out = Vec::new();
     let result = run_source(src, "vm", &mut out, Vec::new());

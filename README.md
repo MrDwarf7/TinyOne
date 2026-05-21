@@ -13,8 +13,8 @@ Future maintained implementations are planned for Go and C++.
 Current version: **0.5.0**. TinyOne v1 is targeted for release on **August 1, 2026**.
 
 The language, bytecode format, and CLI are stable enough for experimentation and
-educational use. The four named `Rust/tests/` suites have 91 passing tests;
-counting `bench_stdlib`, all 92 `Rust/tests/` cases pass as part of a clean
+educational use. The five named `Rust/tests/` suites have 101 passing tests;
+counting `bench_stdlib`, all 102 `Rust/tests/` cases pass as part of a clean
 `cargo test`. The C FFI ABI is explicitly marked **UNSTABLE** — do not depend on
 it across library versions until v1 is tagged and the ABI is declared stable. See
 [Known Failure Points](#known-failure-points) for the outstanding design issues
@@ -58,7 +58,7 @@ tracked for v1.
   fingerprint, and quickens hot loop paths in-place.
 - Rust benchmark runner with correctness preflight and timing table
 - Rust unit tests in `Rust/src/` plus integration suites under `Rust/tests/`
-  (91 tests across four named suites; 92 `Rust/tests/` cases when
+  (101 tests across five named suites; 102 `Rust/tests/` cases when
   `bench_stdlib` is included; see [Tests and Benchmarks](#tests-and-benchmarks))
 - C FFI shared library (`libtinyone`) with a JSON-over-C-string API and a
   machine-readable header (`tinyone.h`); all entry points are panic-safe
@@ -721,16 +721,17 @@ the source-like files that should change intentionally.
 
 ### Test Suites
 
-There are four named default integration suites (91 tests total, all pass);
-`bench_stdlib` is a fifth `Rust/tests/` file, bringing that directory to 92
+There are five named default integration suites (101 tests total, all pass);
+`bench_stdlib` is a sixth `Rust/tests/` file, bringing that directory to 102
 passing cases:
 
 | Suite | Tests | Notes |
 | --- | --- | --- |
-| `runtime_parity` | 35 | VM/JIT parity, heap, structs, imports, artifacts, diagnostics |
-| `abi_api_soundness` | 31 | FFI, artifact limits, verifier stress, ABI contracts; C FFI smoke skips gracefully if cdylib not pre-built |
+| `runtime_parity` | 38 | VM/JIT parity, heap, structs, imports, artifacts, diagnostics |
+| `abi_api_soundness` | 32 | FFI, artifact limits, verifier stress, ABI contracts; C FFI smoke skips gracefully if cdylib not pre-built |
 | `stdlib_parity` | 17 | Stdlib modules, FS round-trips, map/vec semantics |
 | `lib_smoke` | 8 | Crate-level public API smoke test |
+| `threading` | 6 | thread_spawn/join stdout ordering, double-join error, mutex exclusion, atomic consistency |
 
 Run the default suite:
 
@@ -871,8 +872,8 @@ cache.run_program(&program, &mut stdout, Vec::new())?;
 TinyOne debug `cdylib` and runs it. If the `cdylib` has not been built, the
 test skips with a diagnostic message rather than failing. To exercise the full
 test, run `cargo build --manifest-path Rust/Cargo.toml` before `cargo test`.
-The 91 named integration-suite tests pass in a clean `cargo test` run regardless;
-counting `bench_stdlib`, the `Rust/tests/` inventory is 92 passing cases.
+The 101 named integration-suite tests pass in a clean `cargo test` run regardless;
+counting `bench_stdlib`, the `Rust/tests/` inventory is 102 passing cases.
 
 ### Phase 2 ABI risks (tracked for v1)
 
