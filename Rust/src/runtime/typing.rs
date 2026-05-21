@@ -316,7 +316,7 @@ pub fn integer_range(kind: TypeKind) -> Option<(i128, i128)> {
     })
 }
 
-pub fn check_integer_range(kind: TypeKind, value: i128) -> Result<i64> {
+pub fn check_integer_range(kind: TypeKind, value: i128) -> Result<i128> {
     let (lo, hi) = integer_range(kind).ok_or_else(|| {
         TinyOneError::runtime(format!(
             "{:?} is not an integer type with a defined range",
@@ -330,7 +330,7 @@ pub fn check_integer_range(kind: TypeKind, value: i128) -> Result<i64> {
             kind.name()
         )));
     }
-    Ok(value as i64)
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -431,8 +431,8 @@ mod tests {
     #[test]
     fn range_check_reports_memory_overflow() {
         assert!(check_integer_range(TypeKind::U8, 256).is_err());
-        assert_eq!(check_integer_range(TypeKind::U8, 255).unwrap(), 255);
+        assert_eq!(check_integer_range(TypeKind::U8, 255).unwrap(), 255i128);
         assert!(check_integer_range(TypeKind::I8, 128).is_err());
-        assert_eq!(check_integer_range(TypeKind::I8, -128).unwrap(), -128);
+        assert_eq!(check_integer_range(TypeKind::I8, -128).unwrap(), -128i128);
     }
 }

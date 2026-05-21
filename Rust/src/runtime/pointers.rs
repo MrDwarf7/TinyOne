@@ -7,6 +7,7 @@ use crate::{
 pub(crate) fn expect_pointer(value: &Value, operation: &str) -> Result<RawPointer> {
     match value {
         Value::Pointer(pointer) => Ok(pointer.clone()),
+        Value::Null => Ok(RawPointer::new(0, "null", 0, "", 0, "")),
         _ => Err(TinyOneError::runtime(format!(
             "{operation} expects a raw pointer"
         ))),

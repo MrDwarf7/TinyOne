@@ -105,7 +105,7 @@ fn straightline_vm_and_jit_alias_match() {
     print c != 8
     "#;
 
-    let program = assert_backends_match(source, "24\n8\n1\n0\n");
+    let program = assert_backends_match(source, "24\n8\ntrue\nfalse\n");
     assert!(
         program
             .code
@@ -668,7 +668,7 @@ fn null_metadata_buffers_and_sized_memory_match() {
     assert_backends_match(
         source,
         concat!(
-            "1\narray\n1\n9\nfield\nright\n11\n0\n1\n1\n1\n3\n",
+            "true\narray\n1\n9\nfield\nright\n11\nfalse\n1\n1\ntrue\n3\n",
             "buffer\n0\ni32\n1\n0\n255\n255\n4660\n52\n18\n4660\n",
             "305419896\n305419896\n"
         ),
