@@ -1141,7 +1141,7 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
                 | HeapData::Enum { .. } | HeapData::TaggedUnion { .. }
                 | HeapData::Result { .. } | HeapData::Option { .. } | HeapData::Dyn { .. }
                 | HeapData::FileDescriptor(_) => {
-                    unimplemented!("Phase 2: HeapData variant not yet implemented for this operation")
+                    unimplemented!("Phase 2: type_of() not yet implemented for this HeapData variant — grep 'Phase 2:' to find all stubs")
                 }
             }
         }
