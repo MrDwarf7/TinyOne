@@ -57,7 +57,7 @@ impl<'a> JitVm<'a> {
             .ok_or_else(|| TinyOneError::runtime("JIT program has no main chunk"))?
             .slot_count;
         let mut memory = TinyMemory::new(slot_count);
-        self.run_chunk(0, &mut memory, stdout)?;
+        self.run_chunk(0, &mut memory, stdout, None)?;
         let heap_before_shutdown = self.context.heap_stats();
         let heap_after_shutdown = self.context.shutdown();
         Ok(TinyRunReport {
@@ -72,6 +72,7 @@ impl<'a> JitVm<'a> {
         chunk_index: usize,
         memory: &mut TinyMemory,
         stdout: &mut dyn Write,
+        global_memory: Option<&TinyMemory>,
     ) -> Result<Option<Value>> {
         let stack_capacity = self
             .program
@@ -101,6 +102,9 @@ impl<'a> JitVm<'a> {
             match instr {
                 JitOp::PushInt(value) => stack.push(Value::Int(value)),
                 JitOp::PushNull => stack.push(runtime_null()),
+                JitOp::Pop => {
+                    jit_pop(&mut stack)?;
+                }
                 JitOp::PushString(index) => {
                     let text = self
                         .program
@@ -110,9 +114,15 @@ impl<'a> JitVm<'a> {
                             TinyOneError::runtime(format!("Invalid string index {index}"))
                         })?
                         .clone();
-                    stack.push(Value::Heap(self.context.heap.alloc_string(text)?));
+                    stack.push(Value::Heap(self.context.heap().alloc_string(text)?));
                 }
                 JitOp::Load(slot) => stack.push(memory.load(slot)?),
+                JitOp::LoadGlobal(slot) => {
+                    let globals = global_memory.ok_or_else(|| {
+                        TinyOneError::runtime("Global load outside a function frame")
+                    })?;
+                    stack.push(globals.load(slot)?);
+                }
                 JitOp::Store(slot) => {
                     let value = jit_pop(&mut stack)?;
                     memory.store(slot, value)?;
@@ -195,8 +205,9 @@ impl<'a> JitVm<'a> {
                     }
                 }
                 JitOp::Call(function_index, arg_count) => {
+                    let globals = global_memory.unwrap_or(&*memory);
                     let result =
-                        self.call_function(function_index, &mut stack, arg_count, stdout)?;
+                        self.call_function(function_index, &mut stack, arg_count, stdout, globals)?;
                     stack.push(result);
                 }
                 JitOp::MakeArray(count) => {
@@ -278,6 +289,7 @@ impl<'a> JitVm<'a> {
         caller_stack: &mut Vec<Value>,
         arg_count: usize,
         stdout: &mut dyn Write,
+        global_memory: &TinyMemory,
     ) -> Result<Value> {
         let (chunk_index, slot_count, param_count) = {
             let function = self.program.functions.get(function_index).ok_or_else(|| {
@@ -306,7 +318,7 @@ impl<'a> JitVm<'a> {
             memory.store(slot, value)?;
         }
         self.call_depth += 1;
-        let result = self.run_chunk(chunk_index, &mut memory, stdout);
+        let result = self.run_chunk(chunk_index, &mut memory, stdout, Some(global_memory));
         self.call_depth -= 1;
         result?.ok_or_else(|| {
             TinyOneError::runtime(format!(

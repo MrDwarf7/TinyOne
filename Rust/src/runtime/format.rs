@@ -32,7 +32,7 @@ fn runtime_format_inner(
             })
         }
         Value::Heap(reference) => {
-            let object = context.heap.get(value)?.clone();
+            let object = context.heap().get(value)?.clone();
             if seen.contains(&reference.address) {
                 return Ok(format!("&{}<cycle>", reference.address));
             }
