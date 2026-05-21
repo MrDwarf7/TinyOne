@@ -1,8 +1,8 @@
 use std::sync::{Arc, atomic::AtomicI64};
 
 use crate::{
-    HeapRef, MAX_ARRAY_LENGTH, MAX_HEAP_BYTES, MAX_HEAP_OBJECTS, Result, TinyOneError, VALUE_BYTES,
-    Value,
+    HeapRef, MAX_ARRAY_LENGTH, MAX_HEAP_BYTES, MAX_HEAP_OBJECTS, Result, TinyOneError, TypeKind,
+    VALUE_BYTES, Value,
 };
 use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
 
@@ -17,6 +17,37 @@ pub(crate) enum HeapData {
     Mutex(Arc<TinyMutex>),
     Atomic(Arc<AtomicI64>),
     Thread(Arc<TinyThreadHandle>),
+
+    // Text
+    Char(u32),
+    CharBuffer(Vec<u32>),
+
+    // Sequences
+    Vec(Vec<Value>),
+    Record(Vec<(String, Value)>),
+
+    // Associative
+    Dictionary(Vec<(Value, Value)>),
+
+    // Ownership
+    Box(Box<Value>),
+    Alloc { kind: TypeKind, data: ::std::vec::Vec<u8> },
+
+    // Callable
+    Closure { function_id: u32, captures: ::std::vec::Vec<Value> },
+
+    // Algebraic
+    Sum         { tag: u32, payload: Option<Box<Value>> },
+    Enum        { variant: u32 },
+    TaggedUnion { tag: u32, payload: Box<Value> },
+
+    // Higher-level
+    Result  { is_ok: bool, value: Box<Value> },
+    Option  { value: Option<Box<Value>> },
+    Dyn     { type_id: u16, vtable_id: u32, value: Box<Value> },
+
+    // System
+    FileDescriptor(i32),
 }
 
 #[derive(Debug, Clone)]
@@ -28,15 +59,60 @@ pub(crate) struct HeapObject {
 impl HeapObject {
     pub(crate) fn kind(&self) -> &'static str {
         match self.data {
-            HeapData::String(_)  => "string",
-            HeapData::Array(_)   => "array",
-            HeapData::Buffer(_)  => "buffer",
-            HeapData::Struct(_)  => "struct",
-            HeapData::Cell(_)    => "cell",
-            HeapData::Map(_)     => "map",
-            HeapData::Mutex(_)   => "mutex",
-            HeapData::Atomic(_)  => "atomic",
-            HeapData::Thread(_)  => "thread",
+            HeapData::String(_)          => "string",
+            HeapData::Array(_)           => "array",
+            HeapData::Buffer(_)          => "buffer",
+            HeapData::Struct(_)          => "struct",
+            HeapData::Cell(_)            => "cell",
+            HeapData::Map(_)             => "map",
+            HeapData::Mutex(_)           => "mutex",
+            HeapData::Atomic(_)          => "atomic",
+            HeapData::Thread(_)          => "thread",
+            HeapData::Char(_)            => "char",
+            HeapData::CharBuffer(_)      => "char_buffer",
+            HeapData::Vec(_)             => "vec",
+            HeapData::Record(_)          => "record",
+            HeapData::Dictionary(_)      => "dictionary",
+            HeapData::Box(_)             => "box",
+            HeapData::Alloc { .. }       => "alloc",
+            HeapData::Closure { .. }     => "closure",
+            HeapData::Sum { .. }         => "sum",
+            HeapData::Enum { .. }        => "enum",
+            HeapData::TaggedUnion { .. } => "tagged_union",
+            HeapData::Result { .. }      => "result",
+            HeapData::Option { .. }      => "option",
+            HeapData::Dyn { .. }         => "dyn",
+            HeapData::FileDescriptor(_)  => "file_descriptor",
+        }
+    }
+
+    pub(crate) fn type_kind(&self) -> crate::TypeKind {
+        use crate::TypeKind;
+        match self.data {
+            HeapData::String(_)          => TypeKind::String,
+            HeapData::Array(_)           => TypeKind::Array,
+            HeapData::Buffer(_)          => TypeKind::Buffer,
+            HeapData::Struct(_)          => TypeKind::Struct,
+            HeapData::Cell(_)            => TypeKind::Box,
+            HeapData::Map(_)             => TypeKind::Map,
+            HeapData::Mutex(_)           => TypeKind::Mutex,
+            HeapData::Atomic(_)          => TypeKind::Atomic,
+            HeapData::Thread(_)          => unimplemented!("Phase 2: HeapData::Thread has no TypeKind entry (v2 scope)"),
+            HeapData::Char(_)            => TypeKind::Char,
+            HeapData::CharBuffer(_)      => TypeKind::CharBuffer,
+            HeapData::Vec(_)             => TypeKind::Vec,
+            HeapData::Record(_)          => TypeKind::Record,
+            HeapData::Dictionary(_)      => TypeKind::Dictionary,
+            HeapData::Box(_)             => TypeKind::Box,
+            HeapData::Alloc { .. }       => TypeKind::Alloc,
+            HeapData::Closure { .. }     => TypeKind::Closure,
+            HeapData::Sum { .. }         => TypeKind::Sum,
+            HeapData::Enum { .. }        => TypeKind::Enum,
+            HeapData::TaggedUnion { .. } => TypeKind::TaggedUnion,
+            HeapData::Result { .. }      => TypeKind::Result,
+            HeapData::Option { .. }      => TypeKind::Option,
+            HeapData::Dyn { .. }         => TypeKind::Dyn,
+            HeapData::FileDescriptor(_)  => TypeKind::FileDescriptor,
         }
     }
 }
@@ -312,6 +388,66 @@ impl TinyHeap {
         self.alloc_data(HeapData::Thread(h))
     }
 
+    pub(crate) fn alloc_char(&mut self, scalar: u32) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Char(scalar))
+    }
+
+    pub(crate) fn alloc_char_buffer(&mut self, chars: Vec<u32>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::CharBuffer(chars))
+    }
+
+    pub(crate) fn alloc_vec(&mut self, values: Vec<Value>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Vec(values))
+    }
+
+    pub(crate) fn alloc_record(&mut self, fields: Vec<(String, Value)>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Record(fields))
+    }
+
+    pub(crate) fn alloc_dictionary(&mut self, entries: Vec<(Value, Value)>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Dictionary(entries))
+    }
+
+    pub(crate) fn alloc_box(&mut self, value: Value) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Box(Box::new(value)))
+    }
+
+    pub(crate) fn alloc_raw(&mut self, kind: TypeKind, data: Vec<u8>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Alloc { kind, data })
+    }
+
+    pub(crate) fn alloc_closure(&mut self, function_id: u32, captures: Vec<Value>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Closure { function_id, captures })
+    }
+
+    pub(crate) fn alloc_sum(&mut self, tag: u32, payload: Option<Value>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Sum { tag, payload: payload.map(Box::new) })
+    }
+
+    pub(crate) fn alloc_enum(&mut self, variant: u32) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Enum { variant })
+    }
+
+    pub(crate) fn alloc_tagged_union(&mut self, tag: u32, payload: Value) -> Result<HeapRef> {
+        self.alloc_data(HeapData::TaggedUnion { tag, payload: Box::new(payload) })
+    }
+
+    pub(crate) fn alloc_result(&mut self, is_ok: bool, value: Value) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Result { is_ok, value: Box::new(value) })
+    }
+
+    pub(crate) fn alloc_option(&mut self, value: Option<Value>) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Option { value: value.map(Box::new) })
+    }
+
+    pub(crate) fn alloc_dyn(&mut self, type_id: u16, vtable_id: u32, value: Value) -> Result<HeapRef> {
+        self.alloc_data(HeapData::Dyn { type_id, vtable_id, value: Box::new(value) })
+    }
+
+    pub(crate) fn alloc_file_descriptor(&mut self, fd: i32) -> Result<HeapRef> {
+        self.alloc_data(HeapData::FileDescriptor(fd))
+    }
+
     pub(crate) fn get(&self, value: &Value) -> Result<&HeapObject> {
         let reference = expect_heap_ref(value)?;
         self.get_address(reference.address, reference.generation)
@@ -439,12 +575,80 @@ pub(crate) fn heap_object_bytes(object: &HeapObject) -> usize {
         HeapData::Mutex(_)   => std::mem::size_of::<TinyMutex>() + 2 * std::mem::size_of::<usize>(),
         HeapData::Atomic(_)  => std::mem::size_of::<AtomicI64>() + 2 * std::mem::size_of::<usize>(),
         HeapData::Thread(_)  => THREAD_HEAP_WEIGHT,
+        HeapData::Char(_)                => std::mem::size_of::<u32>(),
+        HeapData::CharBuffer(chars)      => chars.len() * std::mem::size_of::<u32>(),
+        HeapData::Vec(values)            => values.len() * VALUE_BYTES,
+        HeapData::Record(fields)         => fields.iter().map(|(n, _)| n.len() + VALUE_BYTES).sum::<usize>(),
+        HeapData::Dictionary(entries)    => entries.len() * VALUE_BYTES * 2,
+        HeapData::Box(_)                 => VALUE_BYTES,
+        HeapData::Alloc { data, .. }     => data.len(),
+        HeapData::Closure { captures, .. } => captures.len() * VALUE_BYTES,
+        HeapData::Sum { .. }             => VALUE_BYTES * 2,
+        HeapData::Enum { .. }            => std::mem::size_of::<u32>(),
+        HeapData::TaggedUnion { .. }     => VALUE_BYTES + std::mem::size_of::<u32>(),
+        HeapData::Result { .. }          => VALUE_BYTES + 1,
+        HeapData::Option { value, .. }   => if value.is_some() { VALUE_BYTES } else { 1 },
+        HeapData::Dyn { .. }             => VALUE_BYTES + std::mem::size_of::<u16>() + std::mem::size_of::<u32>(),
+        HeapData::FileDescriptor(_)      => std::mem::size_of::<i32>(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_heap_data_variants_are_allocatable() {
+        use crate::TypeKind;
+        use crate::Value;
+
+        let mut heap = TinyHeap::new();
+
+        let r = heap.alloc_char(65u32).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "char");
+
+        let r = heap.alloc_char_buffer(vec![65u32, 66u32]).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "char_buffer");
+
+        let r = heap.alloc_vec(vec![]).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "vec");
+
+        let r = heap.alloc_record(vec![("x".to_string(), Value::I64(1))]).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "record");
+
+        let r = heap.alloc_dictionary(vec![]).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "dictionary");
+
+        let r = heap.alloc_box(Value::I64(42)).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "box");
+
+        let r = heap.alloc_raw(TypeKind::I32, vec![0u8; 4]).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "alloc");
+
+        let r = heap.alloc_closure(0u32, vec![]).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "closure");
+
+        let r = heap.alloc_sum(0u32, None).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "sum");
+
+        let r = heap.alloc_enum(0u32).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "enum");
+
+        let r = heap.alloc_tagged_union(0u32, Value::Unit).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "tagged_union");
+
+        let r = heap.alloc_result(true, Value::Unit).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "result");
+
+        let r = heap.alloc_option(None).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "option");
+
+        let r = heap.alloc_dyn(0u16, 0u32, Value::Unit).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "dyn");
+
+        let r = heap.alloc_file_descriptor(1i32).unwrap();
+        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "file_descriptor");
+    }
 
     #[test]
     fn heap_can_alloc_mutex_atomic_thread_variants() {

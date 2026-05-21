@@ -1135,6 +1135,14 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
                 HeapData::Mutex(_) => TypeKind::Mutex.name(),
                 HeapData::Atomic(_) => TypeKind::Atomic.name(),
                 HeapData::Thread(_) => TypeKind::Thread.name(),
+                HeapData::Char(_) | HeapData::CharBuffer(_) | HeapData::Vec(_)
+                | HeapData::Record(_) | HeapData::Dictionary(_) | HeapData::Box(_)
+                | HeapData::Alloc { .. } | HeapData::Closure { .. } | HeapData::Sum { .. }
+                | HeapData::Enum { .. } | HeapData::TaggedUnion { .. }
+                | HeapData::Result { .. } | HeapData::Option { .. } | HeapData::Dyn { .. }
+                | HeapData::FileDescriptor(_) => {
+                    unimplemented!("Phase 2: HeapData variant not yet implemented for this operation")
+                }
             }
         }
     };
