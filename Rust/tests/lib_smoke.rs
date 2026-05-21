@@ -1,4 +1,5 @@
 use std::fs;
+use std::sync::Arc;
 
 use tinyone::{Program, compile_file, compile_source, run_program, run_source};
 
@@ -93,7 +94,7 @@ fn imports_and_artifact_roundtrip() {
     assert_eq!(program.fingerprint(), loaded.fingerprint());
 
     let mut out = Vec::new();
-    run_program(&loaded, "jit", &mut out, Vec::new()).unwrap();
+    run_program(Arc::new(loaded), "jit", &mut out, Vec::new()).unwrap();
     assert_eq!(String::from_utf8(out).unwrap(), "42\n");
     let _ = fs::remove_dir_all(&root);
 }

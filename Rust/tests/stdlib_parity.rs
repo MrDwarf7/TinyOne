@@ -1,21 +1,23 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use tinyone::{compile_file, compile_source, run_program};
 
 fn run_modes(source: &str) -> (String, String) {
     let mut vm = Vec::new();
     let mut jit = Vec::new();
+    let program = compile_source(source).expect("compile");
     run_program(
-        &compile_source(source).expect("compile"),
+        Arc::clone(&program),
         "vm",
         &mut vm,
         Vec::new(),
     )
     .expect("vm run");
     run_program(
-        &compile_source(source).expect("compile"),
+        Arc::clone(&program),
         "jit",
         &mut jit,
         Vec::new(),
@@ -141,7 +143,7 @@ fn mutex_double_lock_errors() {
     "#;
     let mut vm = Vec::new();
     let err = run_program(
-        &compile_source(source).expect("compile"),
+        compile_source(source).expect("compile"),
         "vm",
         &mut vm,
         Vec::new(),
@@ -160,7 +162,7 @@ fn atomic_add_overflows_at_i64_max() {
     "#;
     let mut vm = Vec::new();
     let err = run_program(
-        &compile_source(source).expect("compile"),
+        compile_source(source).expect("compile"),
         "vm",
         &mut vm,
         Vec::new(),
@@ -196,7 +198,7 @@ fn option_unwrap_on_none_errors() {
     "#;
     let mut vm = Vec::new();
     let err = run_program(
-        &compile_source(source).expect("compile"),
+        compile_source(source).expect("compile"),
         "vm",
         &mut vm,
         Vec::new(),
@@ -214,7 +216,7 @@ fn typed_add_overflows_outside_range() {
     "#;
     let mut vm = Vec::new();
     let err = run_program(
-        &compile_source(source).expect("compile"),
+        compile_source(source).expect("compile"),
         "vm",
         &mut vm,
         Vec::new(),
@@ -295,7 +297,7 @@ fn sys_args_and_env_are_deterministic() {
     let mut env = HashMap::new();
     env.insert("FOO".to_string(), "bar".to_string());
     tinyone::run_program_with_env(
-        &compile_source(source).expect("compile"),
+        compile_source(source).expect("compile"),
         "vm",
         &mut vm,
         Vec::new(),
@@ -422,7 +424,7 @@ fn stdlib_modules_compile_via_manifest_import() {
     .unwrap();
     let program = compile_file(&main).expect("compile manifest-imported program");
     let mut out = Vec::new();
-    run_program(&program, "vm", &mut out, Vec::new()).expect("vm run");
+    run_program(program, "vm", &mut out, Vec::new()).expect("vm run");
     let text = String::from_utf8(out).unwrap();
     assert_eq!(text, "2\n41\n9\n1\n3\n11\n22\n");
     let _ = fs::remove_dir_all(&temp);

@@ -1,5 +1,6 @@
 use std::env;
 use std::io::{self, Read};
+use std::sync::Arc;
 
 use tinyone::{
     TinyOneError, compile_file, load_artifact, run_program, write_artifact, write_jit_listing,
@@ -107,7 +108,7 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
     }
 
     let program = if let Some(path) = args.run_bytecode {
-        load_artifact(path)?
+        Arc::new(load_artifact(path)?)
     } else {
         let Some(path) = args.path else {
             return Err(TinyOneError::Compile(
@@ -118,10 +119,10 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
     };
 
     if let Some(path) = args.emit_bytecode {
-        write_artifact(&program, path)?;
+        write_artifact(&*program, path)?;
     }
     if let Some(path) = args.emit_jit {
-        write_jit_listing(&program, path)?;
+        write_jit_listing(&*program, path)?;
     }
     if args.verbose {
         eprintln!(
@@ -137,7 +138,7 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
     }
     if !args.check {
         let mut stdout = io::stdout();
-        run_program(&program, &args.mode, &mut stdout, args.inputs)?;
+        run_program(program, &args.mode, &mut stdout, args.inputs)?;
     }
     Ok(0)
 }

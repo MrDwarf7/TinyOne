@@ -13,7 +13,7 @@ fn measure(label: &str, source: &str, iterations: usize) {
         let start = Instant::now();
         for _ in 0..iterations {
             let mut out = Vec::new();
-            run_program(&program, mode, &mut out, Vec::new()).expect("run");
+            run_program(program.clone(), mode, &mut out, Vec::new()).expect("run");
         }
         let elapsed = start.elapsed();
         let per = elapsed.as_secs_f64() * 1000.0 / iterations as f64;

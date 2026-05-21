@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::sync::Arc;
 
 use crate::{
     JitProgram, Program, Result, RuntimeValue, TinyHeapStats, TinyOneError, compile_file,
@@ -37,11 +38,11 @@ pub(crate) struct JitInspection {
     pub(crate) op_count: usize,
 }
 
-pub(crate) fn compile_fixture(path: impl AsRef<std::path::Path>) -> Result<Program> {
+pub(crate) fn compile_fixture(path: impl AsRef<std::path::Path>) -> Result<Arc<Program>> {
     compile_file(path)
 }
 
-pub(crate) fn compile_source_fixture(source: &str, filename: &str) -> Result<Program> {
+pub(crate) fn compile_source_fixture(source: &str, filename: &str) -> Result<Arc<Program>> {
     compile_source_with_filename(source, filename)
 }
 
@@ -103,7 +104,7 @@ pub(crate) fn inspect_jit(program: &Program) -> JitInspection {
 }
 
 pub(crate) fn run_backend(
-    program: &Program,
+    program: Arc<Program>,
     mode: &'static str,
     inputs: Vec<String>,
 ) -> Result<BackendRunInspection> {
@@ -120,11 +121,11 @@ pub(crate) fn run_backend(
 }
 
 pub(crate) fn assert_backends_match(
-    program: &Program,
+    program: Arc<Program>,
     inputs: &[String],
 ) -> Result<(BackendRunInspection, BackendRunInspection)> {
-    let vm = run_backend(program, "vm", inputs.to_vec())?;
-    let jit = run_backend(program, "jit", inputs.to_vec())?;
+    let vm = run_backend(Arc::clone(&program), "vm", inputs.to_vec())?;
+    let jit = run_backend(Arc::clone(&program), "jit", inputs.to_vec())?;
     if vm.stdout != jit.stdout || vm.memory != jit.memory {
         return Err(TinyOneError::runtime(format!(
             "Backend mismatch: vm stdout {:?}, jit stdout {:?}, vm memory {:?}, jit memory {:?}",
@@ -135,7 +136,7 @@ pub(crate) fn assert_backends_match(
 }
 
 pub(crate) fn write_backend_report(
-    program: &Program,
+    program: Arc<Program>,
     mode: &'static str,
     inputs: Vec<String>,
     out: &mut dyn Write,
@@ -172,10 +173,10 @@ mod tests {
         )
         .expect("compile fixture");
 
-        let program_inspection = inspect_program(&program);
+        let program_inspection = inspect_program(&*program);
         assert!(program_inspection.main_ops.iter().any(|op| op == "JUMP"));
 
-        let jit_inspection = inspect_jit(&program);
+        let jit_inspection = inspect_jit(&*program);
         assert_eq!(program.fingerprint(), jit_inspection.fingerprint);
         assert!(jit_inspection.chunk_count >= 1);
         assert!(jit_inspection.op_count > 0);
