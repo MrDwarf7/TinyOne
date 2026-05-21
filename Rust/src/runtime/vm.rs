@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::Arc;
 
 use crate::{
     BytecodeVerifier, Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory,
@@ -16,10 +17,10 @@ pub struct TinyRunReport {
     pub heap_after_shutdown: TinyHeapStats,
 }
 
-pub struct VM<'a> {
-    program: &'a Program,
+pub struct VM {
+    pub(crate) program: Arc<Program>,
     memory: TinyMemory,
-    context: TinyRuntimeContext,
+    pub(crate) context: TinyRuntimeContext,
     call_depth: usize,
 }
 
@@ -42,16 +43,16 @@ fn lookup_field(fields: &[String], index: usize) -> Result<&str> {
         .ok_or_else(|| TinyOneError::runtime(format!("Invalid field index {index}")))
 }
 
-impl<'a> VM<'a> {
-    pub fn new(program: &'a Program, memory: TinyMemory, inputs: Vec<String>) -> Result<Self> {
-        BytecodeVerifier::verify(program)?;
+impl VM {
+    pub fn new(program: Arc<Program>, memory: TinyMemory, inputs: Vec<String>) -> Result<Self> {
+        BytecodeVerifier::verify(&program)?;
         Ok(Self::new_unchecked(program, memory, inputs))
     }
 
     /// Construct a VM without re-verifying. Only call this when the caller
     /// has already run `BytecodeVerifier::verify` on the same program.
     pub(crate) fn new_unchecked(
-        program: &'a Program,
+        program: Arc<Program>,
         memory: TinyMemory,
         inputs: Vec<String>,
     ) -> Self {
@@ -61,6 +62,14 @@ impl<'a> VM<'a> {
             context: TinyRuntimeContext::new(inputs),
             call_depth: 0,
         }
+    }
+
+    pub(crate) fn new_unchecked_with_context(
+        program: Arc<Program>,
+        memory: TinyMemory,
+        context: TinyRuntimeContext,
+    ) -> Self {
+        Self { program, memory, context, call_depth: 0 }
     }
 
     pub fn set_sys_args(&mut self, args: Vec<String>) {
@@ -77,7 +86,8 @@ impl<'a> VM<'a> {
 
     pub fn run_report(mut self, stdout: &mut dyn Write) -> Result<TinyRunReport> {
         let mut memory = std::mem::take(&mut self.memory);
-        self.run_chunk(&self.program.code, &mut memory, stdout, "main", None)?;
+        let code = self.program.code.clone();
+        self.run_chunk(&code, &mut memory, stdout, "main", None)?;
         let heap_before_shutdown = self.context.heap_stats();
         let heap_after_shutdown = self.context.shutdown();
         Ok(TinyRunReport {
@@ -85,6 +95,28 @@ impl<'a> VM<'a> {
             heap_before_shutdown,
             heap_after_shutdown,
         })
+    }
+
+    /// Run a single function by index. Used by thread_spawn.
+    pub(crate) fn run_function_by_index(
+        mut self,
+        fn_index: usize,
+        args: Vec<Value>,
+        stdout: &mut dyn Write,
+    ) -> Result<Value> {
+        let function = self.program.functions.get(fn_index).ok_or_else(|| {
+            TinyOneError::runtime(format!("thread_spawn: invalid function index {fn_index}"))
+        })?;
+        let slot_count = function.slot_count;
+        let fn_name = function.name.clone();
+        let code = function.code.clone();
+        let mut memory = TinyMemory::new(slot_count);
+        for (i, v) in args.into_iter().enumerate() {
+            memory.store(i, v)?;
+        }
+        let empty_globals = TinyMemory::new(0);
+        let result = self.run_chunk(&code, &mut memory, stdout, &fn_name, Some(&empty_globals))?;
+        result.ok_or_else(|| TinyOneError::runtime("thread function returned no value"))
     }
 
     fn run_chunk(
@@ -250,13 +282,21 @@ impl<'a> VM<'a> {
         stdout: &mut dyn Write,
         global_memory: &TinyMemory,
     ) -> Result<Value> {
-        let function = self.program.functions.get(function_index).ok_or_else(|| {
-            TinyOneError::runtime(format!("Invalid function index {function_index}"))
-        })?;
-        if arg_count != function.param_count {
+        let (fn_name, fn_slot_count, fn_code, fn_param_count) = {
+            let function = self.program.functions.get(function_index).ok_or_else(|| {
+                TinyOneError::runtime(format!("Invalid function index {function_index}"))
+            })?;
+            (
+                function.name.clone(),
+                function.slot_count,
+                function.code.clone(),
+                function.param_count,
+            )
+        };
+        if arg_count != fn_param_count {
             return Err(TinyOneError::runtime(format!(
                 "Function {:?} expects {} argument(s), got {arg_count}",
-                function.name, function.param_count
+                fn_name, fn_param_count
             )));
         }
         if self.call_depth >= MAX_CALL_DEPTH {
@@ -265,21 +305,21 @@ impl<'a> VM<'a> {
             )));
         }
         let args = pop_args(caller_stack, arg_count)?;
-        let mut memory = TinyMemory::new(function.slot_count);
+        let mut memory = TinyMemory::new(fn_slot_count);
         for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;
         }
         self.call_depth += 1;
         let result = self.run_chunk(
-            &function.code,
+            &fn_code,
             &mut memory,
             stdout,
-            &function.name,
+            &fn_name,
             Some(global_memory),
         );
         self.call_depth -= 1;
         result?.ok_or_else(|| {
-            TinyOneError::runtime(format!("Function {:?} returned no value", function.name))
+            TinyOneError::runtime(format!("Function {:?} returned no value", fn_name))
         })
     }
 }

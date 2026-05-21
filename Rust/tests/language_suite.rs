@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tinyone::testing;
@@ -169,7 +170,7 @@ fn check_pass_fixture(fixture: &Fixture) -> FixtureResult {
         }
     };
 
-    let inspection = testing::inspect_program(&program);
+    let inspection = testing::inspect_program(&*program);
     if inspection.fingerprint.is_empty() {
         return FixtureResult::fail(
             &fixture.path,
@@ -178,7 +179,7 @@ fn check_pass_fixture(fixture: &Fixture) -> FixtureResult {
         );
     }
 
-    let jit_inspection = testing::inspect_jit(&program);
+    let jit_inspection = testing::inspect_jit(&*program);
     if inspection.fingerprint != jit_inspection.fingerprint {
         return FixtureResult::fail(
             &fixture.path,
@@ -193,7 +194,7 @@ fn check_pass_fixture(fixture: &Fixture) -> FixtureResult {
         return FixtureResult::fail(&fixture.path, "inspect jit", "JIT op count was zero");
     }
 
-    let (vm, jit) = match testing::assert_backends_match(&program, &fixture.inputs) {
+    let (vm, jit) = match testing::assert_backends_match(Arc::clone(&program), &fixture.inputs) {
         Ok(result) => result,
         Err(error) => {
             return FixtureResult::fail(
@@ -271,7 +272,7 @@ fn check_runtime_fail_fixture(fixture: &Fixture) -> FixtureResult {
     };
 
     for mode in ["vm", "jit"] {
-        let error = match testing::run_backend(&program, mode, fixture.inputs.clone()) {
+        let error = match testing::run_backend(Arc::clone(&program), mode, fixture.inputs.clone()) {
             Ok(run) => {
                 return FixtureResult::fail(
                     &fixture.path,
@@ -340,7 +341,7 @@ fn collect_to_files(root: &Path, paths: &mut Vec<PathBuf>) {
     }
 }
 
-fn compile_expected_failure_subject(path: &Path) -> tinyone::Result<tinyone::Program> {
+fn compile_expected_failure_subject(path: &Path) -> tinyone::Result<Arc<tinyone::Program>> {
     if path.ends_with("tests/Programs/fail_compile/009_module_top_level_executable_code.to") {
         let importer = temporary_importer_for(path);
         let result = testing::compile_fixture(&importer);

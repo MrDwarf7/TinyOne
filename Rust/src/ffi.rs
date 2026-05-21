@@ -2,6 +2,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::{Value as JsonValue, json};
 
@@ -101,7 +102,7 @@ pub unsafe extern "C" fn tinyone_run_file_json(
         let mode = read_string(mode, "mode")?;
         let inputs = read_inputs(inputs_json)?;
         let program = compile_file(Path::new(&path))?;
-        run_compiled_program(&program, &mode, inputs)
+        run_compiled_program(program, &mode, inputs)
     })
 }
 
@@ -120,8 +121,8 @@ pub unsafe extern "C" fn tinyone_run_artifact_json(
         let artifact = read_artifact_json(artifact_json)?;
         let mode = read_string(mode, "mode")?;
         let inputs = read_inputs(inputs_json)?;
-        let program = Program::from_artifact(artifact)?;
-        run_compiled_program(&program, &mode, inputs)
+        let program = Arc::new(Program::from_artifact(artifact)?);
+        run_compiled_program(program, &mode, inputs)
     })
 }
 
@@ -231,14 +232,14 @@ fn read_inputs(value: *const c_char) -> Result<Vec<String>> {
     })
 }
 
-fn program_payload(program: Program) -> Result<JsonValue> {
+fn program_payload(program: Arc<Program>) -> Result<JsonValue> {
     Ok(json!({
         "artifact": program.to_artifact(),
         "fingerprint": program.fingerprint(),
     }))
 }
 
-fn run_compiled_program(program: &Program, mode: &str, inputs: Vec<String>) -> Result<JsonValue> {
+fn run_compiled_program(program: Arc<Program>, mode: &str, inputs: Vec<String>) -> Result<JsonValue> {
     let mut stdout = Vec::new();
     let report = run_program_report(program, mode, &mut stdout, inputs)?;
     run_payload(

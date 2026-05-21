@@ -5,6 +5,7 @@ use std::os::raw::c_char;
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value as JsonValue, json};
@@ -663,11 +664,11 @@ fn verifier_rejects_unreachable_invalid_operands() {
 
     expect_error_contains(BytecodeVerifier::verify(&invalid), "invalid slot");
     expect_error_contains(
-        run_program(&invalid, "vm", &mut Vec::new(), Vec::new()),
+        run_program(Arc::new(invalid.clone()), "vm", &mut Vec::new(), Vec::new()),
         "invalid slot",
     );
     expect_error_contains(
-        run_program(&invalid, "jit", &mut Vec::new(), Vec::new()),
+        run_program(Arc::new(invalid), "jit", &mut Vec::new(), Vec::new()),
         "invalid slot",
     );
 }
@@ -705,20 +706,20 @@ fn public_safe_rust_paths_verify_untrusted_programs() {
 
     expect_error_contains(VerifiedProgram::verify(invalid.clone()), "Verifier");
     expect_error_contains(
-        run_program(&invalid, "vm", &mut Vec::new(), Vec::new()),
+        run_program(Arc::new(invalid.clone()), "vm", &mut Vec::new(), Vec::new()),
         "Verifier",
     );
     expect_error_contains(
-        run_program(&invalid, "jit", &mut Vec::new(), Vec::new()),
+        run_program(Arc::new(invalid.clone()), "jit", &mut Vec::new(), Vec::new()),
         "Verifier",
     );
     expect_error_contains(
-        run_program_report(&invalid, "vm", &mut Vec::new(), Vec::new()),
+        run_program_report(Arc::new(invalid.clone()), "vm", &mut Vec::new(), Vec::new()),
         "Verifier",
     );
     expect_error_contains(
         run_program_with_env(
-            &invalid,
+            Arc::new(invalid.clone()),
             "vm",
             &mut Vec::new(),
             Vec::new(),
@@ -728,7 +729,7 @@ fn public_safe_rust_paths_verify_untrusted_programs() {
         "Verifier",
     );
     expect_error_contains(
-        VM::new(&invalid, TinyMemory::new(invalid.slot_count), Vec::new()),
+        VM::new(Arc::new(invalid.clone()), TinyMemory::new(invalid.slot_count), Vec::new()),
         "Verifier",
     );
 
@@ -763,15 +764,15 @@ fn public_safe_rust_paths_reject_oversized_raw_program_before_execution_allocati
     expect_error_contains(BytecodeVerifier::verify(&oversized), "slot_count");
     expect_error_contains(VerifiedProgram::verify(oversized.clone()), "slot_count");
     expect_error_contains(
-        run_program(&oversized, "vm", &mut Vec::new(), Vec::new()),
+        run_program(Arc::new(oversized.clone()), "vm", &mut Vec::new(), Vec::new()),
         "slot_count",
     );
     expect_error_contains(
-        run_program(&oversized, "jit", &mut Vec::new(), Vec::new()),
+        run_program(Arc::new(oversized.clone()), "jit", &mut Vec::new(), Vec::new()),
         "slot_count",
     );
     expect_error_contains(
-        VM::new(&oversized, TinyMemory::new(0), Vec::new()),
+        VM::new(Arc::new(oversized.clone()), TinyMemory::new(0), Vec::new()),
         "slot_count",
     );
     expect_error_contains(JitProgram::compile(&oversized), "slot_count");
@@ -877,4 +878,10 @@ fn adversarial_jit_program_from_artifact_roundtrip_does_not_panic() {
         result.is_ok(),
         "artifact roundtrip through JIT must not panic"
     );
+}
+
+#[test]
+fn vm_is_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<tinyone::VM>();
 }
