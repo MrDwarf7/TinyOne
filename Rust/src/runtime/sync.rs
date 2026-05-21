@@ -1,47 +1,54 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::fmt;
+use std::thread::{self, ThreadId};
 
 use crate::{Result, TinyOneError, Value};
 
 #[derive(Debug)]
 pub(crate) struct TinyMutex {
-    state: Mutex<bool>, // true = locked
+    // None = unlocked; Some(tid) = locked by thread tid
+    state: Mutex<Option<ThreadId>>,
     cond:  Condvar,
 }
 
 impl TinyMutex {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new(false),
+            state: Mutex::new(None),
             cond:  Condvar::new(),
         })
     }
 
     /// Block until the mutex is unlocked, then acquire it.
+    /// Returns a runtime error if the calling thread already holds this mutex (deadlock).
     pub(crate) fn lock(&self) -> Result<()> {
-        let mut locked = self.state.lock()
+        let current = thread::current().id();
+        let mut state = self.state.lock()
             .map_err(|_| TinyOneError::runtime("mutex_lock: mutex poisoned"))?;
-        locked = self.cond
-            .wait_while(locked, |l| *l)
+        if *state == Some(current) {
+            return Err(TinyOneError::runtime("mutex_lock: deadlock — already locked by this thread"));
+        }
+        state = self.cond
+            .wait_while(state, |s| s.is_some())
             .map_err(|_| TinyOneError::runtime("mutex_lock: condvar wait failed"))?;
-        *locked = true;
+        *state = Some(current);
         Ok(())
     }
 
     /// Release the mutex. Returns a runtime error if not currently locked.
     pub(crate) fn unlock(&self) -> Result<()> {
-        let mut locked = self.state.lock()
+        let mut state = self.state.lock()
             .map_err(|_| TinyOneError::runtime("mutex_unlock: mutex poisoned"))?;
-        if !*locked {
+        if state.is_none() {
             return Err(TinyOneError::runtime("mutex_unlock: mutex is not locked"));
         }
-        *locked = false;
+        *state = None;
         self.cond.notify_one();
         Ok(())
     }
 
     pub(crate) fn is_locked(&self) -> bool {
-        *self.state.lock().unwrap_or_else(|e| e.into_inner())
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 }
 
