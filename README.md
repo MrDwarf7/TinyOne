@@ -50,6 +50,7 @@ tracked for v1.
   `ptr_type`, `is_null`, `ptr_eq`, `ptr_ne`, `ptr_base`, `ptr_offset`,
   `ptr_kind`, `ptr_field`, `buffer`, `read8`, `write8`, `read16`, `write16`,
   `read32`, `write32`, `cast_ptr`, `push`, and `pop`
+- **Real OS multithreading**: `thread_spawn("fn_name", arg...)` / `thread_join(handle)` spawn and join OS threads sharing a single heap; `mutex_lock`/`mutex_unlock` use a blocking condvar mutex; `atomic_add`/`atomic_load`/`atomic_store` are `AtomicI64` (SeqCst)
 - Deterministic input queues through CLI flags or stdin
 - JSON bytecode artifact emission and execution with module dependency metadata
 - `jit` and `vm` CLI modes. The Rust `jit` mode now compiles verified TinyOne
@@ -472,7 +473,8 @@ str_byte_at(s, byte_index), str_char_at(s, char_index)
 str_slice(s, start_char, end_char), str_concat(a, b)
 str_is_utf8(value), str_from_buffer(buf)
 
-# Threading & sync (single-threaded semantic shells; misuse is a runtime error)
+# Threading & sync (real OS threads sharing a single heap)
+thread_spawn("fn_name", arg...), thread_join(handle)
 mutex_new(), mutex_lock(m), mutex_unlock(m)
 atomic_new(init), atomic_load(a), atomic_store(a, v), atomic_add(a, delta)
 
