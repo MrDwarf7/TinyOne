@@ -77,7 +77,7 @@ pub enum RuntimeValue {
 
 impl Default for RuntimeValue {
     fn default() -> Self {
-        Self::Unit
+        Self::I64(0)
     }
 }
 

@@ -292,29 +292,44 @@ the bytes are not valid UTF-8.
 
 ### Threading and sync (`sync`)
 
-These are single-threaded semantic shells. TinyOne is single-threaded; these
-builtins enforce ordering discipline and detect misuse at runtime.
+TinyOne supports real OS multithreading. Threads share the same heap; mutex and
+atomic operations use blocking OS primitives.
+
+#### `thread_spawn(fn_name, arg...) → thread`
+Spawns an OS thread running the named function with the given arguments. The
+thread shares the heap with the spawning program. Returns a thread handle. Up
+to 63 arguments may be forwarded. Runtime error if `fn_name` does not name a
+defined function or if the argument count does not match the function's arity.
+
+#### `thread_join(handle) → value`
+Blocks until the thread finishes, then returns the thread's return value.
+Thread stdout is collected and printed before the next `print` statement in
+the calling program. Calling `thread_join` on an already-joined handle is a
+runtime error.
 
 #### `mutex_new() → mutex`
-Allocates an unlocked mutex.
+Allocates an unlocked mutex backed by a real OS condvar.
 
 #### `mutex_lock(m) → int`
-Locks `m`. Runtime error if already locked.
+Blocks until the mutex is acquired. Runtime error on same-thread deadlock
+(re-locking a mutex already held by the calling thread).
 
 #### `mutex_unlock(m) → int`
-Unlocks `m`. Runtime error if not locked.
+Releases the mutex. Runtime error if the mutex is not locked by the calling
+thread.
 
 #### `atomic_new(init) → atomic`
-Allocates an atomic integer initialized to `init`.
+Allocates an `AtomicI64` initialized to `init`.
 
 #### `atomic_load(a) → int`
-Reads the current value.
+Reads the current value with sequential-consistency ordering.
 
 #### `atomic_store(a, value) → int`
-Stores `value`. Returns `value`.
+Stores `value` with sequential-consistency ordering. Returns `value`.
 
 #### `atomic_add(a, delta) → int`
-Atomically adds `delta` and returns the new value.
+Atomically adds `delta` with sequential-consistency ordering and returns the
+new value. Runtime error on overflow.
 
 ---
 
