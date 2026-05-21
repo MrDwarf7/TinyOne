@@ -10,14 +10,14 @@ use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::runtime::sync::TinyMutex;
+use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
 use crate::runtime::typing::{
     TypeKind, check_integer_range, integer_range, promote_integer, smallest_fit_literal,
 };
 use crate::{
-    HeapData, Result, TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, expect_int,
+    HeapData, Result, TinyMemory, TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, expect_int,
     expect_string, runtime_cast_int, runtime_integer_kind, runtime_integer_value,
-    validate_pointer_base,
+    validate_pointer_base, VM,
 };
 
 const MAX_FS_LIST_DIR_ENTRIES: usize = 65_536;
@@ -620,6 +620,77 @@ pub fn b_atomic_add(
             return Ok(Value::Int(next));
         }
     }
+}
+
+pub fn b_thread_spawn(context: &mut TinyRuntimeContext, args: Vec<Value>) -> Result<Value> {
+    let fn_name = {
+        let heap = context.heap();
+        let obj = heap.get(&args[0])?;
+        let HeapData::String(s) = &obj.data else {
+            return Err(TinyOneError::runtime(
+                "thread_spawn: first argument must be a function name string",
+            ));
+        };
+        s.clone()
+    };
+
+    let program_arc = context
+        .program_arc
+        .clone()
+        .ok_or_else(|| TinyOneError::runtime("thread_spawn: runtime has no compiled program"))?;
+
+    let fn_args = args[1..].to_vec();
+    let (fn_index, fn_param_count) = program_arc
+        .functions
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.name == fn_name)
+        .map(|(i, f)| (i, f.param_count))
+        .ok_or_else(|| {
+            TinyOneError::runtime(format!("thread_spawn: function {:?} not found", fn_name))
+        })?;
+
+    if fn_args.len() != fn_param_count {
+        return Err(TinyOneError::runtime(format!(
+            "thread_spawn: {:?} expects {} argument(s), got {}",
+            fn_name,
+            fn_param_count,
+            fn_args.len()
+        )));
+    }
+
+    let heap_arc = Arc::clone(&context.heap_arc);
+
+    let handle = std::thread::spawn(move || {
+        let slot_count = program_arc.functions[fn_index].slot_count;
+        let mut thread_ctx = TinyRuntimeContext::with_heap(heap_arc);
+        thread_ctx.program_arc = Some(Arc::clone(&program_arc));
+        let vm = VM::new_unchecked_with_context(
+            Arc::clone(&program_arc),
+            TinyMemory::new(slot_count),
+            thread_ctx,
+        );
+        let mut thread_stdout: Vec<u8> = Vec::new();
+        let result = vm.run_function_by_index(fn_index, fn_args, &mut thread_stdout);
+        (result, thread_stdout)
+    });
+
+    let thread_handle = TinyThreadHandle::new(handle);
+    Ok(Value::Heap(context.heap().alloc_thread(thread_handle)?))
+}
+
+pub fn b_thread_join(context: &mut TinyRuntimeContext, args: Vec<Value>) -> Result<Value> {
+    let handle_arc = {
+        let heap = context.heap();
+        let object = heap.get(&args[0])?;
+        let HeapData::Thread(h) = &object.data else {
+            return Err(TinyOneError::runtime("thread_join expects a thread handle"));
+        };
+        Arc::clone(h)
+    };
+    let (value, thread_stdout) = handle_arc.join()?;
+    context.queued_stdout.extend_from_slice(&thread_stdout);
+    Ok(value)
 }
 
 // ---------------------------------------------------------------------------

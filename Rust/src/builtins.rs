@@ -701,6 +701,19 @@ pub(crate) const BUILTINS: &[BuiltinDef] = &[
         max_args: 2,
         requires_unsafe: false,
     },
+    // Step 4 (continued): thread_spawn / thread_join
+    BuiltinDef {
+        name: "thread_spawn",
+        min_args: 1,    // fn_name string required; additional args forwarded to the fn
+        max_args: 64,   // up to 63 arguments forwarded
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "thread_join",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
 ];
 
 pub(crate) fn builtin_index(name: &str) -> Option<usize> {
