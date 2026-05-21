@@ -45,10 +45,12 @@ impl TinyRuntimeContext {
         }
     }
 
-    /// Acquire the heap lock.
+    /// Acquire the heap lock. Recovers from poisoning (a prior thread panicked
+    /// while holding the lock) rather than aborting — the heap data structure
+    /// is not torn across a Rust panic boundary at these call sites.
     #[inline]
     pub(crate) fn heap(&self) -> MutexGuard<'_, TinyHeap> {
-        self.heap_arc.lock().expect("heap mutex poisoned")
+        self.heap_arc.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub(crate) fn read_raw(&mut self) -> Result<String> {
@@ -79,10 +81,9 @@ impl TinyRuntimeContext {
 
 impl Drop for TinyRuntimeContext {
     fn drop(&mut self) {
-        // Only shut down the heap when we're the last owner.
-        // Thread contexts share the heap with the main context —
-        // calling shutdown on a shared heap would free all objects
-        // while the main context is still running.
+        // Only shut down the heap when we're the last owner. strong_count
+        // here still includes self (Arc fields destruct after Drop::drop),
+        // so count > 1 means at least one peer context is still alive.
         if Arc::strong_count(&self.heap_arc) == 1 {
             self.shutdown();
         }
