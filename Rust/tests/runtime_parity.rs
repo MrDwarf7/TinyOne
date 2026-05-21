@@ -1112,4 +1112,5 @@ fn all_43_runtime_value_variants_are_representable() {
     let _phantom   = RuntimeValue::Phantom;
     let _zst       = RuntimeValue::Zst(TypeKind::Zst);
     let _unsafe_v  = RuntimeValue::Unsafe;
+    // Reference/Heap/Pointer require pub(crate) constructors; tested via internal unit tests
 }
