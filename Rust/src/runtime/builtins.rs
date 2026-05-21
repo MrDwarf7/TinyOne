@@ -238,6 +238,8 @@ pub(crate) fn runtime_call_builtin(
         "u16" => stdlib::b_int_cast(&args[0], crate::TypeKind::U16, "u16"),
         "u32" => stdlib::b_int_cast(&args[0], crate::TypeKind::U32, "u32"),
         "assert" => stdlib::b_assert(&args[0], args.get(1), context),
+        "thread_spawn" => stdlib::b_thread_spawn(context, args),
+        "thread_join"  => stdlib::b_thread_join(context, args),
         _ => Err(TinyOneError::runtime(format!(
             "Missing builtin handler {:?}",
             builtin.name

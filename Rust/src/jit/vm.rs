@@ -262,10 +262,20 @@ impl<'a> JitVm<'a> {
                 }
                 JitOp::Return => return Ok(Some(jit_pop(&mut stack)?)),
                 JitOp::Print => {
+                    if !self.context.queued_stdout.is_empty() {
+                        stdout.write_all(&self.context.queued_stdout)
+                            .map_err(|e| TinyOneError::runtime(format!("stdout flush error: {e}")))?;
+                        self.context.queued_stdout.clear();
+                    }
                     let value = jit_pop(&mut stack)?;
                     runtime_print(&self.context, stdout, &value)?;
                 }
                 JitOp::Halt => {
+                    if !self.context.queued_stdout.is_empty() {
+                        stdout.write_all(&self.context.queued_stdout)
+                            .map_err(|e| TinyOneError::runtime(format!("stdout flush error: {e}")))?;
+                        self.context.queued_stdout.clear();
+                    }
                     if !stack.is_empty() {
                         let chunk_name = self
                             .program

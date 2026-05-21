@@ -259,10 +259,20 @@ impl VM {
                 }
                 Op::Return => return Ok(Some(vm_pop(&mut stack)?)),
                 Op::Print => {
+                    if !self.context.queued_stdout.is_empty() {
+                        stdout.write_all(&self.context.queued_stdout)
+                            .map_err(|e| TinyOneError::runtime(format!("stdout flush error: {e}")))?;
+                        self.context.queued_stdout.clear();
+                    }
                     let value = vm_pop(&mut stack)?;
                     runtime_print(&self.context, stdout, &value)?;
                 }
                 Op::Halt => {
+                    if !self.context.queued_stdout.is_empty() {
+                        stdout.write_all(&self.context.queued_stdout)
+                            .map_err(|e| TinyOneError::runtime(format!("stdout flush error: {e}")))?;
+                        self.context.queued_stdout.clear();
+                    }
                     if !stack.is_empty() {
                         return Err(TinyOneError::runtime(format!(
                             "Internal stack imbalance at halt in {chunk_name}"
