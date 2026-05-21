@@ -28,7 +28,8 @@ pub(crate) fn runtime_call_builtin(
     }
     match builtin.name {
         "len" => {
-            let object = context.heap.get(&args[0])?;
+            let heap = context.heap();
+            let object = heap.get(&args[0])?;
             let len = match &object.data {
                 HeapData::Array(values) => values.len(),
                 HeapData::String(text) => text.chars().count(),
@@ -54,21 +55,23 @@ pub(crate) fn runtime_call_builtin(
                 MAX_ARRAY_LENGTH,
             )?;
             let bytes = checked_payload_bytes(count, VALUE_BYTES, "array()")?;
-            context.heap.ensure_can_allocate(bytes)?;
+            context.heap().ensure_can_allocate(bytes)?;
             Ok(Value::Heap(
-                context.heap.alloc_array(vec![args[1].clone(); count])?,
+                context.heap().alloc_array(vec![args[1].clone(); count])?,
             ))
         }
-        "alloc" => Ok(Value::Heap(context.heap.alloc_cell(args[0].clone())?)),
+        "alloc" => Ok(Value::Heap(context.heap().alloc_cell(args[0].clone())?)),
         "load" => {
-            let object = context.heap.get(&args[0])?;
+            let heap = context.heap();
+            let object = heap.get(&args[0])?;
             let HeapData::Cell(value) = &object.data else {
                 return Err(TinyOneError::runtime("load() expects a pointer cell"));
             };
             Ok(value.clone())
         }
         "store" => {
-            let object = context.heap.get_mut(&args[0])?;
+            let mut heap = context.heap();
+            let object = heap.get_mut(&args[0])?;
             let HeapData::Cell(value) = &mut object.data else {
                 return Err(TinyOneError::runtime("store() expects a pointer cell"));
             };
@@ -76,7 +79,7 @@ pub(crate) fn runtime_call_builtin(
             Ok(args[1].clone())
         }
         "free" => {
-            context.heap.free(&args[0])?;
+            context.heap().free(&args[0])?;
             Ok(Value::Int(0))
         }
         "read" => {
@@ -86,7 +89,7 @@ pub(crate) fn runtime_call_builtin(
                     TinyOneError::runtime("read() integer input is out of range")
                 })?))
             } else {
-                Ok(Value::Heap(context.heap.alloc_string(raw)?))
+                Ok(Value::Heap(context.heap().alloc_string(raw)?))
             }
         }
         "read_int" => {
@@ -102,7 +105,7 @@ pub(crate) fn runtime_call_builtin(
         }
         "read_str" => {
             let raw = context.read_raw()?;
-            Ok(Value::Heap(context.heap.alloc_string(raw)?))
+            Ok(Value::Heap(context.heap().alloc_string(raw)?))
         }
         "to_int" => match &args[0] {
             Value::Int(value) => Ok(Value::Int(*value)),

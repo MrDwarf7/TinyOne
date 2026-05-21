@@ -64,10 +64,8 @@ pub fn run_program_report(
     BytecodeVerifier::verify(program)?;
     let mode = RunMode::parse(mode)?;
     match mode {
-        RunMode::Vm => {
-            VM::new_unchecked(program, TinyMemory::new(program.slot_count), inputs)
-                .run_report(stdout)
-        }
+        RunMode::Vm => VM::new_unchecked(program, TinyMemory::new(program.slot_count), inputs)
+            .run_report(stdout),
         RunMode::Jit => {
             let mut cache = JitCache::new();
             cache.run_program_report_unchecked(program, stdout, inputs)

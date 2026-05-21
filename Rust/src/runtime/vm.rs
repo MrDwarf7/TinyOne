@@ -77,7 +77,7 @@ impl<'a> VM<'a> {
 
     pub fn run_report(mut self, stdout: &mut dyn Write) -> Result<TinyRunReport> {
         let mut memory = std::mem::take(&mut self.memory);
-        self.run_chunk(&self.program.code, &mut memory, stdout, "main")?;
+        self.run_chunk(&self.program.code, &mut memory, stdout, "main", None)?;
         let heap_before_shutdown = self.context.heap_stats();
         let heap_after_shutdown = self.context.shutdown();
         Ok(TinyRunReport {
@@ -93,6 +93,7 @@ impl<'a> VM<'a> {
         memory: &mut TinyMemory,
         stdout: &mut dyn Write,
         chunk_name: &str,
+        global_memory: Option<&TinyMemory>,
     ) -> Result<Option<Value>> {
         let mut stack: Vec<Value> = Vec::with_capacity(code.len().min(32));
         let mut pc = 0usize;
@@ -104,6 +105,9 @@ impl<'a> VM<'a> {
             match instr.op {
                 Op::PushInt => stack.push(Value::Int(instr.arg)),
                 Op::PushNull => stack.push(runtime_null()),
+                Op::Pop => {
+                    vm_pop(&mut stack)?;
+                }
                 Op::PushString => {
                     let string_index = checked_non_negative_usize(instr.arg, "string index")?;
                     let text = self
@@ -114,11 +118,18 @@ impl<'a> VM<'a> {
                             TinyOneError::runtime(format!("Invalid string index {string_index}"))
                         })?
                         .clone();
-                    stack.push(Value::Heap(self.context.heap.alloc_string(text)?));
+                    stack.push(Value::Heap(self.context.heap().alloc_string(text)?));
                 }
                 Op::Load => {
                     let slot = checked_non_negative_usize(instr.arg, "memory slot")?;
                     stack.push(memory.load(slot)?);
+                }
+                Op::LoadGlobal => {
+                    let slot = checked_non_negative_usize(instr.arg, "global memory slot")?;
+                    let globals = global_memory.ok_or_else(|| {
+                        TinyOneError::runtime("Global load outside a function frame")
+                    })?;
+                    stack.push(globals.load(slot)?);
                 }
                 Op::Store => {
                     let slot = checked_non_negative_usize(instr.arg, "memory slot")?;
@@ -157,8 +168,9 @@ impl<'a> VM<'a> {
                 Op::Call => {
                     let function_index = checked_non_negative_usize(instr.arg, "function index")?;
                     let arg_count = checked_non_negative_usize(instr.arg2, "function arity")?;
+                    let globals = global_memory.unwrap_or(&*memory);
                     let result =
-                        self.call_function(function_index, &mut stack, arg_count, stdout)?;
+                        self.call_function(function_index, &mut stack, arg_count, stdout, globals)?;
                     stack.push(result);
                 }
                 Op::MakeArray => {
@@ -236,6 +248,7 @@ impl<'a> VM<'a> {
         caller_stack: &mut Vec<Value>,
         arg_count: usize,
         stdout: &mut dyn Write,
+        global_memory: &TinyMemory,
     ) -> Result<Value> {
         let function = self.program.functions.get(function_index).ok_or_else(|| {
             TinyOneError::runtime(format!("Invalid function index {function_index}"))
@@ -257,7 +270,13 @@ impl<'a> VM<'a> {
             memory.store(slot, value)?;
         }
         self.call_depth += 1;
-        let result = self.run_chunk(&function.code, &mut memory, stdout, &function.name);
+        let result = self.run_chunk(
+            &function.code,
+            &mut memory,
+            stdout,
+            &function.name,
+            Some(global_memory),
+        );
         self.call_depth -= 1;
         result?.ok_or_else(|| {
             TinyOneError::runtime(format!("Function {:?} returned no value", function.name))
