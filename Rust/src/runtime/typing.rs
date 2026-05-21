@@ -143,7 +143,7 @@ impl TypeKind {
             TypeKind::FileDescriptor => "FileDescriptor",
             TypeKind::Mutex => "Mutex",
             TypeKind::Atomic => "Atomic",
-            TypeKind::Thread => "thread",
+            TypeKind::Thread => "Thread",
         }
     }
 
@@ -230,7 +230,7 @@ impl TypeKind {
             "FileDescriptor" => TypeKind::FileDescriptor,
             "Mutex" => TypeKind::Mutex,
             "Atomic" => TypeKind::Atomic,
-            "thread" => TypeKind::Thread,
+            "Thread" => TypeKind::Thread,
             _ => return None,
         })
     }

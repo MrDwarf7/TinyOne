@@ -545,15 +545,6 @@ pub fn b_mutex_lock(context: &TinyRuntimeContext, target: &Value) -> Result<Valu
         Arc::clone(m)
         // heap guard drops here — heap lock released before we block
     };
-    // Step 2: detect single-thread deadlock (already locked by the calling thread)
-    // before blocking. In a true multi-threaded scenario this would legitimately
-    // block; the check here preserves the single-thread test contract.
-    if mutex_arc.is_locked() {
-        return Err(TinyOneError::runtime(
-            "mutex_lock: already locked (deadlock)",
-        ));
-    }
-    // Step 3: block on the TinyMutex without holding the heap lock.
     mutex_arc.lock()?;
     Ok(Value::Int(1))
 }
@@ -620,11 +611,10 @@ pub fn b_atomic_add(
         };
         Arc::clone(a)
     };
-    let prev = atomic_arc.load(Ordering::SeqCst);
+    let prev = atomic_arc.fetch_add(delta_val, Ordering::SeqCst);
     let next = prev
         .checked_add(delta_val)
         .ok_or_else(|| TinyOneError::runtime("Runtime.Memory_Overflow: atomic_add overflow"))?;
-    atomic_arc.store(next, Ordering::SeqCst);
     Ok(Value::Int(next))
 }
 
