@@ -1114,3 +1114,36 @@ fn all_43_runtime_value_variants_are_representable() {
     let _unsafe_v  = RuntimeValue::Unsafe;
     // Reference/Heap/Pointer require pub(crate) constructors; tested via internal unit tests
 }
+
+#[test]
+fn type_kind_from_runtime_value_round_trips() {
+    let cases: &[(RuntimeValue, TypeKind)] = &[
+        (RuntimeValue::Unit,                                    TypeKind::Unit),
+        (RuntimeValue::Bool(true),                              TypeKind::Bool),
+        (RuntimeValue::I8(0),                                   TypeKind::I8),
+        (RuntimeValue::I16(0),                                  TypeKind::I16),
+        (RuntimeValue::I32(0),                                  TypeKind::I32),
+        (RuntimeValue::I64(0),                                  TypeKind::I64),
+        (RuntimeValue::U8(0),                                   TypeKind::U8),
+        (RuntimeValue::U16(0),                                  TypeKind::U16),
+        (RuntimeValue::U32(0),                                  TypeKind::U32),
+        (RuntimeValue::U64(0),                                  TypeKind::U64),
+        (RuntimeValue::Bf16(0),                                 TypeKind::Bf16),
+        (RuntimeValue::Float { kind: TypeKind::Fp16, bits: 0.0 }, TypeKind::Fp16),
+        (RuntimeValue::Float { kind: TypeKind::Fp32, bits: 0.0 }, TypeKind::Fp32),
+        (RuntimeValue::Float { kind: TypeKind::Fp64, bits: 0.0 }, TypeKind::Fp64),
+        (RuntimeValue::Null,                                    TypeKind::Null),
+        (RuntimeValue::Function(0),                             TypeKind::Function),
+        (RuntimeValue::Phantom,                                 TypeKind::Phantom),
+        (RuntimeValue::Zst(TypeKind::Zst),                      TypeKind::Zst),
+        (RuntimeValue::Unsafe,                                  TypeKind::Unsafe),
+    ];
+
+    for (value, expected_kind) in cases {
+        assert_eq!(
+            TypeKind::from_runtime_value(value),
+            *expected_kind,
+            "from_runtime_value({value:?}) should return {expected_kind:?}"
+        );
+    }
+}
