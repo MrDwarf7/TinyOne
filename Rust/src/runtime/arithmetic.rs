@@ -1,5 +1,4 @@
-use crate::runtime::typing::integer_range;
-use crate::{Op, RawPointer, Result, TinyOneError, TypeKind, Value};
+use crate::{Op, Result, TinyOneError, TypeKind, Value};
 
 pub(crate) fn expect_int(value: &Value, operation: &str) -> Result<i64> {
     let raw = runtime_integer_value(value, operation)?;
@@ -10,20 +9,28 @@ pub(crate) fn expect_int(value: &Value, operation: &str) -> Result<i64> {
 
 pub(crate) fn runtime_integer_kind(value: &Value) -> Option<TypeKind> {
     match value {
+        Value::I8(_)  => Some(TypeKind::I8),
+        Value::I16(_) => Some(TypeKind::I16),
+        Value::I32(_) => Some(TypeKind::I32),
         Value::I64(_) => Some(TypeKind::I64),
-        Value::U8(_) => Some(TypeKind::U8),
+        Value::U8(_)  => Some(TypeKind::U8),
         Value::U16(_) => Some(TypeKind::U16),
         Value::U32(_) => Some(TypeKind::U32),
+        Value::U64(_) => Some(TypeKind::U64),
         _ => None,
     }
 }
 
 pub(crate) fn runtime_integer_value(value: &Value, operation: &str) -> Result<i128> {
     match value {
-        Value::I64(value) => Ok(*value as i128),
-        Value::U8(value) => Ok(*value as i128),
-        Value::U16(value) => Ok(*value as i128),
-        Value::U32(value) => Ok(*value as i128),
+        Value::I8(v)  => Ok(*v as i128),
+        Value::I16(v) => Ok(*v as i128),
+        Value::I32(v) => Ok(*v as i128),
+        Value::I64(v) => Ok(*v as i128),
+        Value::U8(v)  => Ok(*v as i128),
+        Value::U16(v) => Ok(*v as i128),
+        Value::U32(v) => Ok(*v as i128),
+        Value::U64(v) => Ok(*v as i128),
         _ => Err(TinyOneError::runtime(format!(
             "{operation} expects integer operands"
         ))),
@@ -40,37 +47,26 @@ pub(crate) fn integer_value_from_kind(
     value: i128,
     operation: &str,
 ) -> Result<Value> {
-    let (min, max) = integer_range(kind).ok_or_else(|| {
+    use crate::runtime::typing::check_integer_range;
+    let checked = check_integer_range(kind, value).map_err(|_| {
         TinyOneError::runtime(format!(
-            "{operation}: {} is not an integer type",
+            "Runtime.Memory_Overflow: {value} out of range for {} in {operation}",
             kind.name()
         ))
     })?;
-    if value < min || value > max {
-        return Err(TinyOneError::runtime(format!(
-            "Runtime.Memory_Overflow: {value} out of range for {}",
-            kind.name()
-        )));
-    }
     Ok(match kind {
-        TypeKind::U8 => Value::U8(value as u8),
-        TypeKind::U16 => Value::U16(value as u16),
-        TypeKind::U32 => Value::U32(value as u32),
-        TypeKind::I8 | TypeKind::I16 | TypeKind::I32 | TypeKind::I64 => Value::I64(value as i64),
-        TypeKind::U64 => {
-            let value = i64::try_from(value).map_err(|_| {
-                TinyOneError::runtime(
-                    "Runtime.Memory_Overflow: u64 values above i64::MAX are not materialized",
-                )
-            })?;
-            Value::I64(value)
-        }
-        _ => {
-            return Err(TinyOneError::runtime(format!(
-                "{operation}: {} is not supported as a runtime integer value",
-                kind.name()
-            )));
-        }
+        TypeKind::I8  => Value::I8(checked as i8),
+        TypeKind::I16 => Value::I16(checked as i16),
+        TypeKind::I32 => Value::I32(checked as i32),
+        TypeKind::I64 => Value::I64(checked as i64),
+        TypeKind::U8  => Value::U8(checked as u8),
+        TypeKind::U16 => Value::U16(checked as u16),
+        TypeKind::U32 => Value::U32(checked as u32),
+        TypeKind::U64 => Value::U64(checked as u64),
+        _ => return Err(TinyOneError::runtime(format!(
+            "{operation}: {} is not supported as a runtime integer value",
+            kind.name()
+        ))),
     })
 }
 
@@ -79,6 +75,7 @@ fn unsigned_rank(kind: TypeKind) -> Option<u8> {
         TypeKind::U8 => 1,
         TypeKind::U16 => 2,
         TypeKind::U32 => 3,
+        TypeKind::U64 => 4,
         _ => return None,
     })
 }
@@ -87,7 +84,8 @@ fn unsigned_from_rank(rank: u8) -> TypeKind {
     match rank {
         1 => TypeKind::U8,
         2 => TypeKind::U16,
-        _ => TypeKind::U32,
+        3 => TypeKind::U32,
+        _ => TypeKind::U64,
     }
 }
 
@@ -96,6 +94,7 @@ fn unsigned_max(kind: TypeKind) -> i128 {
         TypeKind::U8 => u8::MAX as i128,
         TypeKind::U16 => u16::MAX as i128,
         TypeKind::U32 => u32::MAX as i128,
+        TypeKind::U64 => u64::MAX as i128,
         _ => 0,
     }
 }
@@ -321,23 +320,27 @@ pub(crate) fn runtime_compare(op: Op, lhs: Value, rhs: Value) -> Result<Value> {
             )));
         }
     };
-    Ok(Value::I64(result as i64))
+    Ok(Value::Bool(result))
 }
 
 pub(crate) fn runtime_is_false(value: &Value) -> bool {
-    matches!(
-        value,
-        Value::I64(0) | Value::U8(0) | Value::U16(0) | Value::U32(0)
-    ) || runtime_is_null(value)
+    match value {
+        Value::Bool(false) => true,
+        Value::Null => true,
+        Value::Unit => false,
+        Value::I8(0) | Value::I16(0) | Value::I32(0) | Value::I64(0) => true,
+        Value::U8(0) | Value::U16(0) | Value::U32(0) | Value::U64(0) => true,
+        Value::Bf16(0) => true,
+        Value::Float { bits, .. } => *bits == 0.0,
+        _ => false,
+    }
 }
 
 pub(crate) fn runtime_is_null(value: &Value) -> bool {
-    matches!(
-        value,
-        Value::Pointer(pointer) if pointer.kind == "null" && pointer.address == 0
-    )
+    matches!(value, Value::Null)
+        || matches!(value, Value::Pointer(p) if p.kind == "null" && p.address == 0)
 }
 
 pub(crate) fn runtime_null() -> Value {
-    Value::Pointer(RawPointer::new(0, "null", 0, "", 0, ""))
+    Value::Null
 }

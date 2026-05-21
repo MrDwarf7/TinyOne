@@ -12,12 +12,12 @@ use std::sync::atomic::Ordering;
 
 use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
 use crate::runtime::typing::{
-    TypeKind, check_integer_range, integer_range, promote_integer, smallest_fit_literal,
+    TypeKind, integer_range, promote_integer, smallest_fit_literal,
 };
 use crate::{
     HeapData, Result, TinyMemory, TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, expect_int,
-    expect_string, runtime_cast_int, runtime_integer_kind, runtime_integer_value,
-    validate_pointer_base, VM,
+    expect_string, integer_value_from_kind, runtime_cast_int, runtime_integer_kind,
+    runtime_integer_value, validate_pointer_base, VM,
 };
 
 const MAX_FS_LIST_DIR_ENTRIES: usize = 65_536;
@@ -1197,8 +1197,7 @@ fn typed_binary(
             "Runtime.Memory_Overflow: {op_name} intermediate overflow"
         ))
     })?;
-    let value = check_integer_range(kind, result)?;
-    runtime_cast_int(&Value::I64(value), kind, op_name)
+    integer_value_from_kind(kind, result, op_name)
 }
 
 pub fn b_typed_add(
@@ -1242,8 +1241,7 @@ pub fn b_typed_div(
         return Err(TinyOneError::runtime("Runtime.Division_By_Zero"));
     }
     let quotient = (lhs as i128) / (rhs as i128);
-    let value = check_integer_range(kind, quotient)?;
-    runtime_cast_int(&Value::I64(value), kind, "typed_div")
+    integer_value_from_kind(kind, quotient, "typed_div")
 }
 
 pub fn b_typed_neg(
@@ -1263,8 +1261,7 @@ pub fn b_typed_neg(
     let negated = (v as i128).checked_neg().ok_or_else(|| {
         TinyOneError::runtime("Runtime.Memory_Overflow: typed_neg intermediate overflow")
     })?;
-    let result = check_integer_range(kind, negated)?;
-    runtime_cast_int(&Value::I64(result), kind, "typed_neg")
+    integer_value_from_kind(kind, negated, "typed_neg")
 }
 
 pub fn b_assert(

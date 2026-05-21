@@ -134,11 +134,12 @@ pub(crate) fn runtime_call_builtin(
         "ptr_type" => runtime_pointer_type(context, &args[0]),
         "buffer" => runtime_make_buffer(context, &args[0]),
         "is_null" => {
+            if matches!(args[0], Value::Null) {
+                return Ok(Value::Bool(true));
+            }
             let pointer = expect_pointer(&args[0], "is_null")?;
             validate_pointer_base(context, &pointer, "is_null")?;
-            Ok(Value::I64(
-                (pointer.kind == "null" && pointer.address == 0) as i64,
-            ))
+            Ok(Value::Bool(pointer.kind == "null" && pointer.address == 0))
         }
         "ptr_eq" => runtime_pointer_eq(context, &args[0], &args[1]),
         "ptr_ne" => match runtime_pointer_eq(context, &args[0], &args[1])? {
