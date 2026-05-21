@@ -45,6 +45,7 @@ pub enum TypeKind {
     FileDescriptor,
     Mutex,
     Atomic,
+    Thread,
 }
 
 impl TypeKind {
@@ -93,6 +94,7 @@ impl TypeKind {
             TypeKind::FileDescriptor => 40,
             TypeKind::Mutex => 41,
             TypeKind::Atomic => 42,
+            TypeKind::Thread => 43,
         }
     }
 
@@ -141,6 +143,7 @@ impl TypeKind {
             TypeKind::FileDescriptor => "FileDescriptor",
             TypeKind::Mutex => "Mutex",
             TypeKind::Atomic => "Atomic",
+            TypeKind::Thread => "thread",
         }
     }
 
@@ -227,6 +230,7 @@ impl TypeKind {
             "FileDescriptor" => TypeKind::FileDescriptor,
             "Mutex" => TypeKind::Mutex,
             "Atomic" => TypeKind::Atomic,
+            "thread" => TypeKind::Thread,
             _ => return None,
         })
     }
@@ -379,6 +383,7 @@ mod tests {
             TypeKind::FileDescriptor,
             TypeKind::Mutex,
             TypeKind::Atomic,
+            TypeKind::Thread,
         ];
         let ids: Vec<u16> = all.iter().map(|kind| kind.type_id()).collect();
         let mut sorted = ids.clone();
