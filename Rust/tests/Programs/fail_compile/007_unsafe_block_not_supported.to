@@ -1,4 +1,0 @@
-let c = alloc(1)
-unsafe {
-  free(c)
-}

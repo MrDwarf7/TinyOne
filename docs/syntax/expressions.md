@@ -1,8 +1,8 @@
 # Expressions
 
 Expressions produce a value and appear on the right side of `let` and
-assignment, as `print` arguments, as `if`/`while` conditions, and as
-function call arguments.
+assignment, as standalone expression statements, as `print` arguments, as
+`if`/`while` conditions, and as function call arguments.
 
 ---
 
@@ -12,14 +12,17 @@ Higher number = tighter binding (evaluated first).
 
 | Level | Forms |
 | --- | --- |
-| 6 (highest) | Integer literals, string literals, `null`, identifiers, parentheses `(expr)` |
-| 5 | Function calls `f(...)`, qualified calls `ns.f(...)`, struct constructors `Name(...)`, array literals `[...]`, postfix index `a[i]`, postfix field `a.field`, `unsafe expr` |
-| 4 | Unary minus `-expr` |
-| 3 | `*`, `/` |
-| 2 | `+`, `-` |
-| 1 (lowest) | `<`, `<=`, `>`, `>=`, `==`, `!=` |
+| 8 (highest) | Integer literals, string literals, `null`, identifiers, parentheses `(expr)` |
+| 7 | Function calls `f(...)`, qualified calls `ns.f(...)`, struct constructors `Name(...)`, array literals `[...]`, postfix index `a[i]`, postfix field `a.field`, `unsafe expr` |
+| 6 | Unary operators `-expr`, `!expr` |
+| 5 | `*`, `/` |
+| 4 | `+`, `-` |
+| 3 | `<`, `<=`, `>`, `>=`, `==`, `!=` |
+| 2 | `&&` |
+| 1 (lowest) | `||` |
 
-All binary operators are left-associative. Use parentheses to override.
+All binary operators are left-associative. `&&` and `||` short-circuit and
+return normalized integer booleans (`0` or `1`). Use parentheses to override.
 
 ---
 
@@ -54,8 +57,11 @@ a * b       # integer multiplication
 a / b       # floor (truncating toward -∞) division; runtime error if b == 0
 ```
 
-Both operands must be integers. Mixing integers with heap objects is a
-runtime error.
+Both operands must be integers. Integer literals are `i64`; `u8(value)`,
+`u16(value)`, and `u32(value)` create fixed-width unsigned runtime values.
+Operations preserve a fixed width when the other operand fits that width, and
+overflow traps with `Runtime.Memory_Overflow`. Mixing integers with heap objects
+is a runtime error.
 
 ---
 
@@ -73,6 +79,20 @@ a != b      # 1 if a != b, else 0  (integers only)
 All comparison expressions produce integer `0` or `1`. Comparisons
 require integer operands. For pointer equality, use `ptr_eq(a, b)` and
 `ptr_ne(a, b)`.
+
+---
+
+## Boolean Operators
+
+```tinyone
+a && b      # 1 if both operands are truthy, else 0
+a || b      # 1 if either operand is truthy, else 0
+!expr       # 1 if expr is falsey, else 0
+```
+
+`0` and `null` are falsey. Other values are truthy. `&&` evaluates the right
+operand only when the left operand is truthy; `||` evaluates the right operand
+only when the left operand is falsey.
 
 ---
 
@@ -154,12 +174,15 @@ keyword. Required for: `free`, `ptr_at`, `ptr_add`, `ptr_load`,
 `ptr_store`, `read8/16/32`, `write8/16/32`, `fs_read`, `fs_write`,
 `fs_list_dir`.
 
-`unsafe` gates a single expression, not a block. To chain multiple
-unsafe operations, apply `unsafe` to each one individually.
+Use `unsafe { ... }` as a statement block when several unsafe operations share
+the same trusted region.
 
 ```tinyone
 let byte = unsafe read8(ptr(buf, 0))
-let _    = unsafe write8(unsafe ptr_add(ptr(buf, 0), 1), 255)
+unsafe {
+  write8(ptr(buf, 0), u8(255))
+  write8(ptr_add(ptr(buf, 0), 1), u8(1))
+}
 ```
 
 ---

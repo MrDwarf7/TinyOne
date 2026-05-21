@@ -7,17 +7,22 @@ following types. Use `type_of(value)` to inspect the type at runtime.
 
 ## `int`
 
-64-bit signed integer (`i64`). The only numeric type in TinyOne.
+Signed integer value. Integer literals produce `i64` by default. Low-level
+code can explicitly materialize unsigned `u8`, `u16`, and `u32` values with the
+matching constructors.
 
-**Created by:** integer literals (`42`, `-7`), arithmetic expressions,
-comparison expressions (produce `0` or `1`), and most builtin return values.
+**Created by:** integer literals (`42`, `-7`), `i64(value)`, `u8(value)`,
+`u16(value)`, `u32(value)`, arithmetic expressions, comparison expressions
+(produce `0` or `1`), sized buffer reads, and most builtin return values.
+
+**Widths:** `type_of(1)` returns `i64`; `type_of(u8(1))` returns `u8`;
+`read8`, `read16`, and `read32` return `u8`, `u16`, and `u32` respectively.
 
 **Mutated:** integers are values, not references. Assigning to a variable
 replaces the slot.
 
-**Overflow:** wraps silently in the current implementation (Rust default).
-This behavior is not yet formally specified — see
-[v1-roadmap.md](../v1-roadmap.md) item 6.
+**Overflow:** arithmetic traps with `Runtime.Memory_Overflow` when the result
+does not fit the active runtime integer width.
 
 **Runtime errors:** divide-by-zero (`/` with a zero right operand).
 
@@ -96,8 +101,8 @@ size is 1,048,576 (1 MiB).
 
 **Read / mutated:** use raw pointer builtins — `ptr(buf, offset)` to
 create a byte pointer, then `unsafe read8/16/32` and
-`unsafe write8/16/32` to load and store. All accesses are
-little-endian unsigned integers.
+`unsafe write8/16/32` to load and store. All accesses are little-endian
+unsigned integers; reads produce `u8`, `u16`, or `u32` runtime values.
 
 **Runtime errors:** out-of-bounds pointer access; buffer exceeds 1 MiB.
 
@@ -139,6 +144,7 @@ null raw pointer literal.
 - `null` literal — the null raw pointer
 
 **Read / mutated:** `unsafe ptr_load(ptr)` and `unsafe ptr_store(ptr, value)`.
+Multiple unsafe operations can be grouped with `unsafe { ... }`.
 
 **Equality:** use `ptr_eq(a, b)` and `ptr_ne(a, b)`. The `==` and `!=`
 operators work only on integers.

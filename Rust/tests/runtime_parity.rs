@@ -162,6 +162,87 @@ fn loops_conditionals_and_loop_control_match() {
 }
 
 #[test]
+fn expression_statements_else_if_and_boolean_ops_match() {
+    let source = r#"
+    let arr = []
+    push(arr, 1)
+    push(arr, 2)
+
+    let label = 0
+    if len(arr) == 0 {
+      label = 99
+    } else if len(arr) == 2 && !0 {
+      label = 7
+    } else {
+      label = 3
+    }
+
+    print label
+    print len(arr)
+    if 0 || (label == 7 && len(arr) == 2) {
+      print 1
+    } else {
+      print 0
+    }
+    if 1 || (1 / 0) {
+      print 8
+    }
+    if 0 && (1 / 0) {
+      print 0
+    } else {
+      print 9
+    }
+    "#;
+
+    let program = assert_backends_match(source, "7\n2\n1\n8\n9\n");
+    assert!(program.code.iter().any(|instr| instr.op == Op::Pop));
+}
+
+#[test]
+fn low_level_ints_globals_and_unsafe_blocks_match() {
+    let source = r#"
+    let config = 7
+    let mem = buffer(8)
+    let base = ptr(mem, 0)
+
+    unsafe {
+      write8(base, u8(255))
+      write16(ptr_add(base, 1), u16(513))
+      write32(ptr_add(base, 3), u32(16909060))
+      write8(ptr_add(ptr_add(base, 1), 2), u8(42))
+    }
+
+    fn byte_at_three() {
+      unsafe {
+        return read8(ptr_add(base, 3))
+      }
+    }
+
+    fn config_value() {
+      return config + 1
+    }
+
+    print type_of(u8(1))
+    print type_of(u16(1))
+    print type_of(u32(1))
+    print unsafe read8(base)
+    print unsafe read16(unsafe ptr_add(base, 1))
+    print byte_at_three()
+    print config_value()
+    print type_of(unsafe read32(unsafe ptr_add(base, 3)))
+    "#;
+
+    let program = assert_backends_match(source, "u8\nu16\nu32\n255\n513\n42\n8\nu32\n");
+    assert!(
+        program
+            .functions
+            .iter()
+            .flat_map(|function| function.code.iter())
+            .any(|instr| instr.op == Op::LoadGlobal)
+    );
+}
+
+#[test]
 fn function_call_return_dispatch_matches() {
     let source = r#"
     fn mul_by_count(value, count) {

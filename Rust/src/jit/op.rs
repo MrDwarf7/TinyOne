@@ -4,8 +4,10 @@ use crate::{Instr, Op, Result, TinyOneError, checked_non_negative_usize};
 pub(crate) enum JitOp {
     PushInt(i64),
     PushNull,
+    Pop,
     PushString(usize),
     Load(usize),
+    LoadGlobal(usize),
     Store(usize),
     StoreInt(usize, i64),
     AddSlotInt(usize, i64),
@@ -43,8 +45,10 @@ impl JitOp {
         Ok(match instr.op {
             Op::PushInt => Self::PushInt(instr.arg),
             Op::PushNull => Self::PushNull,
+            Op::Pop => Self::Pop,
             Op::PushString => Self::PushString(jit_operand(instr.arg, "string index")?),
             Op::Load => Self::Load(jit_operand(instr.arg, "load slot")?),
+            Op::LoadGlobal => Self::LoadGlobal(jit_operand(instr.arg, "global load slot")?),
             Op::Store => Self::Store(jit_operand(instr.arg, "store slot")?),
             Op::Add => Self::Add,
             Op::Sub => Self::Sub,
@@ -94,8 +98,10 @@ impl JitOp {
         match self {
             Self::PushInt(value) => format!("push.i {value}"),
             Self::PushNull => "push.null".to_string(),
+            Self::Pop => "pop".to_string(),
             Self::PushString(index) => format!("push.str {index}"),
             Self::Load(slot) => format!("load {slot}"),
+            Self::LoadGlobal(slot) => format!("load.global {slot}"),
             Self::Store(slot) => format!("store {slot}"),
             Self::StoreInt(slot, value) => format!("store.i {slot} {value}"),
             Self::AddSlotInt(slot, value) => format!("slot.add.i {slot} {value}"),

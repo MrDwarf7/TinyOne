@@ -47,6 +47,7 @@ The JIT is an **adaptive bytecode tier** — it compiles TinyOne bytecode into a
 1. **Verify** — runs `BytecodeVerifier::verify` on the input `Program`.
 2. **Decode operands** — each `Instr { op, arg, arg2 }` is translated to a `JitOp` enum variant with operands already converted to `usize` or `i64`. No conversion happens at dispatch time.
    - `LOAD 3` → `JitOp::Load(3usize)`
+   - `LOAD_GLOBAL 1` → `JitOp::LoadGlobal(1usize)`
    - `PUSH_INT 42` → `JitOp::PushInt(42i64)`
    - `CALL 1 2` → `JitOp::Call(1usize, 2usize)`
 3. **Fuse superinstructions** — common two- and three-instruction sequences are collapsed into single `JitOp` variants:

@@ -64,7 +64,7 @@ Rust/src/
 │
 ├── bytecode/
 │   ├── mod.rs
-│   ├── opcode.rs       Op enum (29 opcodes), name/from_name/ordinal
+│   ├── opcode.rs       Op enum (31 opcodes), name/from_name/ordinal
 │   ├── instr.rs        Instr { op, arg: i64, arg2: i64 }
 │   ├── program.rs      Program, Function, StructDef, ModuleDef,
 │   │                   VerifiedProgram, fingerprint (Blake2b512)

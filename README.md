@@ -74,13 +74,11 @@ TinyOne exists for several reasons:
    implementation, VM architecture, memory models, compiler pipelines, runtime
    verification, and systems design.
 
-3. To act as an architectural foundation and experimentation platform for a
-   future AI-focused language and runtime ecosystem designed around portable,
-   customizable compute kernels across AMD and NVIDIA hardware.
-
-The future AI-oriented language project is not part of TinyOne itself yet.
-Additional details and announcements will be published through the TinyOne
-GitHub repository in the future.
+3. To be an all-in-one language for low-level programming, high-level
+   integration, and memory safety — without requiring nanosecond performance.
+   TinyOne combines dynamic and static typing into one pragmatic system rather
+   than committing fully to either, and is designed from the ground up for
+   practical multithreaded workloads.
 
 ## Requirements
 
@@ -199,12 +197,15 @@ line comment.
 ```tinyone
 let name = expression
 name = expression
+expression
 print expression
 set name[index] = expression
 set name.field = expression
 if expression { statements }
 if expression { statements } else { statements }
+if expression { statements } else if expression { statements }
 while expression { statements }
+unsafe { statements }
 break
 continue
 return expression
@@ -213,10 +214,13 @@ return expression
 `let` declares a variable in the current block. Plain assignment updates an
 existing visible variable slot. Variables must be defined before they are read,
 and slots start at `0` inside the current stack frame. Block-local names are
-hidden after the block. `if` runs its first block when the expression is
-non-zero; the optional `else` block runs otherwise. `while` repeats while its
-expression is non-zero. `break` exits the innermost loop, `continue` jumps back
-to that loop's condition, and `return` is only valid inside a function.
+hidden after the block. A standalone expression statement evaluates an
+expression and discards its result, which is the normal shape for side-effecting
+calls. `if` runs its first block when the expression is non-zero; `else if`
+cascades are supported and the optional final `else` block runs otherwise.
+`while` repeats while its expression is non-zero. `break` exits the innermost
+loop, `continue` jumps back to that loop's condition, `unsafe { ... }` gates all
+unsafe operations in the block, and `return` is only valid inside a function.
 
 ### Imports
 
@@ -278,8 +282,9 @@ print point
 
 Functions are declared at top level and return one value. Function
 parameters are local slots initialized from the call arguments. Function-local
-variables and parameters do not read or write top-level variables directly; pass
-values as arguments and return results.
+variables and parameters shadow top-level names. A function may read top-level
+variables declared before the function; direct assignment to those top-level
+slots is rejected, so return a replacement value or mutate a shared heap object.
 
 ```tinyone
 fn fact(n) {
@@ -492,6 +497,7 @@ logic_and(a, b), logic_or(a, b), logic_not(v), logic_xor(a, b)
 
 # Typing system (typing_system.md)
 type_of(value), type_id(name)
+i64(value), u8(value), u16(value), u32(value)
 smallest_fit(value), promote(lhs, rhs), check_int_range(value, type_name)
 typed_add(lhs, rhs, type_name), typed_sub(lhs, rhs, type_name)
 typed_mul(lhs, rhs, type_name), typed_div(lhs, rhs, type_name)
@@ -499,6 +505,14 @@ typed_neg(value, type_name)
 assert(condition)
 assert(condition, message)
 ```
+
+Core boolean operators `&&`, `||`, and `!` are preferred for compound
+conditions because they short-circuit. The `logic_*` builtins remain available
+for stdlib wrappers and explicit function-call style.
+
+Integer literals are still signed `i64` by default. The `u8`, `u16`, and `u32`
+constructors create real runtime integer values for buffer and pointer work;
+`read8`, `read16`, and `read32` return those widths directly.
 
 Stdlib modules under `stdlib/` (loadable via the existing `import "name" as
 alias` namespacing with a `tinyone.json` package manifest) wrap these:
@@ -521,6 +535,7 @@ null
 "text"
 name
 -expression
+!expression
 unsafe expression
 (expression)
 name(expression, ...)
@@ -538,6 +553,8 @@ left > right
 left >= right
 left == right
 left != right
+left && right
+left || right
 ```
 
 Operator precedence is:
@@ -545,15 +562,18 @@ Operator precedence is:
 1. Parentheses and literals
 2. Function calls, qualified module calls, constructors, array literals,
    variable reads, unsafe expressions, and postfix index/field access
-3. Unary minus
+3. Unary minus and logical not (`!`)
 4. Multiplication and integer division
 5. Addition and subtraction
 6. Comparisons and equality
+7. Logical and (`&&`)
+8. Logical or (`||`)
 
 Division uses floor division (truncating toward negative infinity) through `//`. Division by zero
 is reported as a TinyOne runtime error. Comparisons evaluate to integer `1` for
 true and `0` for false, which makes them usable as bounded loop conditions.
-Arithmetic and comparisons require integer operands.
+`&&`, `||`, and `!` also produce `0` or `1`; `&&` and `||` short-circuit their
+right operand. Arithmetic and comparisons require integer operands.
 
 ### Identifiers
 
@@ -884,19 +904,17 @@ These are intentional design decisions, not bugs:
 - Variables cannot be redeclared with `let` in the same scope.
 - `return` is not valid at the top level.
 - Nested function definitions are not supported.
-- Functions cannot directly read or write top-level variables; values must be
-  passed as arguments.
-- `else if` chains are not supported; use nested `if`/`else` blocks.
+- Functions may read top-level variables that were declared before the function,
+  but they cannot assign to those top-level slots directly.
 - Module source files may only contain `import`, `struct`, `fn`, and `export`
   declarations; top-level executable statements in a module are a compile error.
 - `import` declarations must appear before any executable statements or
   declarations in the importing file.
-- The `unsafe` keyword gates only single expressions, not blocks.
 
 ## Current Limitations
 
 - No nested functions or closures
-- No direct global-variable access from functions
+- No direct top-level slot assignment from functions
 - No user-defined methods or traits
 - No static type checker yet
 - No multi-statement `unsafe { ... }` block syntax yet; use single-expression

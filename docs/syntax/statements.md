@@ -1,8 +1,8 @@
 # Statements
 
-TinyOne has no expression statements. Every statement produces a
-side effect (declaration, assignment, control flow, or I/O). Statements
-are separated by newlines or whitespace; there is no semicolon.
+Statements are separated by newlines or whitespace; there is no semicolon.
+Calls and other expressions may be used as statements when only their side
+effect matters; the expression result is discarded.
 
 ---
 
@@ -61,6 +61,43 @@ print [1, 2, 3]
 
 ---
 
+## Expression Statement
+
+```
+expression
+```
+
+Evaluates `expression` and discards its result. This is the normal form for
+calling a function or builtin for its side effect.
+
+```tinyone
+let arr = []
+push(arr, 1)
+unsafe write8(ptr(buffer(4), 0), 255)
+```
+
+---
+
+## `unsafe` Block
+
+```
+unsafe { statements }
+```
+
+Runs the block with unsafe builtins enabled. Use this for clustered pointer,
+buffer, raw heap, or filesystem operations.
+
+```tinyone
+let buf = buffer(4)
+let base = ptr(buf, 0)
+unsafe {
+  write8(base, u8(255))
+  write8(ptr_add(base, 1), u8(1))
+}
+```
+
+---
+
 ## `set` — Aggregate Mutation
 
 ```
@@ -89,12 +126,13 @@ print p.y   # 99
 ```
 if expression { statements }
 if expression { statements } else { statements }
+if expression { statements } else if expression { statements }
 ```
 
 Evaluates `expression`. If non-zero, executes the first block; if zero
-and an `else` clause is present, executes the else block. Braces are
-required. `else if` chains are not supported — nest `if`/`else` blocks
-instead.
+and an `else` clause is present, executes the else block. `else if` chains
+are parsed as cascaded conditionals without requiring an extra nested block.
+Braces are required around every branch body.
 
 ```tinyone
 let x = 5
@@ -215,8 +253,8 @@ fn name(param1, param2, ...) {
 Declares a named function at the top level. A function may call itself
 recursively (its name is reserved before the body is compiled). Functions
 cannot be nested. Parameters are local slots initialized from the call
-arguments. Functions cannot directly read or write top-level variables —
-pass values as arguments and use `return`.
+arguments. Functions may read top-level variables declared before the function,
+but direct assignment to those top-level slots is rejected.
 
 Only valid at top level. Must be declared before it is called.
 

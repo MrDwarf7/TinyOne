@@ -89,14 +89,10 @@ These are behavioral gaps or ambiguities that must be resolved before v1.
 
 ### 6. Integer overflow behavior
 
-TinyOne integers are `i64`. Arithmetic that overflows wraps silently in release
-builds on most platforms. The language currently makes no promise about
-overflow behavior. Before v1 the behavior must be one of: (a) defined as
-wrapping, (b) defined as trapping (runtime error), or (c) defined as undefined
-within the language (acceptable for a low-level language with this explicit
-promise). The current VM and JIT are inconsistent — the VM path uses Rust's
-default wrapping arithmetic while the JIT quickened path may differ on some
-targets.
+TinyOne now has `i64` literals plus first-class `u8`, `u16`, and `u32` runtime
+values for low-level buffer work. Arithmetic overflow traps with
+`Runtime.Memory_Overflow` in both VM and JIT paths. Remaining v1 work here is a
+static type-checking surface for annotated slots and function signatures.
 
 **Required action:** Decide the overflow model. Audit `runtime/arithmetic.rs`
 and all `AddInt`, `SubInt`, `MulInt`, `DivInt` hot paths in `jit/vm.rs` to

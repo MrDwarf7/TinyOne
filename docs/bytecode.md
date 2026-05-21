@@ -21,8 +21,9 @@ instruction is:
 
 ## Opcodes
 
-There are 29 opcodes. Ordinals are stable — artifact round-trips depend on them
-for fingerprinting and must not be changed.
+There are 31 opcodes. Opcode ordinals are serialized into artifacts and are
+part of program fingerprints. Ordinals 1-29 are the frozen Phase-1 range;
+ordinals 30+ are Phase-2 extensions.
 
 | Ordinal | Mnemonic | `arg` | `arg2` | Stack effect | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -55,6 +56,8 @@ for fingerprinting and must not be changed.
 | 27 | `SET_FIELD` | field table index | — | `struct value →` | Write named field |
 | 28 | `BUILTIN` | builtin table index | arg count | `args… → result` | Call builtin or stdlib bridge |
 | 29 | `PUSH_NULL` | — | — | `→ null` | Push the null raw pointer |
+| 30 | `POP` | — | — | `value →` | Discard expression-statement result |
+| 31 | `LOAD_GLOBAL` | slot index | — | `→ value` | Load from the main top-level frame |
 
 ### Notes on specific opcodes
 
@@ -62,6 +65,11 @@ for fingerprinting and must not be changed.
 frame is initialized with the top `arg2` values popped from the caller's stack.
 Additional slots are zero-initialized. The return value is pushed after the call
 returns.
+
+**`LOAD_GLOBAL`** — `arg` is a slot in the main top-level frame. Function chunks
+use this when reading a top-level variable declared before the function. There
+is no `STORE_GLOBAL`; top-level slot assignment from a function is intentionally
+rejected by the compiler.
 
 **`BUILTIN`** — Phase-1 builtins occupy slots 0–34 in the canonical table.
 Phase-2 stdlib bridge builtins follow after slot 34. Slot order within each
@@ -184,7 +192,8 @@ following hold for every chunk (main and all functions):
 4. **Branch targets** — all `JUMP` and `JUMP_IF_ZERO` targets are within
    `[0, code.len())`.
 5. **Slot indexes** — all `LOAD` and `STORE` operands are in
-   `[0, chunk.slot_count)`.
+   `[0, chunk.slot_count)`. `LOAD_GLOBAL` operands are in
+   `[0, program.slot_count)`.
 6. **String indexes** — all `PUSH_STRING` operands are in
    `[0, program.strings.len())`.
 7. **Field indexes** — all `GET_FIELD` and `SET_FIELD` operands are in

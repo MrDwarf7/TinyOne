@@ -431,6 +431,10 @@ Minimum or maximum of two integers.
 
 ### Logic (`logic`)
 
+Core `&&`, `||`, and `!` operators are preferred inside conditions because
+they short-circuit. These functions remain available for explicit stdlib-style
+calls and wrappers.
+
 #### `logic_and(a, b) → int`
 Returns `1` if both `a` and `b` are non-zero.
 
@@ -447,25 +451,29 @@ Returns `1` if exactly one of `a` or `b` is non-zero.
 
 ### Typing system (`typing`)
 
-The typing system provides runtime type introspection and checked integer
-arithmetic for narrower types.
+The typing system provides runtime type introspection, fixed-width integer
+constructors, and legacy checked integer helpers.
 
 #### `type_of(value) → string`
-Returns the runtime type name: `"int"`, `"string"`, `"array"`, `"struct"`,
-`"buffer"`, `"cell"`, `"map"`, or `"pointer"`.
+Returns the runtime type name: `"i64"`, `"u8"`, `"u16"`, `"u32"`, `"String"`,
+`"Vec"`, `"Struct"`, `"Buffer"`, `"Alloc"`, `"Map"`, `"Pointer"`, or `"Null"`.
 
 #### `type_id(name) → int`
 Returns the integer ID for a type name string.
 
+#### `i64(value)`, `u8(value)`, `u16(value)`, `u32(value) → int`
+Converts an integer into the requested runtime width. Unsigned conversions trap
+with `Runtime.Memory_Overflow` when the value is negative or too large.
+
 #### `smallest_fit(value) → string`
-Returns the smallest signed integer type name that can represent `value` (one of
-`"i8"`, `"i16"`, `"i32"`, `"i64"`).
+Returns the smallest integer type name that can represent `value`; non-negative
+values prefer unsigned widths.
 
 #### `promote(lhs, rhs) → string`
 Returns the name of the smallest type that can represent both `lhs` and `rhs`.
 
 #### `check_int_range(value, type_name) → int`
-Returns `1` if `value` fits in `type_name` (e.g. `"i8"`, `"u16"`, `"i32"`).
+Returns `value` as a real runtime integer value if it fits in `type_name`.
 
 #### `typed_add(lhs, rhs, type_name) → int`
 Adds `lhs + rhs` with overflow checking for `type_name`. Runtime error on

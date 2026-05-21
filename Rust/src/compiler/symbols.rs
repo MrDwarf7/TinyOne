@@ -50,6 +50,10 @@ impl SymbolTable {
             .find_map(|scope| scope.get(name).copied())
     }
 
+    pub(crate) fn top_level_slots(&self) -> HashMap<String, usize> {
+        self.scopes.first().cloned().unwrap_or_default()
+    }
+
     pub(crate) fn contains(&self, name: &str) -> bool {
         self.scopes.iter().any(|scope| scope.contains_key(name))
     }

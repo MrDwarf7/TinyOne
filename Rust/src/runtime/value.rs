@@ -37,6 +37,9 @@ impl RawPointer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeValue {
     Int(i64),
+    U8(u8),
+    U16(u16),
+    U32(u32),
     Heap(HeapRef),
     Pointer(RawPointer),
 }
