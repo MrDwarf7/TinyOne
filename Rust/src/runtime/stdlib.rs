@@ -611,8 +611,15 @@ pub fn b_atomic_add(
         };
         Arc::clone(a)
     };
-    let prev = atomic_arc.fetch_add(delta_val, Ordering::SeqCst);
-    Ok(Value::Int(prev.wrapping_add(delta_val)))
+    // CAS loop: check for overflow before mutating, retry on concurrent contention.
+    loop {
+        let current = atomic_arc.load(Ordering::SeqCst);
+        let next = current.checked_add(delta_val)
+            .ok_or_else(|| TinyOneError::runtime("Runtime.Memory_Overflow: atomic_add overflow"))?;
+        if atomic_arc.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            return Ok(Value::Int(next));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
