@@ -612,10 +612,7 @@ pub fn b_atomic_add(
         Arc::clone(a)
     };
     let prev = atomic_arc.fetch_add(delta_val, Ordering::SeqCst);
-    let next = prev
-        .checked_add(delta_val)
-        .ok_or_else(|| TinyOneError::runtime("Runtime.Memory_Overflow: atomic_add overflow"))?;
-    Ok(Value::Int(next))
+    Ok(Value::Int(prev.wrapping_add(delta_val)))
 }
 
 // ---------------------------------------------------------------------------
