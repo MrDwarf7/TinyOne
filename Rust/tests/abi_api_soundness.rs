@@ -785,7 +785,10 @@ fn adversarial_artifact_at_exact_slot_count_limit_does_not_panic() {
     artifact["slot_count"] = json!(MAX_ARTIFACT_SLOT_COUNT);
     // Must not panic — any result (ok or structured error) is fine.
     let result = panic::catch_unwind(|| Program::from_artifact(artifact));
-    assert!(result.is_ok(), "artifact at exact slot_count limit must not panic");
+    assert!(
+        result.is_ok(),
+        "artifact at exact slot_count limit must not panic"
+    );
 }
 
 #[test]
@@ -832,8 +835,11 @@ fn adversarial_verifier_tight_loop_terminates_cleanly() {
         Instr::new(Op::Jump, 0, 0),       // pc=2: back-edge
         Instr::new(Op::Halt, 0, 0),       // pc=3
     ];
-    BytecodeVerifier::verify(&Program { code, ..minimal_program() })
-        .expect("tight loop should verify without timeout");
+    BytecodeVerifier::verify(&Program {
+        code,
+        ..minimal_program()
+    })
+    .expect("tight loop should verify without timeout");
 }
 
 #[test]
@@ -867,5 +873,8 @@ fn adversarial_jit_program_from_artifact_roundtrip_does_not_panic() {
         let p = Program::from_artifact(artifact).expect("deserialize");
         JitProgram::compile(&p).expect("jit compile")
     });
-    assert!(result.is_ok(), "artifact roundtrip through JIT must not panic");
+    assert!(
+        result.is_ok(),
+        "artifact roundtrip through JIT must not panic"
+    );
 }

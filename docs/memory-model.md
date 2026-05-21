@@ -14,6 +14,10 @@ Each function call allocates a fixed number of slots determined at compile time 
 - Slots are **not freed** between loop iterations — a slot retains its last-written value until the function returns.
 - Slot count is fixed; the compiler allocates new slots for every `let` declaration. Block exit does not reclaim slots; names are hidden after their scope but the slot remains allocated in the frame.
 - At function return, the frame slice is discarded.
+- Function chunks can read top-level slots through `LOAD_GLOBAL` when the
+  variable was declared before the function. They cannot assign those slots
+  directly; shared mutation should happen through heap objects stored in a
+  top-level slot.
 
 ---
 

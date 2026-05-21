@@ -1,4 +1,4 @@
-use crate::{Result, TinyOneError, Value};
+use crate::{Result, TinyOneError, Value, runtime_add, runtime_sub};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TinyMemory {
@@ -39,29 +39,24 @@ impl TinyMemory {
     fn update_int_slot(
         &mut self,
         slot: usize,
-        op_name: &str,
-        op: impl FnOnce(i64) -> Option<i64>,
+        value: i64,
+        op: fn(Value, Value) -> Result<Value>,
     ) -> Result<()> {
         let target = self
             .values
             .get_mut(slot)
             .ok_or_else(|| TinyOneError::runtime(format!("Invalid memory slot {slot}")))?;
-        let Value::Int(current) = target else {
-            return Err(TinyOneError::runtime(format!(
-                "{op_name} expects integer operands"
-            )));
-        };
-        *current =
-            op(*current).ok_or_else(|| TinyOneError::runtime(format!("{op_name} overflow")))?;
+        let next = op(target.clone(), Value::Int(value))?;
+        *target = next;
         Ok(())
     }
 
     pub(crate) fn add_int(&mut self, slot: usize, value: i64) -> Result<()> {
-        self.update_int_slot(slot, "Addition", |current| current.checked_add(value))
+        self.update_int_slot(slot, value, runtime_add)
     }
 
     pub(crate) fn sub_int(&mut self, slot: usize, value: i64) -> Result<()> {
-        self.update_int_slot(slot, "Subtraction", |current| current.checked_sub(value))
+        self.update_int_slot(slot, value, runtime_sub)
     }
 
     pub fn snapshot(&self) -> Vec<Value> {

@@ -13,6 +13,11 @@ struct LoopContext {
     breaks: Vec<usize>,
 }
 
+enum ReadSlot {
+    Local(usize),
+    Global(usize),
+}
+
 pub(crate) struct Compiler {
     tokens: Vec<Token>,
     index: usize,
@@ -31,6 +36,7 @@ pub(crate) struct Compiler {
     shared: SharedState,
     local_function_indexes: HashMap<String, usize>,
     local_struct_indexes: HashMap<String, usize>,
+    function_globals: HashMap<String, usize>,
     loops: Vec<LoopContext>,
     in_function: bool,
     unsafe_depth: usize,
@@ -101,6 +107,7 @@ impl Compiler {
             shared,
             local_function_indexes: HashMap::new(),
             local_struct_indexes: HashMap::new(),
+            function_globals: HashMap::new(),
             loops: Vec::new(),
             in_function: false,
             unsafe_depth: 0,
@@ -200,6 +207,9 @@ impl Compiler {
             TokenKind::If => self.if_statement(),
             TokenKind::Break => self.break_statement(),
             TokenKind::Continue => self.continue_statement(),
+            TokenKind::Unsafe if self.peek_kind(1) == Some(TokenKind::LBrace) => {
+                self.unsafe_block_statement()
+            }
             TokenKind::Ident if self.peek_kind(1) == Some(TokenKind::Equal) => {
                 self.assignment_statement()
             }
@@ -213,8 +223,23 @@ impl Compiler {
                 "Imports, exports, and struct definitions are only allowed at top level before statements",
                 self.current().clone(),
             )),
+            _ if self.is_expression_start() => self.expression_statement(),
             _ => Err(self.error("Expected statement", self.current().clone())),
         }
+    }
+
+    fn expression_statement(&mut self) -> Result<()> {
+        self.expression()?;
+        self.emit(Op::Pop, 0, 0);
+        Ok(())
+    }
+
+    fn unsafe_block_statement(&mut self) -> Result<()> {
+        self.eat(TokenKind::Unsafe)?;
+        self.unsafe_depth += 1;
+        let result = self.block();
+        self.unsafe_depth -= 1;
+        result
     }
 
     fn let_statement(&mut self) -> Result<()> {
@@ -255,7 +280,7 @@ impl Compiler {
                 name_token,
             ));
         }
-        let slot = self.get_slot(&name_token)?;
+        let slot = self.get_assignment_slot(&name_token)?;
         self.eat(TokenKind::Equal)?;
         self.expression()?;
         self.emit(Op::Store, slot as i64, 0);
@@ -302,7 +327,11 @@ impl Compiler {
             let end_jump = self.emit_placeholder(Op::Jump);
             self.patch(false_jump, self.code.len() as i64)?;
             self.eat(TokenKind::Else)?;
-            self.block()?;
+            if self.current().kind == TokenKind::If {
+                self.if_statement()?;
+            } else {
+                self.block()?;
+            }
             self.patch(end_jump, self.code.len() as i64)?;
         } else {
             self.patch(false_jump, self.code.len() as i64)?;
@@ -347,8 +376,7 @@ impl Compiler {
     fn set_statement(&mut self) -> Result<()> {
         self.eat(TokenKind::Set)?;
         let name_token = self.eat(TokenKind::Ident)?;
-        let slot = self.get_slot(&name_token)?;
-        self.emit(Op::Load, slot as i64, 0);
+        self.emit_load_name(&name_token)?;
 
         if self.current().kind == TokenKind::LBracket {
             self.eat(TokenKind::LBracket)?;
@@ -613,9 +641,11 @@ impl Compiler {
         }
         self.eat(TokenKind::RParen)?;
 
+        let global_slots = self.symbols.top_level_slots();
         let previous_symbols = std::mem::replace(&mut self.symbols, function_symbols);
         let previous_code = std::mem::take(&mut self.code);
         let previous_in_function = self.in_function;
+        let previous_function_globals = std::mem::replace(&mut self.function_globals, global_slots);
         self.in_function = true;
         let result = (|| {
             self.block()?;
@@ -632,6 +662,7 @@ impl Compiler {
         let function_symbols = std::mem::replace(&mut self.symbols, previous_symbols);
         self.code = previous_code;
         self.in_function = previous_in_function;
+        self.function_globals = previous_function_globals;
         drop(function_symbols);
         let function = result?;
         self.shared.borrow_mut().functions.push(function);
@@ -663,6 +694,47 @@ impl Compiler {
     }
 
     fn expression(&mut self) -> Result<()> {
+        self.logical_or()
+    }
+
+    fn logical_or(&mut self) -> Result<()> {
+        self.logical_and()?;
+        while self.current().kind == TokenKind::PipePipe {
+            self.eat(TokenKind::PipePipe)?;
+            let rhs_jump = self.emit_placeholder(Op::JumpIfZero);
+            self.emit(Op::PushInt, 1, 0);
+            let end_jump = self.emit_placeholder(Op::Jump);
+            self.patch(rhs_jump, self.code.len() as i64)?;
+            self.logical_and()?;
+            let false_jump = self.emit_placeholder(Op::JumpIfZero);
+            self.emit(Op::PushInt, 1, 0);
+            let rhs_end_jump = self.emit_placeholder(Op::Jump);
+            self.patch(false_jump, self.code.len() as i64)?;
+            self.emit(Op::PushInt, 0, 0);
+            self.patch(rhs_end_jump, self.code.len() as i64)?;
+            self.patch(end_jump, self.code.len() as i64)?;
+        }
+        Ok(())
+    }
+
+    fn logical_and(&mut self) -> Result<()> {
+        self.comparison()?;
+        while self.current().kind == TokenKind::AmpAmp {
+            self.eat(TokenKind::AmpAmp)?;
+            let lhs_false_jump = self.emit_placeholder(Op::JumpIfZero);
+            self.comparison()?;
+            let rhs_false_jump = self.emit_placeholder(Op::JumpIfZero);
+            self.emit(Op::PushInt, 1, 0);
+            let end_jump = self.emit_placeholder(Op::Jump);
+            self.patch(lhs_false_jump, self.code.len() as i64)?;
+            self.patch(rhs_false_jump, self.code.len() as i64)?;
+            self.emit(Op::PushInt, 0, 0);
+            self.patch(end_jump, self.code.len() as i64)?;
+        }
+        Ok(())
+    }
+
+    fn comparison(&mut self) -> Result<()> {
         self.binary_level(Self::additive, comparison_op)
     }
 
@@ -760,8 +832,7 @@ impl Compiler {
                     if self.current().kind == TokenKind::LParen {
                         self.call_expression(&name)?;
                     } else {
-                        let slot = self.get_slot(&name)?;
-                        self.emit(Op::Load, slot as i64, 0);
+                        self.emit_load_name(&name)?;
                     }
                 }
             }
@@ -774,6 +845,16 @@ impl Compiler {
                 self.eat(TokenKind::Minus)?;
                 self.factor()?;
                 self.emit(Op::Neg, 0, 0);
+            }
+            TokenKind::Bang => {
+                self.eat(TokenKind::Bang)?;
+                self.factor()?;
+                let true_jump = self.emit_placeholder(Op::JumpIfZero);
+                self.emit(Op::PushInt, 0, 0);
+                let end_jump = self.emit_placeholder(Op::Jump);
+                self.patch(true_jump, self.code.len() as i64)?;
+                self.emit(Op::PushInt, 1, 0);
+                self.patch(end_jump, self.code.len() as i64)?;
             }
             TokenKind::Unsafe => {
                 self.eat(TokenKind::Unsafe)?;
@@ -793,6 +874,21 @@ impl Compiler {
             && self.tokens[self.index + 1].kind == TokenKind::Dot
             && self.tokens[self.index + 2].kind == TokenKind::Ident
             && self.tokens[self.index + 3].kind == TokenKind::LParen
+    }
+
+    fn is_expression_start(&self) -> bool {
+        matches!(
+            self.current().kind,
+            TokenKind::Int
+                | TokenKind::String
+                | TokenKind::Null
+                | TokenKind::Ident
+                | TokenKind::LBracket
+                | TokenKind::LParen
+                | TokenKind::Minus
+                | TokenKind::Bang
+                | TokenKind::Unsafe
+        )
     }
 
     fn call_expression(&mut self, name: &Token) -> Result<()> {
@@ -949,13 +1045,45 @@ impl Compiler {
         Ok(())
     }
 
-    fn get_slot(&self, token: &Token) -> Result<usize> {
+    fn get_assignment_slot(&self, token: &Token) -> Result<usize> {
         self.symbols.get(&token.text).ok_or_else(|| {
+            if self.in_function && self.function_globals.contains_key(&token.text) {
+                return self.error(
+                    format!(
+                        "Cannot assign to top-level variable {:?} inside a function",
+                        token.text
+                    ),
+                    token.clone(),
+                );
+            }
             self.error(
                 format!("Undefined variable {:?}", token.text),
                 token.clone(),
             )
         })
+    }
+
+    fn get_read_slot(&self, token: &Token) -> Result<ReadSlot> {
+        if let Some(slot) = self.symbols.get(&token.text) {
+            return Ok(ReadSlot::Local(slot));
+        }
+        if self.in_function {
+            if let Some(slot) = self.function_globals.get(&token.text).copied() {
+                return Ok(ReadSlot::Global(slot));
+            }
+        }
+        Err(self.error(
+            format!("Undefined variable {:?}", token.text),
+            token.clone(),
+        ))
+    }
+
+    fn emit_load_name(&mut self, token: &Token) -> Result<()> {
+        match self.get_read_slot(token)? {
+            ReadSlot::Local(slot) => self.emit(Op::Load, slot as i64, 0),
+            ReadSlot::Global(slot) => self.emit(Op::LoadGlobal, slot as i64, 0),
+        }
+        Ok(())
     }
 
     fn intern_string(&self, text: &str) -> usize {

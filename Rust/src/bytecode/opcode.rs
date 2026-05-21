@@ -31,6 +31,8 @@ pub enum Op {
     SetField,
     Builtin,
     PushNull,
+    Pop,
+    LoadGlobal,
 }
 
 impl Op {
@@ -65,6 +67,8 @@ impl Op {
             Op::SetField => "SET_FIELD",
             Op::Builtin => "BUILTIN",
             Op::PushNull => "PUSH_NULL",
+            Op::Pop => "POP",
+            Op::LoadGlobal => "LOAD_GLOBAL",
         }
     }
 
@@ -99,6 +103,8 @@ impl Op {
             "SET_FIELD" => Op::SetField,
             "BUILTIN" => Op::Builtin,
             "PUSH_NULL" => Op::PushNull,
+            "POP" => Op::Pop,
+            "LOAD_GLOBAL" => Op::LoadGlobal,
             _ => return Err(TinyOneError::compile(format!("Unknown opcode {name:?}"))),
         })
     }
@@ -134,6 +140,8 @@ impl Op {
             Op::SetField => 27,
             Op::Builtin => 28,
             Op::PushNull => 29,
+            Op::Pop => 30,
+            Op::LoadGlobal => 31,
         }
     }
 }

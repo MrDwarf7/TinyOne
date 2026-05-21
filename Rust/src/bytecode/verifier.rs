@@ -24,6 +24,7 @@ struct VerificationContext<'a> {
     strings: &'a [String],
     structs: &'a [StructDef],
     fields: &'a [String],
+    global_slot_count: usize,
 }
 
 impl BytecodeVerifier {
@@ -34,6 +35,7 @@ impl BytecodeVerifier {
             strings: &program.strings,
             structs: &program.structs,
             fields: &program.fields,
+            global_slot_count: program.slot_count,
         };
         Self::verify_chunk(
             "main",
@@ -163,6 +165,11 @@ impl BytecodeVerifier {
             if matches!(op, Op::Load | Op::Store) && checked_index(arg, slot_count).is_err() {
                 return Err(TinyOneError::compile(format!(
                     "Verifier: invalid slot {arg} at instruction {pc} in {chunk_name}"
+                )));
+            }
+            if op == Op::LoadGlobal && checked_index(arg, context.global_slot_count).is_err() {
+                return Err(TinyOneError::compile(format!(
+                    "Verifier: invalid global slot {arg} at instruction {pc} in {chunk_name}"
                 )));
             }
             if op == Op::PushString && checked_index(arg, context.strings.len()).is_err() {
@@ -337,6 +344,11 @@ impl BytecodeVerifier {
         if matches!(op, Op::Load | Op::Store) && checked_index(arg, slot_count).is_err() {
             return Err(TinyOneError::compile(format!(
                 "Verifier: invalid slot {arg} at instruction {pc} in {chunk_name}"
+            )));
+        }
+        if op == Op::LoadGlobal && checked_index(arg, context.global_slot_count).is_err() {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: invalid global slot {arg} at instruction {pc} in {chunk_name}"
             )));
         }
         if op == Op::PushString && checked_index(arg, context.strings.len()).is_err() {
@@ -530,8 +542,8 @@ fn verify_string_list(name: &str, values: &[String], max_count: usize) -> Result
 
 fn stack_effect(op: Op) -> Option<i64> {
     Some(match op {
-        Op::PushInt | Op::PushString | Op::PushNull | Op::Load => 1,
-        Op::Store => -1,
+        Op::PushInt | Op::PushString | Op::PushNull | Op::Load | Op::LoadGlobal => 1,
+        Op::Store | Op::Pop => -1,
         Op::Add
         | Op::Sub
         | Op::Mul

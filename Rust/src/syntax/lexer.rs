@@ -192,6 +192,8 @@ fn two_char_token(text: &str) -> Option<TokenKind> {
     Some(match text {
         "==" => TokenKind::EqEq,
         "!=" => TokenKind::BangEqual,
+        "&&" => TokenKind::AmpAmp,
+        "||" => TokenKind::PipePipe,
         "<=" => TokenKind::Lte,
         ">=" => TokenKind::Gte,
         _ => return None,
@@ -205,6 +207,7 @@ fn single_char_token(ch: u8) -> Option<TokenKind> {
         b'*' => TokenKind::Star,
         b'/' => TokenKind::Slash,
         b'=' => TokenKind::Equal,
+        b'!' => TokenKind::Bang,
         b'<' => TokenKind::Lt,
         b'>' => TokenKind::Gt,
         b'(' => TokenKind::LParen,

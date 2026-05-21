@@ -672,6 +672,30 @@ pub(crate) const BUILTINS: &[BuiltinDef] = &[
         requires_unsafe: false,
     },
     BuiltinDef {
+        name: "i64",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "u8",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "u16",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "u32",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
         name: "assert",
         min_args: 1,
         max_args: 2,

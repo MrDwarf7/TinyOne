@@ -31,6 +31,7 @@ The following changes break binary or source compatibility for callers:
 - Adding new keys to a success `value` object (callers should ignore
   unknown keys)
 - Adding new entry points to `tinyone.h`
+- Adding new opcode ordinals above the frozen Phase-1 range
 - Adding new Phase-2 builtin slots above index 34
 - Changing internal implementation details with no observable effect on
   inputs or outputs
@@ -46,6 +47,7 @@ The following changes break binary or source compatibility for callers:
 | `value` object keys per endpoint | UNSTABLE | Audit pending (roadmap item 1) |
 | `memory` array encoding | UNSTABLE | Encoding not yet frozen |
 | Phase-1 opcode ordinals (1–29) | STABLE | Frozen; artifact round-trips depend on them |
+| Phase-2 opcode ordinals (30+) | UNSTABLE | May change before v1 |
 | Phase-1 builtin slots (0–34) | STABLE | Frozen |
 | Phase-2 builtin slots (35+) | UNSTABLE | Order may change before v1 |
 | Artifact `format`/`version` fields | STABLE | `"tinyone-bytecode"` / `1` |
@@ -59,7 +61,7 @@ change without a major version bump:
 2. All four response envelope shapes
 3. All `value` object keys for every entry point
 4. The `memory` array encoding
-5. Phase-1 opcode ordinals and Phase-2 builtin slot order
+5. Phase-1 opcode ordinals, Phase-2 opcode ordinals, and Phase-2 builtin slot order
 
 Before v1 can be declared, the [v1 roadmap](../v1-roadmap.md) items 1–5
 (ABI blocking) must be resolved. Key items:
