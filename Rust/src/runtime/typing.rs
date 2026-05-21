@@ -234,6 +234,37 @@ impl TypeKind {
             _ => return None,
         })
     }
+
+    /// Returns the `TypeKind` for a stack-resident `RuntimeValue`.
+    /// For `Heap` values, this panics — callers must resolve via `heap.get(r).type_kind()`.
+    pub fn from_runtime_value(v: &crate::Value) -> Self {
+        use crate::Value;
+        match v {
+            Value::Unit            => TypeKind::Unit,
+            Value::Bool(_)         => TypeKind::Bool,
+            Value::I8(_)           => TypeKind::I8,
+            Value::I16(_)          => TypeKind::I16,
+            Value::I32(_)          => TypeKind::I32,
+            Value::I64(_)          => TypeKind::I64,
+            Value::U8(_)           => TypeKind::U8,
+            Value::U16(_)          => TypeKind::U16,
+            Value::U32(_)          => TypeKind::U32,
+            Value::U64(_)          => TypeKind::U64,
+            Value::Bf16(_)         => TypeKind::Bf16,
+            Value::Float { kind, .. } => *kind,
+            Value::Null            => TypeKind::Null,
+            Value::Function(_)     => TypeKind::Function,
+            Value::Pointer(_)      => TypeKind::Pointer,
+            Value::Reference(_)    => TypeKind::Reference,
+            Value::Phantom         => TypeKind::Phantom,
+            Value::Zst(k)          => *k,
+            Value::Unsafe          => TypeKind::Unsafe,
+            Value::Heap(r)         => unimplemented!(
+                "from_runtime_value(Heap): call heap.get(r).type_kind() for heap types; \
+                 HeapRef alone does not carry TypeKind — {r:?}"
+            ),
+        }
+    }
 }
 
 pub fn smallest_fit_unsigned(value: u64) -> TypeKind {
