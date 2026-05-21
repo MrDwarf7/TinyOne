@@ -21,7 +21,7 @@ pub(crate) struct ProgramInspection {
     pub(crate) opcode_counts: BTreeMap<String, usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BackendRunInspection {
     pub(crate) mode: &'static str,
     pub(crate) stdout: String,

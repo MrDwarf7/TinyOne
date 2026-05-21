@@ -1,6 +1,6 @@
 use crate::{Result, TinyOneError, Value, runtime_add, runtime_sub};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TinyMemory {
     values: Vec<Value>,
 }
@@ -33,7 +33,7 @@ impl TinyMemory {
     }
 
     pub(crate) fn store_int(&mut self, slot: usize, value: i64) -> Result<()> {
-        self.store(slot, Value::Int(value))
+        self.store(slot, Value::I64(value))
     }
 
     fn update_int_slot(
@@ -46,7 +46,7 @@ impl TinyMemory {
             .values
             .get_mut(slot)
             .ok_or_else(|| TinyOneError::runtime(format!("Invalid memory slot {slot}")))?;
-        let next = op(target.clone(), Value::Int(value))?;
+        let next = op(target.clone(), Value::I64(value))?;
         *target = next;
         Ok(())
     }

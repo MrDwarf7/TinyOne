@@ -13,10 +13,24 @@ fn runtime_format_inner(
     seen: &mut HashSet<usize>,
 ) -> Result<String> {
     match value {
-        Value::Int(value) => Ok(value.to_string()),
+        Value::I64(value) => Ok(value.to_string()),
         Value::U8(value) => Ok(value.to_string()),
         Value::U16(value) => Ok(value.to_string()),
         Value::U32(value) => Ok(value.to_string()),
+        Value::I8(value) => Ok(value.to_string()),
+        Value::I16(value) => Ok(value.to_string()),
+        Value::I32(value) => Ok(value.to_string()),
+        Value::U64(value) => Ok(value.to_string()),
+        Value::Bf16(bits) => Ok(format!("bf16({bits})")),
+        Value::Float { bits, .. } => Ok(bits.to_string()),
+        Value::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
+        Value::Unit => Ok("unit".to_string()),
+        Value::Null => Ok("null".to_string()),
+        Value::Function(idx) => Ok(format!("fn#{idx}")),
+        Value::Reference(r) => Ok(format!("ref@{}", r.address)),
+        Value::Phantom => Ok("phantom".to_string()),
+        Value::Zst(_) => Ok("zst".to_string()),
+        Value::Unsafe => Ok("unsafe".to_string()),
         Value::Pointer(pointer) => {
             let suffix = if pointer.cast.is_empty() {
                 String::new()

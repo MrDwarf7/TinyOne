@@ -10,7 +10,7 @@ use crate::{
     runtime_null, runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TinyRunReport {
     pub memory: TinyMemory,
     pub heap_before_shutdown: TinyHeapStats,
@@ -135,7 +135,7 @@ impl VM {
             })?;
             pc += 1;
             match instr.op {
-                Op::PushInt => stack.push(Value::Int(instr.arg)),
+                Op::PushInt => stack.push(Value::I64(instr.arg)),
                 Op::PushNull => stack.push(runtime_null()),
                 Op::Pop => {
                     vm_pop(&mut stack)?;
