@@ -1,7 +1,7 @@
 # Language Syntax Reference
 
-This section is the authoritative reference for the TinyOne language.
-The [README](../../README.md) includes an inline language overview with
+This section is the authoritative reference for TinyLang syntax.
+The [README](../../README.rst) includes an inline language overview with
 examples; these files are the complete and precise reference.
 
 ## Documents in This Area

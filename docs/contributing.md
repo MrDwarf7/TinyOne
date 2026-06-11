@@ -10,29 +10,46 @@
 
 ```sh
 # Build the CLI and library
-cargo build --manifest-path Rust/Cargo.toml
+cargo build --manifest-path TinyOne/Cargo.toml
 
 # Build the release binary
-cargo build --release --manifest-path Rust/Cargo.toml
+cargo build --release --manifest-path TinyOne/Cargo.toml
 ```
+
+## Developer Harness
+
+Use the repo-level xtask harness for local checks and CI gates:
+
+```sh
+# Show the command plan without running it
+cargo run --manifest-path xtask/Cargo.toml -- release-gate --dry-run
+
+# Run the full release gate
+cargo run --manifest-path xtask/Cargo.toml -- release-gate
+```
+
+Supported tasks are `check`, `test`, `test-hooks`, `fmt-check`, `clippy`,
+`bench-smoke`, `tools-test`, and `release-gate`. The harness uses the active
+`TinyOne/Cargo.toml` and `Ralloc/Cargo.toml` manifests plus the Python tools
+under `Tools/`; it does not restore or require the removed root `stdlib/`.
 
 ## Running Tests
 
 ```sh
-# Standard test suite (100 tests, all should pass)
-cargo test --manifest-path Rust/Cargo.toml
+# Standard test suite (122 tests, all should pass)
+cargo test --manifest-path TinyOne/Cargo.toml
 
 # Language fixture suite (requires testing-hooks feature)
-cargo test --manifest-path Rust/Cargo.toml --features testing-hooks
+cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks
 
 # Single test suite
-cargo test --manifest-path Rust/Cargo.toml --test runtime_parity
-cargo test --manifest-path Rust/Cargo.toml --test abi_api_soundness
-cargo test --manifest-path Rust/Cargo.toml --test stdlib_parity
+cargo test --manifest-path TinyOne/Cargo.toml --test runtime_parity
+cargo test --manifest-path TinyOne/Cargo.toml --test abi_api_soundness
+cargo test --manifest-path TinyOne/Cargo.toml --test stdlib_parity
 
 # Run the C FFI smoke test (requires pre-built cdylib)
-cargo build --manifest-path Rust/Cargo.toml
-cargo test --manifest-path Rust/Cargo.toml --test abi_api_soundness \
+cargo build --manifest-path TinyOne/Cargo.toml
+cargo test --manifest-path TinyOne/Cargo.toml --test abi_api_soundness \
   c_header_ffi_smoke_covers_ownership_null_and_mode_contracts
 ```
 
@@ -40,24 +57,26 @@ cargo test --manifest-path Rust/Cargo.toml --test abi_api_soundness \
 
 ```sh
 # Format check (must pass before commit)
-cargo fmt --manifest-path Rust/Cargo.toml --all --check
+cargo fmt --manifest-path TinyOne/Cargo.toml --all --check
 
 # Apply formatting
-cargo fmt --manifest-path Rust/Cargo.toml --all
+cargo fmt --manifest-path TinyOne/Cargo.toml --all
 
 # Lints (must be clean)
-cargo clippy --manifest-path Rust/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets -- -D warnings
 ```
 
 ## Benchmarks
 
 ```sh
 # Full benchmark suite
-cargo run --release --manifest-path Rust/Cargo.toml --bin tinyone-bench
+cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
+./TinyOne/target/release/tinylang-bench
 
 # Quick smoke run
-cargo run --release --manifest-path Rust/Cargo.toml --bin tinyone-bench \
-  -- --quick --repeats 1
+cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
+./TinyOne/target/release/tinylang-bench \
+  --quick --repeats 1
 ```
 
 ## Source-Tree Integrity Check
@@ -77,12 +96,12 @@ the VM/JIT. Follow this sequence:
 
 ### 1. Add a test fixture first
 
-Add a `.to` file to `Rust/tests/Language/pass/`, `fail_compile/`, or
+Add a `.to` file to `TinyOne/tests/Language/pass/`, `fail_compile/`, or
 `fail_runtime/` depending on expected behavior. Run the language suite to
 confirm the fixture fails before your change:
 
 ```sh
-cargo test --manifest-path Rust/Cargo.toml --features testing-hooks 2>&1 | grep FAIL
+cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks 2>&1 | grep FAIL
 ```
 
 ### 2. Extend the lexer if needed (`syntax/lexer.rs`, `syntax/token.rs`)
@@ -130,9 +149,9 @@ validates them under the existing limits.
 ### 9. Run the full suite
 
 ```sh
-cargo test --manifest-path Rust/Cargo.toml
-cargo test --manifest-path Rust/Cargo.toml --features testing-hooks
-cargo clippy --manifest-path Rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path TinyOne/Cargo.toml
+cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks
+cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets -- -D warnings
 ```
 
 ---
@@ -146,7 +165,7 @@ do not insert into or reorder them.
 
 To add a Phase-2 stdlib bridge builtin:
 
-1. **`Rust/src/builtins.rs`** — append a new entry after index 34 in
+1. **`TinyOne/src/builtins.rs`** — append a new entry after index 34 in
    `BUILTINS`. The name must not conflict with any existing builtin.
 
    ```rust
@@ -162,9 +181,10 @@ To add a Phase-2 stdlib bridge builtin:
    `runtime_call_stdlib_builtin` that calls your new function.
 3. **`runtime/stdlib.rs`** — implement the function as `pub fn b_your_name(…)`
    following the existing pattern. Return `Result<Value>`. Do not panic.
-4. **`stdlib/`** — optionally add a TinyOne-language wrapper in the appropriate
-   `stdlib/*.to` module and export it from the module's `tinyone.json` manifest.
-5. **`Rust/tests/stdlib_parity.rs`** — add at least one test covering the new
+4. **TinyLang wrapper modules** — deferred for now. The root `stdlib/` tree has
+   been intentionally removed while the standard library surface moves into the
+   runtime/system layer.
+5. **`TinyOne/tests/stdlib_parity.rs`** — add at least one test covering the new
    builtin via `run_source`.
 
 ### Rules for all builtins
@@ -179,15 +199,17 @@ To add a Phase-2 stdlib bridge builtin:
 
 ---
 
-## Adding Stdlib Modules
+## Adding Stdlib Surface
 
-Stdlib modules are TinyOne source files in `stdlib/` registered in
-`stdlib/tinyone.json`. They wrap Phase-2 bridge builtins for ergonomic use.
+The active stdlib direction is runtime/system-backed builtins, not a large
+root `stdlib/` tree written in TinyLang. Add the Rust builtin first, cover it
+with parity tests, and only add TinyLang wrapper modules if that tree is
+explicitly restored later.
 
-1. Create `stdlib/your_module.to`.
-2. Export functions with `export fn name(…)`.
-3. Add `"your_module": "your_module.to"` to `stdlib/tinyone.json`.
-4. Users can then `import "your_module" as m` with the stdlib manifest in scope.
+1. Add the builtin entry in `TinyOne/src/builtins.rs`.
+2. Dispatch it through `TinyOne/src/runtime/builtins.rs`.
+3. Implement it in `TinyOne/src/runtime/stdlib.rs`.
+4. Test it through `TinyOne/tests/stdlib_parity.rs`.
 
 ---
 
@@ -195,7 +217,7 @@ Stdlib modules are TinyOne source files in `stdlib/` registered in
 
 ### Language fixture (`.to` file)
 
-Place fixtures under `Rust/tests/Language/`:
+Place fixtures under `TinyOne/tests/Language/`:
 
 - `pass/` — programs expected to compile and print deterministic output.
 - `fail_compile/` — programs expected to fail at compile time.
@@ -208,9 +230,9 @@ when run with `--features testing-hooks`.
 
 Add a `#[test]` function to the appropriate file:
 
-- `Rust/tests/runtime_parity.rs` — language behavior, VM/JIT parity
-- `Rust/tests/stdlib_parity.rs` — stdlib behavior
-- `Rust/tests/abi_api_soundness.rs` — FFI contracts, artifact limits, verifier
+- `TinyOne/tests/runtime_parity.rs` — language behavior, VM/JIT parity
+- `TinyOne/tests/stdlib_parity.rs` — stdlib behavior
+- `TinyOne/tests/abi_api_soundness.rs` — FFI contracts, artifact limits, verifier
 
 All test functions must:
 - Use `run_source` or `compile_source` rather than constructing `Program` by hand
@@ -239,7 +261,7 @@ All test functions must:
 
 When adding a new `extern "C"` function:
 
-1. Add the declaration to `tinyone.h` with a `# Safety` doc comment.
+1. Add the declaration to `tinylang.h` with a `# Safety` doc comment.
 2. Add the Rust implementation in `ffi.rs`.
 3. If the function returns `char *`, it **must** route through `respond()` to
    get the double-`catch_unwind` panic boundary.
@@ -247,7 +269,7 @@ When adding a new `extern "C"` function:
    `catch_unwind` guard — `respond()` cannot be used for void functions.
 5. Nullable `const char *` parameters must be annotated `/* nullable */` in the
    header.
-6. Add a test in `Rust/tests/abi_api_soundness.rs` exercising the null-pointer
+6. Add a test in `TinyOne/tests/abi_api_soundness.rs` exercising the null-pointer
    and error cases.
 
 ---
