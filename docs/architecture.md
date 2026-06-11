@@ -1,7 +1,8 @@
-# TinyOne Architecture
+# TinyOne Implementation Architecture
 
-This document describes how TinyOne is structured internally: the pipeline each
-program travels through, the major modules, and the invariants each stage owns.
+This document describes how the TinyOne implementation is structured
+internally: the pipeline each TinyLang program travels through, the major
+modules, and the invariants each stage owns.
 
 ## Pipeline Overview
 

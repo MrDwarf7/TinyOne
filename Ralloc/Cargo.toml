@@ -1,0 +1,27 @@
+[package]
+name = "ralloc"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = ["c-api", "c-static"]
+default-members = [".", "c-api", "c-static"]
+resolver = "3"
+
+[lib]
+name = "ralloc"
+path = "src/lib.rs"
+
+[features]
+c-staticlib = []
+
+[dependencies]
+
+[dev-dependencies]
+static_assertions = "1"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

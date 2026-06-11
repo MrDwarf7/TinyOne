@@ -1,6 +1,7 @@
-# TinyOne Standard Library Reference
+# TinyLang Standard Library Reference
 
-TinyOne has two layers of builtin functions:
+TinyLang has two layers of builtin functions in the current TinyOne
+implementation:
 
 - **Phase-1 (core builtins)** — slots 0–34 in the canonical builtin table.
   These are bytecode-stable: artifacts compiled against Phase-1 builtins will
@@ -8,13 +9,18 @@ TinyOne has two layers of builtin functions:
   change.
 
 - **Phase-2 (stdlib bridge builtins)** — slots 35 onward. These are also
-  bytecode-stable within the Phase-2 group. Higher-level TinyOne-language
-  modules in `stdlib/` wrap these for ergonomic use via `import`.
+  bytecode-stable within the Phase-2 group. The active direction is to build
+  this surface into the runtime/system layer first instead of maintaining a
+  large root `stdlib/` tree written in TinyLang.
 
-## Using the Stdlib Modules
+## Current Module Status
 
-The stdlib modules live in `stdlib/` and are loadable via `import` with the
-`stdlib/tinyone.json` package manifest:
+The root `stdlib/` module tree has been intentionally removed for now. Use the
+bridge builtins directly while the standard-library surface is being rebuilt
+into the system.
+
+Historical TinyLang module imports looked like this, but they are not the
+active verification path in the current checkout:
 
 ```tinyone
 import "vec"    as vec
@@ -30,14 +36,6 @@ import "fs"     as fs
 import "math"   as math
 import "logic"  as logic
 import "typing" as typing
-```
-
-When running from the repo root you can point to the stdlib manifest:
-
-```sh
-# If tinyone.json is in your source directory's ancestor, it resolves automatically.
-# Otherwise, copy or symlink stdlib/tinyone.json alongside your source.
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- your_program.to
 ```
 
 ---
@@ -209,9 +207,9 @@ raw pointers (pointers are checked for staleness at map access time).
 #### `map_new() → map`
 Allocates an empty hash map.
 
-#### `map_set(m, key, value) → int`
-Insert or update `key → value`. Returns 0. Runtime error if the map's heap byte
-budget would be exceeded.
+#### `map_set(m, key, value) → value`
+Insert or update `key → value`. Returns the inserted `value`. Runtime error if
+the map's heap byte budget would be exceeded.
 
 #### `map_get(m, key) → value`
 Returns the value for `key`. Runtime error if `key` is not present.
@@ -235,14 +233,16 @@ Returns a new array containing all values in key-insertion order.
 
 ### I/O abstractions (`io`)
 
-TinyOne I/O operates on deterministic file-descriptor handles. `io_stdout()`,
+TinyLang I/O operates on deterministic file-descriptor handles. `io_stdout()`,
 `io_stderr()`, and `io_stdin()` return the standard handles.
 
 #### `io_write(fd, text) → int`
-Writes `text` to `fd` without a trailing newline. Returns 0.
+Writes `text` to `fd` without a trailing newline. Returns the number of bytes
+written.
 
 #### `io_writeln(fd, text) → int`
-Writes `text` followed by a newline. Returns 0.
+Writes `text` followed by a newline. Returns the number of bytes written
+(including the newline).
 
 #### `io_read_line() → string`
 Reads one line from stdin (the deterministic input queue). Strips the trailing
@@ -270,9 +270,9 @@ Unicode scalar count of `s`.
 #### `str_byte_at(s, byte_index) → int`
 Returns the byte value at `byte_index`.
 
-#### `str_char_at(s, char_index) → int`
-Returns the Unicode codepoint at `char_index`. Runtime error if
-`char_index >= str_char_len(s)`.
+#### `str_char_at(s, char_index) → string`
+Returns a single-character string containing the Unicode scalar at
+`char_index`. Runtime error if `char_index >= str_char_len(s)`.
 
 #### `str_slice(s, start_char, end_char) → string`
 Returns the substring from `start_char` (inclusive) to `end_char` (exclusive),
@@ -292,8 +292,8 @@ the bytes are not valid UTF-8.
 
 ### Threading and sync (`sync`)
 
-TinyOne supports real OS multithreading. Threads share the same heap; mutex and
-atomic operations use blocking OS primitives.
+The current TinyOne implementation supports real OS multithreading. Threads
+share the same heap; mutex and atomic operations use blocking OS primitives.
 
 #### `thread_spawn(fn_name, arg...) → thread`
 Spawns an OS thread running the named function with the given arguments. The
@@ -417,7 +417,8 @@ Reads the file at `path` as a byte buffer. Runtime error if the file does not
 exist, cannot be read, or exceeds 1 MiB.
 
 #### `unsafe fs_write(path, buffer) → int`
-Writes `buffer` bytes to `path`, creating or truncating the file. Returns 0.
+Writes `buffer` bytes to `path`, creating or truncating the file. Returns the
+number of bytes written.
 
 #### `fs_exists(path) → int`
 Returns `1` if `path` exists (file or directory), `0` otherwise.
@@ -470,8 +471,20 @@ The typing system provides runtime type introspection, fixed-width integer
 constructors, and legacy checked integer helpers.
 
 #### `type_of(value) → string`
-Returns the runtime type name: `"i64"`, `"u8"`, `"u16"`, `"u32"`, `"String"`,
-`"Vec"`, `"Struct"`, `"Buffer"`, `"Alloc"`, `"Map"`, `"Pointer"`, or `"Null"`.
+Returns the runtime type name of the provided `value`.
+| Type Category | Returned `string` | Rust Source Variant / Mapping |
+| :--- | :--- | :--- |
+| **Integers (Signed)** | `"i8"`, `"i16"`, `"i32"`, `"i64"` | `Value::I8`, `I16`, `I32`, `I64` |
+| **Integers (Unsigned)** | `"u8"`, `"u16"`, `"u32"`, `"u64"` | `Value::U8`, `U16`, `U32`, `U64` |
+| **Floats** | `"bf16"`, `"fp16"`, `"fp32"`, `"fp64"` | `Value::Bf16`, `Value::Float{kind}` |
+| **Primitives & Logic** | `"bool"`, `"String"`, `"Null"` | `Value::Bool`, `Value::String`, `Value::Null` |
+| **Collections & Memory** | `"Vec"`, `"Buffer"`, `"Alloc"`, `"Map"` | `HeapData::Array` (Maps to `TypeKind::Vec`), `Buffer`, etc. |
+| **Structures & Data** | `"Struct"`, `"Result"`, `"Option"` | `Value::Struct` (with reserved `type_name`) |
+| **Execution & Concurrency**| `"Function"`, `"Mutex"`, `"Atomic"`, `"Thread"` | `Value::Function`, `HeapData` variants |
+| **Low-Level / System** | `"Pointer"`, `"Reference"`, `"Phantom"`, `"Zst"`, `"Unsafe"` | `Value::Pointer`, `Value::Reference`, `Phantom`, `Zst`, `Unsafe` |
+
+> [!NOTE]
+> **Current Engine Discrepancy (Phase 1):** Fixed-size arrays (`Array<T, N>`) are currently allocated dynamically on the heap and return `"Vec"` from `type_of()` due to internal `HeapData::Array` mapping to `TypeKind::Vec`. Proper stack-allocated, fixed-size array separation is slated for Phase 2.
 
 #### `type_id(name) → int`
 Returns the integer ID for a type name string.

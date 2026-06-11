@@ -16,19 +16,19 @@ All fallible functions return `tinyone::Result<T>`, an alias for
 
 ## Compilation
 
-### `compile_source(source: &str) -> Result<Program>`
+### `compile_source(source: &str) -> Result<Arc<Program>>`
 
-Compile a TinyOne source string through lex → compile → optimize → verify. Returns a verified `Program` ready for execution.
+Compile a TinyLang source string through lex → compile → optimize → verify. Returns a reference-counted, verified `Program` ready for execution.
 
 ```rust
 let program = tinyone::compile_source("let x = 6 * 7\nprint x")?;
 ```
 
-### `compile_source_with_filename(source: &str, filename: &str) -> Result<Program>`
+### `compile_source_with_filename(source: &str, filename: &str) -> Result<Arc<Program>>`
 
 Same as `compile_source` but attaches `filename` to diagnostic messages.
 
-### `compile_file(path: impl AsRef<Path>) -> Result<Program>`
+### `compile_file(path: impl AsRef<Path>) -> Result<Arc<Program>>`
 
 Read the file at `path` and compile it. Resolves imports relative to the file's directory.
 
@@ -36,11 +36,11 @@ Read the file at `path` and compile it. Resolves imports relative to the file's 
 let program = tinyone::compile_file(std::path::Path::new("example.to"))?;
 ```
 
-### `compile_source_unoptimized(source: &str) -> Result<Program>`
+### `compile_source_unoptimized(source: &str) -> Result<Arc<Program>>`
 
 Compile without the peephole optimizer. Useful for testing the verifier against unoptimized bytecode.
 
-### `compile_source_unoptimized_with_filename(source: &str, filename: &str) -> Result<Program>`
+### `compile_source_unoptimized_with_filename(source: &str, filename: &str) -> Result<Arc<Program>>`
 
 Same as `compile_source_unoptimized` but attaches `filename` to diagnostic messages.
 
@@ -52,7 +52,7 @@ Lex `source` and return the token count. Does not compile.
 let count = tinyone::lex_source("let x = 42")?;
 ```
 
-### `optimize_program(program: Program) -> Program`
+### `optimize_program(program: Arc<Program>) -> Arc<Program>`
 
 Run the peephole optimizer over an already-compiled program. This function is infallible.
 
@@ -77,21 +77,22 @@ assert_eq!(String::from_utf8(out).unwrap(), "42\n");
 
 Same as `run_source` but returns a `TinyRunReport` containing the final `TinyMemory` plus heap statistics (live objects/bytes, peak, total allocations/frees, shutdown frees).
 
-### `run_program(program: &Program, mode: &str, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyMemory>`
+### `run_program(program: Arc<Program>, mode: &str, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyMemory>`
 
 Run a pre-compiled program. Runs `BytecodeVerifier::verify` internally before execution.
+Consumes the `Arc<Program>`; clone it first if you need to keep a reference.
 
 ```rust
 let program = tinyone::compile_source("print 42")?;
 let mut out = Vec::new();
-tinyone::run_program(&program, "vm", &mut out, vec![])?;
+tinyone::run_program(program, "vm", &mut out, vec![])?;
 ```
 
-### `run_program_report(program: &Program, mode: &str, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyRunReport>`
+### `run_program_report(program: Arc<Program>, mode: &str, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyRunReport>`
 
 Same as `run_program` but returns heap statistics.
 
-### `run_program_with_env(program: &Program, mode: &str, stdout: &mut dyn Write, inputs: Vec<String>, sys_args: Vec<String>, sys_env: HashMap<String, String>) -> Result<TinyMemory>`
+### `run_program_with_env(program: Arc<Program>, mode: &str, stdout: &mut dyn Write, inputs: Vec<String>, sys_args: Vec<String>, sys_env: HashMap<String, String>) -> Result<TinyMemory>`
 
 Run with explicit program arguments and environment variables (consumed by `sys_argc()`, `sys_argv()`, `sys_env_has()`, `sys_env_get()`).
 
@@ -102,7 +103,7 @@ let program = tinyone::compile_source("print sys_argc()")?;
 let mut out = Vec::new();
 let env = HashMap::new();
 tinyone::run_program_with_env(
-    &program,
+    program,
     "vm",
     &mut out,
     vec![],
@@ -186,7 +187,10 @@ tinyone::BytecodeVerifier::verify(&program)?;
 A newtype wrapper that records that verification has already run. Constructed via `VerifiedProgram::verify(program)`, which runs `BytecodeVerifier::verify` internally.
 
 ```rust
-let program = tinyone::compile_source("print 1")?;
+// VerifiedProgram::verify takes an owned Program, not Arc<Program>.
+// Extract from the Arc first (clones only if there are other references):
+let arc = tinyone::compile_source("print 1")?;
+let program = Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone());
 let verified = tinyone::VerifiedProgram::verify(program)?;
 // Borrow the inner Program without consuming:
 let _inner: &tinyone::Program = verified.program();
@@ -196,6 +200,6 @@ let program = verified.into_program();
 
 Key methods on `VerifiedProgram`:
 
-- `VerifiedProgram::verify(program: Program) -> Result<VerifiedProgram>` — verify and wrap
+- `VerifiedProgram::verify(program: Program) -> Result<VerifiedProgram>` — verify and wrap; takes an owned `Program`, not `Arc<Program>`
 - `verified.program() -> &Program` — borrow the inner program
 - `verified.into_program() -> Program` — consume and return the inner program

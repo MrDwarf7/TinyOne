@@ -1,10 +1,23 @@
 # CLI Reference
 
 ```
-usage: tinyone [OPTIONS] [path]
+usage: tinylang [OPTIONS] [path]
 ```
 
 TinyOne exits with status `0` on success, status `1` on any error.
+
+Build the CLI executable before using these commands:
+
+```sh
+cargo build --manifest-path TinyOne/Cargo.toml
+```
+
+Cargo writes the debug executable to `TinyOne/target/debug/tinylang`
+(`TinyOne/target/debug/tinylang.exe` on Windows). For optimized local use,
+build with `cargo build --release --manifest-path TinyOne/Cargo.toml`; the
+release executable is `TinyOne/target/release/tinylang` or
+`TinyOne/target/release/tinylang.exe`. The examples below assume the executable
+is available on `PATH` as `tinylang`.
 
 ---
 
@@ -15,7 +28,7 @@ TinyOne exits with status `0` on success, status `1` on any error.
 The `.to` source file to compile and execute. If `--run-bytecode` is specified, this argument is not required.
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- example.to
+tinylang example.to
 ```
 
 ---
@@ -29,10 +42,10 @@ Select the execution backend. Default is `jit`.
 
 ```sh
 # JIT mode (default)
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- example.to
+tinylang example.to
 
 # VM mode
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- --mode vm example.to
+tinylang --mode vm example.to
 ```
 
 ---
@@ -42,7 +55,7 @@ cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- --mode vm example.to
 Compile and verify the source file without executing it. Exits `0` if the program compiles and passes verification, `1` otherwise.
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- --check example.to
+tinylang --check example.to
 ```
 
 ---
@@ -52,7 +65,7 @@ cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- --check example.to
 After compilation, write the JSON bytecode artifact to `PATH`. The artifact can be executed later with `--run-bytecode`.
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --check --emit-bytecode out.tobc.json example.to
 ```
 
@@ -65,7 +78,7 @@ See [`bytecode.md`](bytecode.md) for the artifact format.
 Write the human-readable JIT assembly listing to `PATH` after compilation. Shows the decoded `JitOp` sequence and superinstruction fusions.
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --emit-jit listing.txt example.to
 ```
 
@@ -77,11 +90,11 @@ Execute a pre-compiled JSON artifact from `PATH` without recompiling from source
 
 ```sh
 # Compile once
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --check --emit-bytecode out.tobc.json example.to
 
 # Run the artifact
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --run-bytecode out.tobc.json
 ```
 
@@ -92,7 +105,7 @@ cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
 Append one string item to the deterministic input queue. Repeat to supply multiple items. Items are consumed in order by `read()`, `read_int()`, and `read_str()`.
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --input 10 --input 20 example.to
 ```
 
@@ -110,8 +123,7 @@ print a + b   # 30
 Read stdin line-by-line and append each line to the deterministic input queue.
 
 ```sh
-printf "10\n20\n" | cargo run --manifest-path Rust/Cargo.toml \
-  --bin tinyone -- --stdin example.to
+printf "10\n20\n" | tinylang --stdin example.to
 # Output: 30
 ```
 
@@ -122,7 +134,7 @@ printf "10\n20\n" | cargo run --manifest-path Rust/Cargo.toml \
 Print a compiler/runtime summary to stderr after execution. Includes execution metadata, slot counts, function count, and other program statistics.
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --verbose example.to
 ```
 
@@ -133,27 +145,26 @@ cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
 ### Compile-once / run-many
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --check --emit-bytecode program.tobc.json program.to
 
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --run-bytecode program.tobc.json --input 7
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --run-bytecode program.tobc.json --input 12
 ```
 
 ### Inspect the JIT listing
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
+tinylang \
   --emit-jit /dev/stdout --check program.to 2>/dev/null
 ```
 
 ### Validate without running (CI)
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- \
-  --check program.to && echo "OK"
+tinylang --check program.to && echo "OK"
 ```
 
 ---

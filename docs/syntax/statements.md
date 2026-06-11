@@ -280,8 +280,11 @@ export struct Name { fields }
 ```
 
 Marks a function or struct declaration as publicly visible to importing
-files. Only valid in module source files (files that are `import`ed by
-another file). Non-exported declarations are private to the module.
+files. Intended for use in module source files (files that are `import`ed by
+another file); non-exported declarations are private to the module.
+Using `export` in a non-module file (a top-level entry-point file) is
+currently a no-op — the declaration is accepted without error but the export
+has no effect.
 
 ```tinyone
 # math.to
