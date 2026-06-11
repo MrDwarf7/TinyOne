@@ -1,6 +1,6 @@
 # VM and JIT Operation
 
-TinyOne has two execution backends that share the same verified bytecode:
+The TinyOne implementation has two execution backends that share the same verified bytecode:
 the **VM** (portable interpreter) and the **JIT** (adaptive bytecode
 tier). Both are selected via `--mode vm` or `--mode jit` on the CLI, or
 `"vm"` / `"jit"` in the Rust and C APIs.
@@ -30,7 +30,7 @@ A `Vec<Value>` inside the VM holds the operand stack. Instructions push and pop 
 
 `CALL arg arg2` pops `arg2` arguments from the operand stack, pushes a new frame onto `TinyMemory`, initializes the first `arg2` slots from the arguments, and recurses into `run_chunk` for the callee's bytecode.
 
-The call-depth limit is **16** nested TinyOne function calls. Exceeding this limit returns a `TinyOneError::Runtime("call stack overflow")`.
+The call-depth limit is **16** nested TinyLang function calls. Exceeding this limit returns a `TinyOneError::Runtime("call stack overflow")`.
 
 ### Error Propagation
 
@@ -40,7 +40,7 @@ Every operation that can fail returns `Result`. The `?` operator propagates erro
 
 ## JIT Backend
 
-The JIT is an **adaptive bytecode tier** — it compiles TinyOne bytecode into a lower-level internal bytecode (`JitOp`) with decoded operands, then interprets `JitOp` and quickens hot loops in-place. It does not produce native machine code.
+The JIT is an **adaptive bytecode tier** — it compiles TinyLang bytecode into a lower-level internal bytecode (`JitOp`) with decoded operands, then interprets `JitOp` and quickens hot loops in-place. It does not produce native machine code.
 
 ### Compilation Phase (`JitProgram::compile`)
 

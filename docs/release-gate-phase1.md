@@ -26,7 +26,7 @@
 
 ## Tests Added
 
-8 adversarial tests were added to `Rust/tests/abi_api_soundness.rs`, bringing the total to 31 (23 original ABI soundness tests + 8 new adversarial tests). The adversarial tests exercise crafted inputs targeting each defect area: slot-count overflows at exact/MAX boundaries, float-field counts, negative counts, tight verifier loops, JIT artifact round-trips, FFI byte-limit boundaries, and duplicate artifact keys.
+8 adversarial tests were added to `TinyOne/tests/abi_api_soundness.rs`, bringing the total to 31 (23 original ABI soundness tests + 8 new adversarial tests). The adversarial tests exercise crafted inputs targeting each defect area: slot-count overflows at exact/MAX boundaries, float-field counts, negative counts, tight verifier loops, JIT artifact round-trips, FFI byte-limit boundaries, and duplicate artifact keys.
 
 ## Remaining Known Risks
 

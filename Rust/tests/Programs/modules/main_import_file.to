@@ -1,6 +1,0 @@
-import "math.to" as math
-let r = math.add(40, 2)
-let p = math.Point(1, 2)
-print r
-print p.x
-print p.y

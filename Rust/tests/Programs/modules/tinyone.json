@@ -1,6 +1,0 @@
-{
-  "package": "compliance",
-  "modules": {
-    "math": "math.to"
-  }
-}

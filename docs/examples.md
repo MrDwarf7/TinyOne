@@ -3,7 +3,7 @@
 Runnable examples organized by feature. Each example shows the `.to` source and the expected stdout output. Run any example with:
 
 ```sh
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- example.to
+tinylang example.to
 ```
 
 ---
@@ -260,7 +260,7 @@ Run each example and confirm the output matches. Create temp files:
 ```bash
 # Hello world
 printf 'print "hello, world"\nprint 6 * 7\nprint (10 + 5) / 3\n' > /tmp/ex1.to
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- /tmp/ex1.to 2>/dev/null
+tinylang /tmp/ex1.to 2>/dev/null
 # Expected: hello, world / 42 / 5
 
 # Functions
@@ -278,7 +278,7 @@ print fact(5)
 print fact(10)
 print fib(10)
 EOF
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- /tmp/ex3.to 2>/dev/null
+tinylang /tmp/ex3.to 2>/dev/null
 # Expected: 120 / 3628800 / 55
 
 # Structs
@@ -291,7 +291,7 @@ print p.y
 set p.x = 0
 print distance_sq(p)
 EOF
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- /tmp/ex4.to 2>/dev/null
+tinylang /tmp/ex4.to 2>/dev/null
 # Expected: 3 / 4 / 16
 
 # Arrays
@@ -313,7 +313,7 @@ while i <= 5 {
 print squares[0]
 print squares[4]
 EOF
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- /tmp/ex5.to 2>/dev/null
+tinylang /tmp/ex5.to 2>/dev/null
 # Expected: 5/30/99/6/60/5/1/25
 
 # Maps and strings
@@ -331,7 +331,7 @@ print str_char_len(s)
 print str_slice(s, 0, 5)
 print str_concat("foo", "bar")
 EOF
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- /tmp/ex6.to 2>/dev/null
+tinylang /tmp/ex6.to 2>/dev/null
 # Expected: tinyone/1/2/2/12/hello/foobar
 
 # Raw pointers
@@ -353,7 +353,7 @@ let _d = unsafe write8(unsafe ptr_add(bp, 1), 255)
 print unsafe read8(bp)
 print unsafe read8(unsafe ptr_add(bp, 1))
 EOF
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- /tmp/ex7.to 2>/dev/null
+tinylang /tmp/ex7.to 2>/dev/null
 # Expected: 20/99/77/42/255
 
 # Calculator
@@ -377,6 +377,6 @@ let ops2    = [0, 0, 2, 0, 0, 2, 1]
 let inputs2 = [2, 3, 0, 4, 5, 0, 0]
 print calc(ops2, inputs2)
 EOF
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- /tmp/ex8.to 2>/dev/null
+tinylang /tmp/ex8.to 2>/dev/null
 # Expected: 35 / 26
 ```

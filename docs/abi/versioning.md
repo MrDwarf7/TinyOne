@@ -10,7 +10,7 @@ declaration.
 The following changes break binary or source compatibility for callers:
 
 **Function-level breaks:**
-- Removing or renaming an entry point declared in `tinyone.h`
+- Removing or renaming an entry point declared in `tinylang.h`
 - Changing the type or order of any parameter
 - Changing the return type of any entry point
 

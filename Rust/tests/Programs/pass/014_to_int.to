@@ -1,2 +1,0 @@
-print to_int("42")
-print to_int(-7)

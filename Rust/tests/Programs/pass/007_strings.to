@@ -1,5 +1,0 @@
-let s = "hello\nworld"
-print len(s)
-print s[0]
-let t = "a\t\"b\\"
-print len(t)

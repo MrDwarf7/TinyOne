@@ -1,4 +1,0 @@
-# expect_error: Division by zero
-
-let denom = 0
-print 9 / denom

@@ -1,2 +1,0 @@
-let b = buffer(1048577)
-print len(b)

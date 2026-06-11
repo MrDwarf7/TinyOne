@@ -1,7 +1,7 @@
 # TinyOne C FFI Integration Guide
 
 TinyOne builds as a `cdylib` alongside the CLI binary. All public entry points
-are declared in `tinyone.h` at the repository root. This document covers how to
+are declared in `tinylang.h` at the repository root. This document covers how to
 embed TinyOne in a C or C++ application.
 
 **ABI STATUS: UNSTABLE.** Do not pin to a specific ABI version until v1 is
@@ -11,37 +11,66 @@ tagged and the ABI is declared stable.
 
 ```sh
 # Debug (for development and testing)
-cargo build --manifest-path Rust/Cargo.toml
+cargo build --manifest-path TinyOne/Cargo.toml
 
 # Release (for embedding)
-cargo build --release --manifest-path Rust/Cargo.toml
+cargo build --release --manifest-path TinyOne/Cargo.toml
 ```
 
 Output locations:
 
 | Platform | Debug | Release |
 | --- | --- | --- |
-| Linux | `Rust/target/debug/libtinyone.so` | `Rust/target/release/libtinyone.so` |
-| macOS | `Rust/target/debug/libtinyone.dylib` | `Rust/target/release/libtinyone.dylib` |
-| Windows | `Rust/target/debug/tinyone.dll` | `Rust/target/release/tinyone.dll` |
+| Linux | `TinyOne/target/debug/libtinyone.so` | `TinyOne/target/release/libtinyone.so` |
+| macOS | `TinyOne/target/debug/libtinyone.dylib` | `TinyOne/target/release/libtinyone.dylib` |
+| Windows | `TinyOne/target/debug/tinyone.dll` | `TinyOne/target/release/tinyone.dll` |
 
 ## Linking
 
 ```sh
 # Linux
-cc -std=c11 your_app.c -I/path/to/repo -L/path/to/Rust/target/release \
-   -Wl,-rpath,/path/to/Rust/target/release -ltinyone -o your_app
+cc -std=c11 your_app.c -I/path/to/repo -L/path/to/TinyOne/target/release \
+   -Wl,-rpath,/path/to/TinyOne/target/release -ltinyone -o your_app
 
 # macOS
-cc -std=c11 your_app.c -I/path/to/repo -L/path/to/Rust/target/release \
+cc -std=c11 your_app.c -I/path/to/repo -L/path/to/TinyOne/target/release \
    -rpath @loader_path -ltinyone -o your_app
 ```
 
 Include the header:
 
 ```c
-#include "tinyone.h"
+#include "tinylang.h"
 ```
+
+## Header Drift Checks
+
+The committed generated C header for the current ABI is `tinylang.h`. It keeps
+exported symbols named `tinyone_*`; do not rename the C symbols as part of
+ordinary header work.
+
+Before changing `TinyOne/src/ffi.rs` or `tinylang.h`, run:
+
+```sh
+./scripts/check-abi-drift.sh
+```
+
+That command uses only Python's standard library and compares exported
+`extern "C"` Rust symbols against `tinylang.h`. A deterministic manifest is
+available for review:
+
+```sh
+python3 Tools/abi_manifest.py manifest
+```
+
+Header generation is optional and requires a local `cbindgen` binary:
+
+```sh
+python3 Tools/abi_manifest.py generate-header --output tinylang.h
+```
+
+If `cbindgen` is missing, the tool reports that explicitly and still supports
+the no-dependency drift check.
 
 ## Ownership Contract
 
@@ -74,7 +103,7 @@ rather than unwinding into the caller.
 
 ## Parameter Nullability
 
-Unless a parameter is annotated `/* nullable */` in `tinyone.h`, it must be a
+Unless a parameter is annotated `/* nullable */` in `tinylang.h`, it must be a
 valid NUL-terminated UTF-8 C string. Passing `NULL` for a non-nullable parameter
 does **not** crash — it returns a structured `{"ok":false,"kind":"compile","error":"… pointer was null"}` response.
 
@@ -253,7 +282,7 @@ a text string. The same 8 MiB byte limit applies.
 ## Example: Running a Program from C
 
 ```c
-#include "tinyone.h"
+#include "tinylang.h"
 #include <stdio.h>
 #include <string.h>
 

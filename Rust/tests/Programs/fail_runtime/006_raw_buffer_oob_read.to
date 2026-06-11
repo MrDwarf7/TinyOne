@@ -1,3 +1,0 @@
-let b = buffer(1)
-let p = ptr(b, 0)
-print unsafe read16(p)

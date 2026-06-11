@@ -1,6 +1,6 @@
 # Memory Model
 
-TinyOne's runtime manages two memory regions: the **stack-frame memory** (fixed slots per function call) and the **heap** (dynamic allocation for all aggregate values). This document covers how each region works, how references are validated, and what resource limits apply.
+The TinyOne runtime implementation manages two memory regions: the **stack-frame memory** (fixed slots per function call) and the **heap** (dynamic allocation for all aggregate values). This document covers how each region works, how references are validated, and what resource limits apply.
 
 For the value types that use heap allocation, see [`syntax/types.md`](syntax/types.md). For the opcodes that interact with memory, see [`bytecode.md`](bytecode.md).
 
@@ -73,7 +73,9 @@ A stale base object, kind mismatch, or out-of-bounds access each produce a struc
 
 ## Ownership Rules
 
-TinyOne does not use garbage collection or compile-time borrow checking. The Rust runtime owns the heap for the entire run.
+TinyLang does not use garbage collection or compile-time borrow checking in the
+current TinyOne implementation. The Rust runtime owns the heap for the entire
+run.
 
 **Aliasing:** copying a `HeapRef` or `RawPointer` aliases the same heap object. It does not clone, move, or transfer ownership.
 
@@ -95,7 +97,7 @@ All limits are enforced before allocation. Exceeding a limit produces a `TinyOne
 | Single buffer allocation | 1,048,576 bytes (1 MiB) | `buffer(size)` with `size` > limit |
 | Total live heap payload | 4 MiB | Any allocation that would exceed total live bytes |
 | Live heap object slots | 1,000,000 objects | Any allocation when object count is at limit |
-| Nested TinyOne calls | 16 calls | `CALL` when call depth is at limit |
+| Nested TinyLang calls | 16 calls | `CALL` when call depth is at limit |
 
 ---
 

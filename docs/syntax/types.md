@@ -1,6 +1,6 @@
 # Types
 
-TinyOne is dynamically typed. Every value at runtime has one of the
+TinyLang is dynamically typed. Every value at runtime has one of the
 following types. Use `type_of(value)` to inspect the type at runtime.
 
 ---
@@ -36,8 +36,7 @@ Heap-allocated, immutable, UTF-8 byte sequence.
 `str_slice(s, start, end)`, `str_from_buffer(buf)`, `read_str()`.
 
 **Read:** `len(s)` returns byte length; `s[i]` returns the byte at index
-`i`; `str_char_at(s, i)` returns the Unicode codepoint at character
-position `i`.
+`i`; `str_char_at(s, i)` returns a single-character string.
 
 **Mutated:** strings are immutable. To build a new string, use
 `str_concat` or `str_slice`.

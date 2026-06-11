@@ -1,6 +1,6 @@
 # Modules
 
-TinyOne's module system separates source files into independently
+TinyLang's module system separates source files into independently
 compiled namespaces. An `import` declaration compiles and links another
 source file and makes its exported declarations available under an alias.
 
@@ -35,7 +35,7 @@ Import paths are resolved in this order:
    import "lib/math.to" as math
    ```
 
-2. **Manifest lookup:** if the path does not end in `.to`, TinyOne
+2. **Manifest lookup:** if the path does not end in `.to`, the compiler
    searches for a `tinyone.json` package manifest in the importing
    file's directory and then in each ancestor directory up to the
    filesystem root. The first manifest that maps the module name wins.
@@ -110,7 +110,7 @@ import; all accesses require the namespace prefix.
 ## Circular Import Detection
 
 If module A imports module B and module B imports module A (directly or
-transitively), TinyOne reports a compile error. Circular imports are
+transitively), the compiler reports a compile error. Circular imports are
 detected via a seen-set in the compiler's shared state.
 
 ---
@@ -183,7 +183,7 @@ c = ctr.increment(c)
 c = ctr.increment(c)
 print c.value
 EOF
-cargo run --manifest-path Rust/Cargo.toml --bin tinyone -- /tmp/tinytest/main.to
+tinylang /tmp/tinytest/main.to
 # Expected output: 2
 ```
 

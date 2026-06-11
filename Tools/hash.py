@@ -25,19 +25,27 @@ EXIT_ERROR = 2
 TREE_FORMAT_VERSION = b"hash-tool-tree-v1\0"
 DEFAULT_EXCLUDE_PATTERNS = (
     ".git",
-    "Rust/target",
+    "TinyOne/target",
+    "Ralloc/target",
+    "target",
     "__pycache__",
+    ".pytest_cache",
     ".mypy_cache",
+    ".ruff_cache",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
     ".agents",
     ".codex",
 )
 HELP_EPILOG = """
 Examples:
-  ./hash.py README.md
-  ./hash.py -a sha256 --format release --name TinyOne Python/main.py
+  python3 Tools/hash.py README.rst
+  python3 Tools/hash.py -a sha256 --format release --name TinyOne TinyOne/Cargo.toml
   ./hash.py --tree . --exclude manifest.json --symlinks skip --format json > manifest.json
   ./hash.py --tree . --format json --list-files > manifest.json
-  ./hash.py --expected <digest> README.md
+  ./hash.py --expected <digest> README.rst
   ./hash.py --check manifest.json
 
 Modes:
@@ -175,7 +183,10 @@ def normalize_exclude_patterns(values: Sequence[str]) -> tuple[str, ...]:
     patterns: list[str] = []
 
     for value in values:
-        pattern = value.strip().replace("\\", "/").strip("/")
+        pattern = value.strip().replace("\\", "/")
+        while pattern.startswith("./"):
+            pattern = pattern[2:]
+        pattern = pattern.strip("/")
         if not pattern:
             raise argparse.ArgumentTypeError("exclude pattern cannot be empty")
         patterns.append(pattern)
@@ -251,6 +262,10 @@ def should_include_file(path: Path, include_suffixes: frozenset[str]) -> bool:
 
 def path_matches_pattern(relative_path: str, pattern: str) -> bool:
     components = relative_path.split("/")
+    if pattern.endswith("/**"):
+        pattern = pattern[:-3]
+    if pattern.endswith("/*"):
+        pattern = pattern[:-2]
     if "/" not in pattern:
         return any(fnmatch.fnmatchcase(component, pattern) for component in components)
     return (
@@ -699,7 +714,18 @@ def verify_manifest(manifest_path: Path, chunk_size: int) -> list[VerificationRe
         path = resolve_manifest_entry_path(entry.path)
         if entry.mode == "file":
             if not path.is_file():
-                raise ValueError(f"manifest entry is not a file: {entry.path}")
+                results.append(
+                    VerificationResult(
+                        mode="file",
+                        path=entry.path,
+                        algorithm=entry.algorithm,
+                        expected=entry.digest,
+                        actual=None,
+                        ok=False,
+                        message=f"not a file: {entry.path}",
+                    )
+                )
+                continue
             results.append(
                 verify_file_entry(
                     path,
@@ -712,7 +738,20 @@ def verify_manifest(manifest_path: Path, chunk_size: int) -> list[VerificationRe
             continue
 
         if not path.is_dir():
-            raise ValueError(f"manifest entry is not a directory: {entry.path}")
+            results.append(
+                VerificationResult(
+                    mode="tree",
+                    path=entry.path,
+                    algorithm=entry.algorithm,
+                    expected=entry.digest,
+                    actual=None,
+                    ok=False,
+                    message=f"not a directory: {entry.path}",
+                    expected_files_hashed=entry.files_hashed,
+                    actual_files_hashed=None,
+                )
+            )
+            continue
         include_suffixes = normalize_suffixes(entry.include_suffixes or ())
         exclude_patterns = (
             normalize_exclude_patterns(entry.exclude_patterns)

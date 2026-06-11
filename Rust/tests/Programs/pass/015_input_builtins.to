@@ -1,6 +1,0 @@
-let a = read()
-let b = read_int()
-let c = read_str()
-print a
-print b
-print c

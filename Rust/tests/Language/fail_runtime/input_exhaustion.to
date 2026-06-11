@@ -1,3 +1,0 @@
-# expect_error: Input exhausted
-
-print read()

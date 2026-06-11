@@ -26,7 +26,7 @@ The four response shapes (`ok/value`, `ok/false + compile`, `ok/false + runtime`
 
 **Required action:** Audit every `ok: true` response body. Write a JSON schema
 file (`tinyone-response-schema.json`) that captures every key and type. Add
-contract tests in `Rust/tests/abi_api_soundness.rs` that assert the exact schema
+contract tests in `TinyOne/tests/abi_api_soundness.rs` that assert the exact schema
 is present for a representative success response from each entry point. Freeze
 the schema at that point.
 
@@ -89,7 +89,7 @@ These are behavioral gaps or ambiguities that must be resolved before v1.
 
 ### 6. Integer overflow behavior
 
-TinyOne now has `i64` literals plus first-class `u8`, `u16`, and `u32` runtime
+TinyLang now has `i64` literals plus first-class `u8`, `u16`, and `u32` runtime
 values for low-level buffer work. Arithmetic overflow traps with
 `Runtime.Memory_Overflow` in both VM and JIT paths. Remaining v1 work here is a
 static type-checking surface for annotated slots and function signatures.
@@ -104,7 +104,7 @@ language reference.
 `INDEX` on a string returns the byte at `index`, with a runtime error on
 out-of-bounds. There is no compile-time mechanism to express string-indexed
 access safely. This is acceptable for v1 as a design constraint but must be
-explicitly documented: TinyOne does not have bounds-checked string indexing at
+explicitly documented: TinyLang does not have bounds-checked string indexing at
 compile time; all bounds errors are runtime errors.
 
 **Required action:** Add a language reference section that documents this
@@ -116,7 +116,7 @@ explicitly. No code change required if the decision is "runtime only."
 
 ### 8. Parity tests for all Phase-2 stdlib bridge builtins
 
-`Rust/tests/stdlib_parity.rs` covers the stdlib modules in general but some
+`TinyOne/tests/stdlib_parity.rs` covers the stdlib modules in general but some
 Phase-2 builtins have minimal or no direct test coverage. Before v1 every
 builtin must have at least one positive and one negative (error) test through
 `run_source`.
@@ -132,7 +132,7 @@ enforced in `Program::from_artifact`. Most limits have no dedicated test that
 hits the exact boundary (limit - 1 should succeed; limit should fail; limit + 1
 should fail).
 
-**Required action:** Add boundary tests in `Rust/tests/abi_api_soundness.rs`
+**Required action:** Add boundary tests in `TinyOne/tests/abi_api_soundness.rs`
 for each of the 14 limits. At minimum: one test that constructs an artifact at
 the limit and expects success, and one that exceeds the limit and expects a
 compile error.
@@ -147,7 +147,7 @@ explicitly documented as out-of-scope for v1.
 | Gap | Status |
 | --- | --- |
 | No closures or first-class functions | By design; functions are top-level only |
-| No static type checker | By design; TinyOne is dynamically typed |
+| No static type checker | By design; TinyLang is dynamically typed |
 | No generics or templates | Out of scope for v1 |
 | No exceptions or structured error propagation | Use `result`/`option` stdlib |
 | No garbage collector | Manual heap with `unsafe free`; by design |
@@ -176,12 +176,12 @@ sole reference implementation until further notice.
 The following steps must be completed in order before tagging v1:
 
 1. All six blocking items above resolved and tested
-2. `cargo test --manifest-path Rust/Cargo.toml` — all tests pass
-3. `cargo test --manifest-path Rust/Cargo.toml --features testing-hooks` — all
+2. `cargo test --manifest-path TinyOne/Cargo.toml` — all tests pass
+3. `cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks` — all
    language fixture tests pass
-4. `cargo clippy --manifest-path Rust/Cargo.toml --all-targets -- -D warnings`
+4. `cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets -- -D warnings`
    — zero warnings
-5. `cargo fmt --manifest-path Rust/Cargo.toml --all --check` — no formatting
+5. `cargo fmt --manifest-path TinyOne/Cargo.toml --all --check` — no formatting
    issues
 6. `tinyone.h` header reviewed and frozen; `docs/ffi/c-integration.md`
    matches exactly
@@ -190,6 +190,6 @@ The following steps must be completed in order before tagging v1:
    operators, all statements, module system, builtin categories, overflow
    behavior, bounds-checking behavior
 9. CHANGELOG or release notes written
-10. Version bumped from `0.5.0` to `1.0.0` in `Rust/Cargo.toml`
+10. Version bumped from `0.5.0` to `1.0.0` in `TinyOne/Cargo.toml`
 11. Git tag `v1.0.0` pushed; ABI stability formally declared in
     `docs/ffi/c-integration.md` and README

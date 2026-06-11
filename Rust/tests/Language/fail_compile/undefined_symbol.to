@@ -1,4 +1,0 @@
-# expect_error: Undefined variable
-
-let present = 1
-print missing + present

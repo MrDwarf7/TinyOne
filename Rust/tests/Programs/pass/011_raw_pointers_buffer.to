@@ -1,8 +1,0 @@
-let mem = buffer(16)
-let p = ptr(mem, 0)
-print len(mem)
-print unsafe write16(unsafe ptr_add(p, 2), 4660)
-print unsafe read8(unsafe ptr_add(p, 2))
-print unsafe read16(unsafe ptr_add(p, 2))
-print unsafe write32(unsafe ptr_add(p, 4), 16909060)
-print unsafe read32(unsafe ptr_add(p, 4))

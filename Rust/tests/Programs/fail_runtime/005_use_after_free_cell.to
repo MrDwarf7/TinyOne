@@ -1,3 +1,0 @@
-let c = alloc(1)
-let ignored = unsafe free(c)
-print load(c)

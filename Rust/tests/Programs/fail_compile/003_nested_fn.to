@@ -1,7 +1,0 @@
-fn outer() {
-  fn inner() {
-    return 1
-  }
-  return inner()
-}
-print outer()

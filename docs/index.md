@@ -1,8 +1,8 @@
-# TinyOne Documentation
+# TinyLang Documentation
 
 ## Language Users
 
-Writing TinyOne programs:
+Writing TinyLang programs:
 
 - [Syntax: Types](syntax/types.md) — int, string, array, struct, buffer, cell, pointer, null
 - [Syntax: Statements](syntax/statements.md) — let, if, while, fn, struct, import, and more
@@ -14,7 +14,7 @@ Writing TinyOne programs:
 
 ## Integrators and Embedders
 
-Embedding TinyOne in a host application:
+Embedding the TinyOne implementation in a host application:
 
 - [C Integration Guide](ffi/c-integration.md) — building, linking, entry points, ownership
 - [Rust API Reference](ffi/rust-api.md) — compile_source, run_source, JitCache, and more
@@ -24,7 +24,7 @@ Embedding TinyOne in a host application:
 
 ## Contributors
 
-Working on the TinyOne runtime:
+Working on the TinyOne runtime implementation:
 
 - [Architecture](architecture.md) — pipeline overview, module map, stage details, key invariants
 - [Bytecode Reference](bytecode.md) — opcode table, artifact format, verifier rules, JIT tier
@@ -49,7 +49,7 @@ Working on the TinyOne runtime:
 | [`bytecode.md`](bytecode.md) | Opcode table, artifact format, verifier rules, JIT adaptive tier |
 | [`cli.md`](cli.md) | CLI flags and workflow examples |
 | [`contributing.md`](contributing.md) | Build, test, adding language features, builtins, stdlib modules |
-| [`examples.md`](examples.md) | Runnable TinyOne programs by feature |
+| [`examples.md`](examples.md) | Runnable TinyLang programs by feature |
 | [`ffi/c-integration.md`](ffi/c-integration.md) | C embedding guide: build, link, entry points, ownership, threading |
 | [`ffi/index.md`](ffi/index.md) | FFI area navigation |
 | [`ffi/rust-api.md`](ffi/rust-api.md) | Rust crate public API: compile, run, JIT, artifacts, verification |
