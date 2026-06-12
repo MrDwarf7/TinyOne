@@ -1,0 +1,40 @@
+# expect_stdout:
+# u8
+# u16
+# u32
+# 255
+# 513
+# 42
+# 8
+# u32
+# end_expect_stdout
+
+let config = 7
+let mem = buffer(8)
+let base = ptr(mem, 0)
+
+unsafe {
+  write8(base, u8(255))
+  write16(ptr_add(base, 1), u16(513))
+  write32(ptr_add(base, 3), u32(16909060))
+  write8(ptr_add(ptr_add(base, 1), 2), u8(42))
+}
+
+fn byte_at_three() {
+  unsafe {
+    return read8(ptr_add(base, 3))
+  }
+}
+
+fn config_value() {
+  return config + 1
+}
+
+print type_of(u8(1))
+print type_of(u16(1))
+print type_of(u32(1))
+print unsafe read8(base)
+print unsafe read16(unsafe ptr_add(base, 1))
+print byte_at_three()
+print config_value()
+print type_of(unsafe read32(unsafe ptr_add(base, 3)))

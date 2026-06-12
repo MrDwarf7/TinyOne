@@ -1,0 +1,7 @@
+let a = [1]
+let p = ptr(a, 0)
+let q = ptr(a, 0)
+print is_null(null)
+print is_null(p)
+print ptr_eq(p, q)
+print ptr_ne(p, null)

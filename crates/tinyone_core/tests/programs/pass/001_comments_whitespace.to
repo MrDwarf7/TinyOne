@@ -1,0 +1,3 @@
+# Newlines are not statement terminators; whitespace only separates tokens.
+let x = 1 + 2
+print x

@@ -1,0 +1,6 @@
+let c = alloc(41)
+print load(c)
+print store(c, load(c) + 1)
+print load(c)
+let ignored = unsafe free(c)
+print ignored

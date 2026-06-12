@@ -1,0 +1,15 @@
+fn fact(n) {
+  let acc = 1
+  while n > 1 {
+    acc = acc * n
+    n = n - 1
+  }
+  return acc
+}
+
+fn implicit_zero() {
+}
+
+print fact(5)
+print fact(3)
+print implicit_zero()
