@@ -1,0 +1,22 @@
+[package]
+name = "tinyone_ralloc"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ralloc"
+path = "src/lib.rs"
+
+[features]
+c-staticlib = []
+
+[dependencies]
+
+[dev-dependencies]
+static_assertions = "1"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
