@@ -1,0 +1,13 @@
+# input: 7
+# input: seven
+# expect_stdout:
+# 8
+# seven
+# 5
+# end_expect_stdout
+
+let number = read_int()
+let word = read_str()
+print number + 1
+print word
+print len(word)
