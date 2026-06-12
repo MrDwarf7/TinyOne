@@ -6,9 +6,12 @@ edition = "2024"
 [lib]
 name = "ralloc"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
 
 [features]
-c-staticlib = []
+default = ["rlib"]
+rlib = []
+cdylib = []
 
 [dependencies]
 

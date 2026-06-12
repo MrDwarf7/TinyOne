@@ -207,7 +207,6 @@ fn check_step() -> Step {
                 "check",
                 "--manifest-path",
                 "crates/tinyone_ralloc/Cargo.toml",
-                "--workspace",
                 "--all-targets",
             ]),
         ],
@@ -224,7 +223,6 @@ fn test_step() -> Step {
                 "test",
                 "--manifest-path",
                 "crates/tinyone_ralloc/Cargo.toml",
-                "--workspace",
             ]),
         ],
     )
@@ -292,7 +290,6 @@ fn clippy_step() -> Step {
                 "clippy",
                 "--manifest-path",
                 "crates/tinyone_ralloc/Cargo.toml",
-                "--workspace",
                 "--all-targets",
                 "--",
                 "-D",
