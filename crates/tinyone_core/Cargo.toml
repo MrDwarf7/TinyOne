@@ -1,0 +1,33 @@
+[package]
+name = "tinylang"
+version = "0.6.0"
+edition = "2024"
+
+[features]
+default = []
+testing-hooks = []
+
+[lib]
+name = "tinyone"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "tinylang"
+path = "src/main.rs"
+
+[[bin]]
+name = "tinylang_bench"
+path = "src/bin/tinylang_bench.rs"
+
+[[test]]
+name = "language_suite"
+path = "tests/language_suite.rs"
+harness = false
+required-features = ["testing-hooks"]
+
+[dependencies]
+thiserror = "2"
+blake2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
