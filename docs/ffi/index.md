@@ -19,23 +19,23 @@ The generated C compatibility header is `tinylang.h`. It is generated from the
 Rust FFI source when `cbindgen` is available, while exported C symbols keep the
 existing `tinyone_*` names.
 
-Use the no-dependency drift check before changing `TinyOne/src/ffi.rs` or
+Use the no-dependency drift check before changing `crates/tinyone/src/ffi.rs` or
 `tinylang.h`:
 
 ```sh
-./scripts/check-abi-drift.sh
+./scripts/check_abi_drift.sh
 ```
 
 For review artifacts, emit a deterministic symbol manifest:
 
 ```sh
-python3 Tools/abi_manifest.py manifest
+python3 tools/abi_manifest.py manifest
 ```
 
 If `cbindgen` is installed, the same tool can attempt the planned shim header:
 
 ```sh
-python3 Tools/abi_manifest.py generate-header --output tinylang.h
+python3 tools/abi_manifest.py generate-header --output tinylang.h
 ```
 
 When `cbindgen` is not on `PATH`, generation fails with a clear message and the

@@ -11,19 +11,19 @@ tagged and the ABI is declared stable.
 
 ```sh
 # Debug (for development and testing)
-cargo build --manifest-path TinyOne/Cargo.toml
+cargo build --manifest-path crates/tinyone_core/Cargo.toml
 
 # Release (for embedding)
-cargo build --release --manifest-path TinyOne/Cargo.toml
+cargo build --release --manifest-path crates/tinyone_core/Cargo.toml
 ```
 
 Output locations:
 
 | Platform | Debug | Release |
 | --- | --- | --- |
-| Linux | `TinyOne/target/debug/libtinyone.so` | `TinyOne/target/release/libtinyone.so` |
-| macOS | `TinyOne/target/debug/libtinyone.dylib` | `TinyOne/target/release/libtinyone.dylib` |
-| Windows | `TinyOne/target/debug/tinyone.dll` | `TinyOne/target/release/tinyone.dll` |
+| Linux | `crates/tinyone_core/target/debug/libtinyone.so` | `crates/tinyone_core/target/release/libtinyone.so` |
+| macOS | `crates/tinyone_core/target/debug/libtinyone.dylib` | `crates/tinyone_core/target/release/libtinyone.dylib` |
+| Windows | `crates/tinyone_core/target/debug/tinyone.dll` | `crates/tinyone_core/target/release/tinyone.dll` |
 
 ## Linking
 
@@ -49,10 +49,10 @@ The committed generated C header for the current ABI is `tinylang.h`. It keeps
 exported symbols named `tinyone_*`; do not rename the C symbols as part of
 ordinary header work.
 
-Before changing `TinyOne/src/ffi.rs` or `tinylang.h`, run:
+Before changing `crates/tinyone/src/ffi.rs` or `tinylang.h`, run:
 
 ```sh
-./scripts/check-abi-drift.sh
+./scripts/check_abi_drift.sh
 ```
 
 That command uses only Python's standard library and compares exported
@@ -60,13 +60,13 @@ That command uses only Python's standard library and compares exported
 available for review:
 
 ```sh
-python3 Tools/abi_manifest.py manifest
+python3 tools/abi_manifest.py manifest
 ```
 
 Header generation is optional and requires a local `cbindgen` binary:
 
 ```sh
-python3 Tools/abi_manifest.py generate-header --output tinylang.h
+python3 tools/abi_manifest.py generate-header --output tinylang.h
 ```
 
 If `cbindgen` is missing, the tool reports that explicitly and still supports

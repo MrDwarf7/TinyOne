@@ -4,16 +4,37 @@
 
 - Rust toolchain with Cargo (stable, edition 2024)
 - A C compiler (`cc`) for the FFI smoke test
-- Python 3 for `Tools/hash.py` (optional; used for release manifests)
+- Python 3 for `tools/hash.py` (optional; used for release manifests)
+- **cargo-make** (`cargo install cargo-make`) for multi-step build workflows
+- **taplo** (`cargo install taplo-cli`) for TOML formatting (invoked by `cargo make format`)
+
+## Build System
+
+This repo uses three layers of build tooling:
+
+| Layer | Command | What it does |
+|-------|---------|--------------|
+| Raw cargo | `cargo build`, `cargo test`, `cargo check` | Operates on default workspace members only |
+| Cargo aliases | `cargo b`, `cargo t`, `cargo c`, `cargo f`, `cargo r` | Thin wrappers with `--workspace` / `--bin` flags |
+| xtask | `cargo xtask <task>`, `cargo gate` | Multi-step orchestration via `crates/xtask/` |
+| cargo-make | `cargo make <task>`, `makers <task>` | Complex workflows with dependency chains, formatting, dist |
+
+For day-to-day development, `cargo c` (check) and `cargo t` (test) are the fastest.
+For CI-style verification, use `cargo gate` (xtask) or `cargo make A` (makers).
+
+**Note:** The `cargo make format` task formats TOML files using `taplo` by default.
+If you don't have taplo installed and can't install it, set `NO_TAPLO=1` in your
+environment to skip the TOML formatting step — `cargo fmt` will still run for Rust files.
+Install taplo with `cargo install taplo-cli` for full formatting.
 
 ## Building
 
 ```sh
 # Build the CLI and library
-cargo build --manifest-path TinyOne/Cargo.toml
+cargo build --manifest-path crates/tinyone_core/Cargo.toml
 
 # Build the release binary
-cargo build --release --manifest-path TinyOne/Cargo.toml
+cargo build --release --manifest-path crates/tinyone_core/Cargo.toml
 ```
 
 ## Developer Harness
@@ -22,34 +43,34 @@ Use the repo-level xtask harness for local checks and CI gates:
 
 ```sh
 # Show the command plan without running it
-cargo run --manifest-path xtask/Cargo.toml -- release-gate --dry-run
+cargo run --manifest-path crates/xtask/Cargo.toml -- release-gate --dry-run
 
 # Run the full release gate
-cargo run --manifest-path xtask/Cargo.toml -- release-gate
+cargo run --manifest-path crates/xtask/Cargo.toml -- release-gate
 ```
 
 Supported tasks are `check`, `test`, `test-hooks`, `fmt-check`, `clippy`,
 `bench-smoke`, `tools-test`, and `release-gate`. The harness uses the active
-`TinyOne/Cargo.toml` and `Ralloc/Cargo.toml` manifests plus the Python tools
+`crates/tinyone_core/Cargo.toml` and `ralloc/Cargo.toml` manifests plus the Python tools
 under `Tools/`; it does not restore or require the removed root `stdlib/`.
 
 ## Running Tests
 
 ```sh
 # Standard test suite (122 tests, all should pass)
-cargo test --manifest-path TinyOne/Cargo.toml
+cargo test --manifest-path crates/tinyone_core/Cargo.toml
 
 # Language fixture suite (requires testing-hooks feature)
-cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks
+cargo test --manifest-path crates/tinyone_core/Cargo.toml --features testing-hooks
 
 # Single test suite
-cargo test --manifest-path TinyOne/Cargo.toml --test runtime_parity
-cargo test --manifest-path TinyOne/Cargo.toml --test abi_api_soundness
-cargo test --manifest-path TinyOne/Cargo.toml --test stdlib_parity
+cargo test --manifest-path crates/tinyone_core/Cargo.toml --test runtime_parity
+cargo test --manifest-path crates/tinyone_core/Cargo.toml --test abi_api_soundness
+cargo test --manifest-path crates/tinyone_core/Cargo.toml --test stdlib_parity
 
 # Run the C FFI smoke test (requires pre-built cdylib)
-cargo build --manifest-path TinyOne/Cargo.toml
-cargo test --manifest-path TinyOne/Cargo.toml --test abi_api_soundness \
+cargo build --manifest-path crates/tinyone_core/Cargo.toml
+cargo test --manifest-path crates/tinyone_core/Cargo.toml --test abi_api_soundness \
   c_header_ffi_smoke_covers_ownership_null_and_mode_contracts
 ```
 
@@ -57,32 +78,32 @@ cargo test --manifest-path TinyOne/Cargo.toml --test abi_api_soundness \
 
 ```sh
 # Format check (must pass before commit)
-cargo fmt --manifest-path TinyOne/Cargo.toml --all --check
+cargo fmt --manifest-path crates/tinyone_core/Cargo.toml --all --check
 
 # Apply formatting
-cargo fmt --manifest-path TinyOne/Cargo.toml --all
+cargo fmt --manifest-path crates/tinyone_core/Cargo.toml --all
 
 # Lints (must be clean)
-cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path crates/tinyone_core/Cargo.toml --all-targets -- -D warnings
 ```
 
 ## Benchmarks
 
 ```sh
 # Full benchmark suite
-cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
-./TinyOne/target/release/tinylang-bench
+cargo build --release --manifest-path crates/tinyone_core/Cargo.toml --bin tinylang_bench
+./crates/tinyone_core/target/release/tinylang_bench
 
 # Quick smoke run
-cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
-./TinyOne/target/release/tinylang-bench \
+cargo build --release --manifest-path crates/tinyone_core/Cargo.toml --bin tinylang_bench
+./crates/tinyone_core/target/release/tinylang_bench \
   --quick --repeats 1
 ```
 
 ## Source-Tree Integrity Check
 
 ```sh
-./Tools/hash.py --tree . \
+./tools/hash.py --tree . \
   --include .py --include .rs --include .toml --include .md \
   --format json
 ```
@@ -96,12 +117,12 @@ the VM/JIT. Follow this sequence:
 
 ### 1. Add a test fixture first
 
-Add a `.to` file to `TinyOne/tests/Language/pass/`, `fail_compile/`, or
+Add a `.to` file to `crates/tinyone/tests/language/pass/`, `fail_compile/`, or
 `fail_runtime/` depending on expected behavior. Run the language suite to
 confirm the fixture fails before your change:
 
 ```sh
-cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks 2>&1 | grep FAIL
+cargo test --manifest-path crates/tinyone_core/Cargo.toml --features testing-hooks 2>&1 | grep FAIL
 ```
 
 ### 2. Extend the lexer if needed (`syntax/lexer.rs`, `syntax/token.rs`)
@@ -149,9 +170,9 @@ validates them under the existing limits.
 ### 9. Run the full suite
 
 ```sh
-cargo test --manifest-path TinyOne/Cargo.toml
-cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks
-cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path crates/tinyone_core/Cargo.toml
+cargo test --manifest-path crates/tinyone_core/Cargo.toml --features testing-hooks
+cargo clippy --manifest-path crates/tinyone_core/Cargo.toml --all-targets -- -D warnings
 ```
 
 ---
@@ -217,7 +238,7 @@ explicitly restored later.
 
 ### Language fixture (`.to` file)
 
-Place fixtures under `TinyOne/tests/Language/`:
+Place fixtures under `crates/tinyone/tests/language/`:
 
 - `pass/` — programs expected to compile and print deterministic output.
 - `fail_compile/` — programs expected to fail at compile time.

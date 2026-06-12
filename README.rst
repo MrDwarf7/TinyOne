@@ -82,18 +82,18 @@ Build Instructions
 
 Build the Rust crate and CLI executable::
 
-    cargo build --manifest-path TinyOne/Cargo.toml
+    cargo build --manifest-path crates/tinyone_core/Cargo.toml
 
 Run the repo-local CI/release gate from the repository root::
 
-    scripts/ci-gate.sh
+    scripts/ci_gate.sh
 
 The gate runs the practical current checks and reports removed-stdlib fallout
 honestly instead of restoring or assuming a root ``stdlib/`` tree.
 
-This creates the debug executable at ``TinyOne/target/debug/tinylang``. Build
+This creates the debug executable at ``crates/tinyone_core/target/debug/tinylang``. Build
 with ``--release`` when you want the optimized executable at
-``TinyOne/target/release/tinylang``. The Windows executable name is
+``crates/tinyone_core/target/release/tinylang``. The Windows executable name is
 ``tinylang.exe``. The examples below assume the executable is available on
 ``PATH`` as ``tinylang``.
 
@@ -292,19 +292,19 @@ should not skip the TOP stage.
 Developer Tools
 ---------------
 
-``Tools/hash.py``
+``tools/hash.py``
     Stdlib-only file, tree, and manifest hashing tool for release manifests,
     audit checkpoints, and source-tree integrity checks.
 
-``Tools/loc.py``
+``tools/loc.py``
     Small line-count and audit utility for source and documentation files.
 
 Examples::
 
-    python3 Tools/hash.py README.rst
-    python3 Tools/hash.py --tree . --format json --list-files
-    python3 Tools/hash.py --check manifest.json
-    python3 Tools/loc.py --audit --docs --json
+    python3 tools/hash.py README.rst
+    python3 tools/hash.py --tree . --format json --list-files
+    python3 tools/hash.py --check manifest.json
+    python3 tools/loc.py --audit --docs --json
 
 Known Implementation Gaps
 -------------------------
@@ -318,7 +318,7 @@ Repository and documentation drift
 * The old README referred to ``Rust/`` and root ``stdlib/`` paths. The live Rust
   crate is currently under ``TinyOne/``.
 * Some historical planning documents still use ``Rust/Cargo.toml`` command
-  examples; active user-facing docs use ``TinyOne/Cargo.toml``.
+  examples; active user-facing docs use ``crates/tinyone_core/Cargo.toml``.
 * Some tests still assume a root ``stdlib/tinyone.json`` manifest. That root
   ``stdlib/`` tree is intentionally absent in the current checkout while the
   standard-library surface moves into the runtime/system layer.
@@ -333,10 +333,10 @@ Repository and documentation drift
 Test and verification gaps
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-* ``cargo test --manifest-path TinyOne/Cargo.toml`` currently fails in
+* ``cargo test --manifest-path crates/tinyone_core/Cargo.toml`` currently fails in
   ``stdlib_modules_compile_via_manifest_import`` because ``stdlib/tinyone.json``
   is missing.
-* ``cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks``
+* ``cargo test --manifest-path crates/tinyone_core/Cargo.toml --features testing-hooks``
   currently has testing-hook type drift: the test facade derives ``Eq`` for a
   structure containing ``Vec<RuntimeValue>`` while ``RuntimeValue`` is only
   ``PartialEq``, and the facade still has ``Program``/``Arc<Program>`` mismatch
@@ -383,17 +383,17 @@ Tests and Benchmarks
 
 Useful commands::
 
-    cargo check --manifest-path TinyOne/Cargo.toml
-    cargo test --manifest-path TinyOne/Cargo.toml
-    cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks
-    cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
-    ./TinyOne/target/release/tinylang-bench
-    cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
-    ./TinyOne/target/release/tinylang-bench --quick --repeats 1
+    cargo check --manifest-path crates/tinyone_core/Cargo.toml
+    cargo test --manifest-path crates/tinyone_core/Cargo.toml
+    cargo test --manifest-path crates/tinyone_core/Cargo.toml --features testing-hooks
+    cargo build --release --manifest-path crates/tinyone_core/Cargo.toml --bin tinylang_bench
+    ./crates/tinyone_core/target/release/tinylang_bench
+    cargo build --release --manifest-path crates/tinyone_core/Cargo.toml --bin tinylang_bench
+    ./crates/tinyone_core/target/release/tinylang_bench --quick --repeats 1
 
 Current state:
 
-* ``cargo check --manifest-path TinyOne/Cargo.toml`` passes, but with warnings.
+* ``cargo check --manifest-path crates/tinyone_core/Cargo.toml`` passes, but with warnings.
 * The default test suite is not clean because of the missing root stdlib
   manifest.
 * The feature-gated language fixture suite needs testing-hook repairs before it
