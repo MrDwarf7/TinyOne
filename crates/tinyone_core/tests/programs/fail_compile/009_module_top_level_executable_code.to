@@ -1,0 +1,3 @@
+# Use this as an imported module; it should fail because imported modules may not contain top-level executable code.
+export fn ok() { return 1 }
+print 1

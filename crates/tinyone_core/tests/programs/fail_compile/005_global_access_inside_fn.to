@@ -1,0 +1,8 @@
+# expect_error: Cannot assign to top-level variable
+
+let g = 9
+fn write_global() {
+  g = 10
+  return g
+}
+print write_global()
