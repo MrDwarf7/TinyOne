@@ -241,6 +241,44 @@ print p.x   # 3
 
 ---
 
+## `enum` — Enum Declaration
+
+```
+enum Name { Variant, Variant(field1, field2), ... }
+```
+
+Declares an enum type at the top level, with unit variants (no fields) and/or
+variants carrying named fields. Only valid at top level, like `struct`; enum
+declarations do not currently support cross-module export.
+
+Construct a value with `EnumName.VariantName(args...)`, matching declared
+field order. Every enum value exposes a read-only `.tag` field — the
+variant's 0-based position within the enum's declaration — in addition to
+its own named fields. A field literally named `tag` is rejected at compile
+time (`Enum variant field "tag" is reserved`) since it would collide with
+this virtual field.
+
+Printing an enum value renders `EnumName.VariantName` for a unit variant, or
+`EnumName.VariantName{field: value, ...}` when it carries fields.
+`type_of(value)` returns `"Enum"`.
+
+```tinyone
+enum Maybe {
+  None,
+  Some(value)
+}
+
+let missing = Maybe.None()
+let present = Maybe.Some(42)
+print missing        # Maybe.None
+print missing.tag    # 0
+print present         # Maybe.Some{value: 42}
+print present.tag    # 1
+print present.value  # 42
+```
+
+---
+
 ## `fn` — Function Declaration
 
 ```

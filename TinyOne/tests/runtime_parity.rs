@@ -61,6 +61,7 @@ fn minimal_program(code: Vec<Instr>) -> Program {
         structs: Vec::new(),
         fields: Vec::new(),
         modules: Vec::new(),
+        enum_variants: Vec::new(),
     }
 }
 
@@ -1103,7 +1104,7 @@ fn all_43_runtime_value_variants_are_representable() {
     let _u16       = RuntimeValue::U16(0u16);
     let _u32       = RuntimeValue::U32(0u32);
     let _u64       = RuntimeValue::U64(0u64);
-    let _bf16      = RuntimeValue::Bf16(0u16);
+    let _fp8       = RuntimeValue::Float { kind: TypeKind::Fp8, bits: 0.0 };
     let _fp16      = RuntimeValue::Float { kind: TypeKind::Fp16, bits: 0.0 };
     let _fp32      = RuntimeValue::Float { kind: TypeKind::Fp32, bits: 0.0 };
     let _fp64      = RuntimeValue::Float { kind: TypeKind::Fp64, bits: 0.0 };
@@ -1128,7 +1129,7 @@ fn type_kind_from_runtime_value_round_trips() {
         (RuntimeValue::U16(0),                                  TypeKind::U16),
         (RuntimeValue::U32(0),                                  TypeKind::U32),
         (RuntimeValue::U64(0),                                  TypeKind::U64),
-        (RuntimeValue::Bf16(0),                                 TypeKind::Bf16),
+        (RuntimeValue::Float { kind: TypeKind::Fp8, bits: 0.0 },  TypeKind::Fp8),
         (RuntimeValue::Float { kind: TypeKind::Fp16, bits: 0.0 }, TypeKind::Fp16),
         (RuntimeValue::Float { kind: TypeKind::Fp32, bits: 0.0 }, TypeKind::Fp32),
         (RuntimeValue::Float { kind: TypeKind::Fp64, bits: 0.0 }, TypeKind::Fp64),
@@ -1146,4 +1147,31 @@ fn type_kind_from_runtime_value_round_trips() {
             "from_runtime_value({value:?}) should return {expected_kind:?}"
         );
     }
+}
+
+#[test]
+fn float_precision_casts_round_and_report_correct_type_of() {
+    let source = r#"
+    let a = fp32(1.0)
+    let b = fp32(2.0)
+    print a + b
+    print type_of(a)
+
+    let c = fp8(1.0625)
+    print c
+    print type_of(c)
+
+    let d = fp16(70000.0)
+    print d
+    print type_of(d)
+
+    let e = fp8(1.0) + fp32(0.5)
+    print e
+    print type_of(e)
+    "#;
+
+    assert_backends_match(
+        source,
+        "3.0\nfp32\n1.125\nfp8\n65504.0\nfp16\n1.5\nfp32\n",
+    );
 }

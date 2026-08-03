@@ -476,10 +476,10 @@ Returns the runtime type name of the provided `value`.
 | :--- | :--- | :--- |
 | **Integers (Signed)** | `"i8"`, `"i16"`, `"i32"`, `"i64"` | `Value::I8`, `I16`, `I32`, `I64` |
 | **Integers (Unsigned)** | `"u8"`, `"u16"`, `"u32"`, `"u64"` | `Value::U8`, `U16`, `U32`, `U64` |
-| **Floats** | `"bf16"`, `"fp16"`, `"fp32"`, `"fp64"` | `Value::Bf16`, `Value::Float{kind}` |
+| **Floats** | `"fp8"`, `"fp16"`, `"fp32"`, `"fp64"` | `Value::Float{kind}` |
 | **Primitives & Logic** | `"bool"`, `"String"`, `"Null"` | `Value::Bool`, `Value::String`, `Value::Null` |
 | **Collections & Memory** | `"Vec"`, `"Buffer"`, `"Alloc"`, `"Map"` | `HeapData::Array` (Maps to `TypeKind::Vec`), `Buffer`, etc. |
-| **Structures & Data** | `"Struct"`, `"Result"`, `"Option"` | `Value::Struct` (with reserved `type_name`) |
+| **Structures & Data** | `"Struct"`, `"Enum"`, `"Result"`, `"Option"` | `Value::Struct` (with reserved `type_name`), `HeapData::Enum` |
 | **Execution & Concurrency**| `"Function"`, `"Mutex"`, `"Atomic"`, `"Thread"` | `Value::Function`, `HeapData` variants |
 | **Low-Level / System** | `"Pointer"`, `"Reference"`, `"Phantom"`, `"Zst"`, `"Unsafe"` | `Value::Pointer`, `Value::Reference`, `Phantom`, `Zst`, `Unsafe` |
 
@@ -492,6 +492,17 @@ Returns the integer ID for a type name string.
 #### `i64(value)`, `u8(value)`, `u16(value)`, `u32(value) → int`
 Converts an integer into the requested runtime width. Unsigned conversions trap
 with `Runtime.Memory_Overflow` when the value is negative or too large.
+
+#### `fp8(value)`, `fp16(value)`, `fp32(value)`, `fp64(value) → float`
+Converts an int or float `value` to the requested float precision, rounding
+to the nearest representable value in that format (overflow saturates to the
+format's largest finite magnitude rather than producing an infinity — see
+`docs/bytecode.md`'s `PUSH_FLOAT` notes for the exact formats). This is the
+only way to produce a non-`fp64` float — bare float literals (`1.5`) are
+always `fp64`, and `let x: fp32 = ...` type annotations are decorative (see
+`docs/syntax/statements.md`'s `let` section) like every other type
+annotation in TinyLang. Arithmetic (`+ - * /`) between mixed float
+precisions rounds the result to the wider operand's precision.
 
 #### `smallest_fit(value) → string`
 Returns the smallest integer type name that can represent `value`; non-negative

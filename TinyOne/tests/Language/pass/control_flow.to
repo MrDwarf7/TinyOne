@@ -1,6 +1,6 @@
 # expect_stdout:
 # 19
-# 1
+# true
 # end_expect_stdout
 
 let i = 0

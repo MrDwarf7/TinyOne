@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::{Program, Result, RuntimeValue, TinyHeapStats, internal_testing};
 
@@ -21,7 +22,7 @@ pub struct TestProgramInspection {
     pub opcode_counts: BTreeMap<String, usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TestBackendRun {
     pub mode: &'static str,
     pub stdout: String,
@@ -38,11 +39,11 @@ pub struct TestJitInspection {
     pub op_count: usize,
 }
 
-pub fn compile_fixture(path: impl AsRef<Path>) -> Result<Program> {
+pub fn compile_fixture(path: impl AsRef<Path>) -> Result<Arc<Program>> {
     internal_testing::compile_fixture(path)
 }
 
-pub fn compile_source_fixture(source: &str, filename: &str) -> Result<Program> {
+pub fn compile_source_fixture(source: &str, filename: &str) -> Result<Arc<Program>> {
     internal_testing::compile_source_fixture(source, filename)
 }
 
@@ -55,7 +56,7 @@ pub fn inspect_jit(program: &Program) -> TestJitInspection {
 }
 
 pub fn run_backend(
-    program: &Program,
+    program: Arc<Program>,
     mode: &'static str,
     inputs: Vec<String>,
 ) -> Result<TestBackendRun> {
@@ -63,7 +64,7 @@ pub fn run_backend(
 }
 
 pub fn assert_backends_match(
-    program: &Program,
+    program: Arc<Program>,
     inputs: &[String],
 ) -> Result<(TestBackendRun, TestBackendRun)> {
     let (vm, jit) = internal_testing::assert_backends_match(program, inputs)?;
@@ -71,7 +72,7 @@ pub fn assert_backends_match(
 }
 
 pub fn write_backend_report(
-    program: &Program,
+    program: Arc<Program>,
     mode: &'static str,
     inputs: Vec<String>,
     out: &mut dyn std::io::Write,

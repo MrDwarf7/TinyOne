@@ -175,6 +175,11 @@ impl Program {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
+            // Enum declarations do not round-trip through the JSON artifact
+            // format yet; artifacts containing `Op::MakeEnum` will fail
+            // verification (unknown variant index) rather than execute
+            // incorrectly. Source-file compilation is unaffected.
+            enum_variants: Vec::new(),
         };
         BytecodeVerifier::verify(&program)?;
         Ok(program)

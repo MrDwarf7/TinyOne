@@ -1,0 +1,27 @@
+# expect_stdout:
+# 3.0
+# fp32
+# 1.125
+# fp8
+# 65504.0
+# fp16
+# 1.5
+# fp32
+# end_expect_stdout
+
+let a = fp32(1.0)
+let b = fp32(2.0)
+print a + b
+print type_of(a)
+
+let c = fp8(1.0625)
+print c
+print type_of(c)
+
+let d = fp16(70000.0)
+print d
+print type_of(d)
+
+let e = fp8(1.0) + fp32(0.5)
+print e
+print type_of(e)

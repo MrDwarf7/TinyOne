@@ -27,8 +27,8 @@ pub use api::{
 pub use artifact_io::{load_artifact, write_artifact};
 pub(crate) use builtins::{BUILTINS, builtin_index};
 pub use bytecode::{
-    BytecodeVerifier, Function, Instr, ModuleDef, ModuleImportDef, Op, PeepholeOptimizer, Program,
-    StructDef, VerifiedProgram,
+    BytecodeVerifier, EnumVariantDef, Function, Instr, ModuleDef, ModuleImportDef, Op,
+    PeepholeOptimizer, Program, StructDef, VerifiedProgram,
 };
 pub(crate) use compiler::{
     Compiler, CompilerSharedState, ModuleInfo, Resolver, SharedState, SymbolTable,
@@ -49,13 +49,14 @@ pub(crate) use runtime::{
     integer_value_from_kind, runtime_cast_int, runtime_cast_pointer, runtime_compare,
     runtime_compare_int, runtime_get_field, runtime_index, runtime_integer_kind,
     runtime_integer_value,
-    runtime_is_false, runtime_make_array, runtime_make_buffer, runtime_make_field_pointer,
+    runtime_is_false, runtime_make_array, runtime_make_buffer, runtime_make_enum,
+    runtime_make_field_pointer,
     runtime_make_pointer, runtime_make_struct, runtime_mul, runtime_mul_int, runtime_neg,
     runtime_null, runtime_pointer_add, runtime_pointer_address, runtime_pointer_at,
     runtime_pointer_base, runtime_pointer_eq, runtime_pointer_field, runtime_pointer_kind,
     runtime_pointer_load, runtime_pointer_offset, runtime_pointer_store, runtime_pointer_type,
     runtime_print, runtime_read_uint, runtime_set_field, runtime_set_index, runtime_sub,
-    runtime_sub_int, runtime_write_uint, validate_pointer_base,
+    runtime_sub_int, runtime_write_uint, round_to_kind, validate_pointer_base,
 };
 pub use runtime::{
     HeapRef, RawPointer, RuntimeValue, TinyHeapStats, TinyMemory, TinyRunReport, TypeKind, VM,

@@ -38,7 +38,7 @@ pub(crate) enum HeapData {
 
     // Algebraic
     Sum         { tag: u32, payload: Option<Box<Value>> },
-    Enum        { variant: u32 },
+    Enum        { variant: String, tag: u32, fields: Vec<(String, Value)> },
     TaggedUnion { tag: u32, payload: Box<Value> },
 
     // Higher-level
@@ -460,8 +460,17 @@ impl TinyHeap {
         self.alloc_data(HeapData::Sum { tag, payload: payload.map(Box::new) })
     }
 
-    pub(crate) fn alloc_enum(&mut self, variant: u32) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Enum { variant })
+    pub(crate) fn alloc_enum(
+        &mut self,
+        type_name: impl Into<String>,
+        variant: impl Into<String>,
+        tag: u32,
+        fields: Vec<(String, Value)>,
+    ) -> Result<HeapRef> {
+        self.alloc(HeapObject {
+            data: HeapData::Enum { variant: variant.into(), tag, fields },
+            type_name: type_name.into(),
+        })
     }
 
     pub(crate) fn alloc_tagged_union(&mut self, tag: u32, payload: Value) -> Result<HeapRef> {
@@ -628,7 +637,15 @@ pub(crate) fn heap_object_bytes(object: &HeapObject) -> usize {
         HeapData::Alloc { data, .. }     => data.len(),
         HeapData::Closure { captures, .. } => captures.len() * VALUE_BYTES,
         HeapData::Sum { .. }             => VALUE_BYTES * 2,
-        HeapData::Enum { .. }            => std::mem::size_of::<u32>(),
+        HeapData::Enum { variant, fields, .. } => {
+            object.type_name.len()
+                + variant.len()
+                + std::mem::size_of::<u32>()
+                + fields
+                    .iter()
+                    .map(|(name, _)| name.len() + VALUE_BYTES)
+                    .sum::<usize>()
+        }
         HeapData::TaggedUnion { .. }     => VALUE_BYTES + std::mem::size_of::<u32>(),
         HeapData::Result { .. }          => VALUE_BYTES + 1,
         HeapData::Option { value, .. }   => if value.is_some() { VALUE_BYTES } else { 1 },
@@ -705,7 +722,7 @@ mod tests {
         let r = heap.alloc_sum(0u32, None).unwrap();
         assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "sum");
 
-        let r = heap.alloc_enum(0u32).unwrap();
+        let r = heap.alloc_enum("Test", "Variant", 0u32, vec![]).unwrap();
         assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "enum");
 
         let r = heap.alloc_tagged_union(0u32, Value::Unit).unwrap();

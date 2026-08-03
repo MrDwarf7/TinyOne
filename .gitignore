@@ -1,0 +1,20 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup/temp files
+*.bak
+*.tmp
+*~
+
+# Local-only docs
+docs/superpowers/*

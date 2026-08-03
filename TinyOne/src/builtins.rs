@@ -714,6 +714,33 @@ pub(crate) const BUILTINS: &[BuiltinDef] = &[
         max_args: 1,
         requires_unsafe: false,
     },
+    // Float precision casts: fp8 (E4M3), fp16 (IEEE-754 half), fp32
+    // (native), fp64 (identity for floats). The only way to produce a
+    // non-Fp64 float in TinyLang source.
+    BuiltinDef {
+        name: "fp8",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "fp16",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "fp32",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "fp64",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
 ];
 
 pub(crate) fn builtin_index(name: &str) -> Option<usize> {

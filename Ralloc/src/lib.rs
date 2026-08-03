@@ -13,6 +13,8 @@ mod page;
 mod ralloc;
 mod region;
 mod sync;
+mod vm;
 
 pub use buffer::{RallocBox, RallocBuffer, RallocError};
 pub use ralloc::{ralloc_aligned_alloc, ralloc_calloc, ralloc_free, ralloc_malloc, ralloc_realloc};
+pub use vm::{VmAllocation, VmAllocator};

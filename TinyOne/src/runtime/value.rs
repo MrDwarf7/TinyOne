@@ -49,7 +49,6 @@ pub enum RuntimeValue {
     U64(u64),
 
     // Floats
-    Bf16(u16),
     Float { kind: TypeKind, bits: f64 },
 
     // Scalar

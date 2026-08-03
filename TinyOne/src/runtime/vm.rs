@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use crate::{
     BytecodeVerifier, Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory,
-    TinyOneError, TinyRuntimeContext, Value, checked_div, checked_non_negative_usize, pop_args,
+    TinyOneError, TinyRuntimeContext, TypeKind, Value, checked_div, checked_non_negative_usize,
+    pop_args,
     runtime_add, runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index,
-    runtime_is_false, runtime_make_array, runtime_make_struct, runtime_mul, runtime_neg,
-    runtime_null, runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
+    runtime_is_false, runtime_make_array, runtime_make_enum, runtime_make_struct, runtime_mul,
+    runtime_neg, runtime_null, runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +138,11 @@ impl VM {
             match instr.op {
                 Op::PushInt => stack.push(Value::I64(instr.arg)),
                 Op::PushNull => stack.push(runtime_null()),
+                Op::PushBool => stack.push(Value::Bool(instr.arg != 0)),
+                Op::PushFloat => stack.push(Value::Float {
+                    kind: TypeKind::Fp64,
+                    bits: f64::from_bits(instr.arg as u64),
+                }),
                 Op::Pop => {
                     vm_pop(&mut stack)?;
                 }
@@ -246,6 +252,22 @@ impl VM {
                     let field_index = checked_non_negative_usize(instr.arg, "field index")?;
                     let field = lookup_field(&self.program.fields, field_index)?;
                     runtime_set_field(&mut self.context, target, field, value)?;
+                }
+                Op::MakeEnum => {
+                    let field_count = checked_non_negative_usize(instr.arg2, "enum variant arity")?;
+                    let values = pop_args(&mut stack, field_count)?;
+                    let variant_id = checked_non_negative_usize(instr.arg, "enum variant index")?;
+                    let variant_def = self.program.enum_variants.get(variant_id).ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid enum variant index {variant_id}"))
+                    })?;
+                    stack.push(runtime_make_enum(
+                        &mut self.context,
+                        &variant_def.enum_name,
+                        &variant_def.variant_name,
+                        variant_def.tag,
+                        &variant_def.fields,
+                        values,
+                    )?);
                 }
                 Op::Builtin => {
                     let builtin_index = checked_non_negative_usize(instr.arg, "builtin index")?;

@@ -21,7 +21,7 @@ instruction is:
 
 ## Opcodes
 
-There are 31 opcodes. Opcode ordinals are serialized into artifacts and are
+There are 34 opcodes. Opcode ordinals are serialized into artifacts and are
 part of program fingerprints. Ordinals 1-29 are the frozen Phase-1 range;
 ordinals 30+ are Phase-2 extensions.
 
@@ -36,12 +36,12 @@ ordinals 30+ are Phase-2 extensions.
 | 7 | `DIV` | — | — | `a b → a//b` | Floor division; runtime error on divide-by-zero |
 | 8 | `NEG` | — | — | `a → -a` | Unary integer negation |
 | 9 | `PRINT` | — | — | `value →` | Print value to stdout, with newline |
-| 10 | `LT` | — | — | `a b → 0\|1` | Less-than comparison |
-| 11 | `LTE` | — | — | `a b → 0\|1` | Less-than-or-equal |
-| 12 | `GT` | — | — | `a b → 0\|1` | Greater-than |
-| 13 | `GTE` | — | — | `a b → 0\|1` | Greater-than-or-equal |
-| 14 | `EQ` | — | — | `a b → 0\|1` | Equality (integers only) |
-| 15 | `NE` | — | — | `a b → 0\|1` | Not-equal (integers only) |
+| 10 | `LT` | — | — | `a b → bool` | Less-than comparison |
+| 11 | `LTE` | — | — | `a b → bool` | Less-than-or-equal |
+| 12 | `GT` | — | — | `a b → bool` | Greater-than |
+| 13 | `GTE` | — | — | `a b → bool` | Greater-than-or-equal |
+| 14 | `EQ` | — | — | `a b → bool` | Equality |
+| 15 | `NE` | — | — | `a b → bool` | Not-equal |
 | 16 | `JUMP` | target pc | — | — | Unconditional jump to `arg` |
 | 17 | `JUMP_IF_ZERO` | target pc | — | `cond →` | Jump to `arg` if top is zero; pop condition |
 | 18 | `CALL` | function index | arg count | `args… → ret` | Call function `arg`; `arg2` args popped from stack |
@@ -58,8 +58,36 @@ ordinals 30+ are Phase-2 extensions.
 | 29 | `PUSH_NULL` | — | — | `→ null` | Push the null raw pointer |
 | 30 | `POP` | — | — | `value →` | Discard expression-statement result |
 | 31 | `LOAD_GLOBAL` | slot index | — | `→ value` | Load from the main top-level frame |
+| 32 | `MAKE_ENUM` | enum variant index | field count | `fields… → enum` | Construct heap enum value |
+| 33 | `PUSH_BOOL` | 0 or 1 | — | `→ bool` | Push a literal `true`/`false` |
+| 34 | `PUSH_FLOAT` | `f64` bit pattern (as `i64`) | — | `→ float` | Push a literal float (always `fp64`) |
 
 ### Notes on specific opcodes
+
+**`LT` / `LTE` / `GT` / `GTE` / `EQ` / `NE`** — all six comparison opcodes
+produce a `Value::Bool`, printed as `true`/`false` (not an integer `0`/`1`).
+The bytecode-level peephole optimizer's constant folder must match this
+exactly — folding `PUSH_INT a, PUSH_INT b, LT` (etc.) into `PUSH_BOOL`, not
+`PUSH_INT` — otherwise a compile-time-constant comparison and the identical
+comparison through variables would print differently.
+
+**`PUSH_FLOAT`** — `arg` is the literal's `f64` bit pattern from
+`f64::to_bits()`, reinterpreted as `i64` (matching the raw-bits convention
+already used for floats crossing the JSON artifact format). There is no
+float constant pool. Float literals are always `TypeKind::Fp64` — there is
+no literal syntax for `fp8`/`fp16`/`fp32`; the only way to produce one is the
+matching cast builtin (`fp8(x)`/`fp16(x)`/`fp32(x)`, see `docs/stdlib.md`),
+which rounds to that format's precision (`src/runtime/minifloat.rs`: `fp32`
+uses Rust's native `f32` round-trip; `fp16` is IEEE-754 binary16; `fp8` is
+E4M3 — 1 sign + 4 exponent + 3 mantissa bits, bias 7, OCP/Nvidia-style,
+saturating to ±448 on overflow rather than producing an infinity). Storage
+is always a full `f64` (`Value::Float { kind, bits }`) regardless of `kind`
+— precision is enforced by rounding on cast and after every arithmetic op,
+not by bit-packed width. `ADD`/`SUB`/`MUL`/`DIV`/`NEG` all promote an integer
+operand to `f64` when paired with a float operand, and round the result to
+the wider operand's precision when mixing float kinds; division by zero is
+a runtime error for floats too (not IEEE-754 infinity/NaN), matching
+integer division's behavior.
 
 **`CALL`** — `arg` is a zero-based index into `program.functions`. The callee's
 frame is initialized with the top `arg2` values popped from the caller's stack.
@@ -80,7 +108,20 @@ group is stable and must not be reordered without a bytecode version bump.
 `arg2 == structs[arg].fields.len()`.
 
 **`GET_FIELD` / `SET_FIELD`** — `arg` is an index into `program.fields`, the
-global field-name intern table shared across all structs.
+global field-name intern table shared across all structs and enum variants.
+For enum values, the field name `"tag"` is a virtual field (the variant's
+0-based declaration index) — it is never stored among the variant's own
+fields, and `SET_FIELD` rejects writes to it.
+
+**`MAKE_ENUM`** — `arg` indexes into `program.enum_variants`, a flat,
+program-global table where each entry denormalizes its enum name, variant
+name, 0-based tag, and field names; `arg2` is the number of fields (and
+values to pop). The compiler always sets
+`arg2 == enum_variants[arg].fields.len()`. Enum declarations are file-local
+(no cross-module export) and do not currently round-trip through the JSON
+artifact format — `Program::from_artifact` always sets `enum_variants` to
+empty, so artifacts containing `MAKE_ENUM` fail verification rather than
+running incorrectly.
 
 **`JUMP` / `JUMP_IF_ZERO`** — targets are absolute instruction indices, not
 relative offsets. The verifier bounds-checks all targets before execution.
@@ -99,6 +140,7 @@ Program {
   structs:    Vec<StructDef>    — struct definitions (name + field names)
   fields:     Vec<String>       — global field-name intern table
   modules:    Vec<ModuleDef>    — import/export metadata
+  enum_variants: Vec<EnumVariantDef> — flat enum variant table (enum name, variant name, tag, field names)
 }
 
 Function {
@@ -274,7 +316,7 @@ constant-only sequences within straight-line (branch-free) code:
 | `PUSH_INT a, PUSH_INT b, MUL` | `PUSH_INT (a*b)` |
 | `PUSH_INT a, PUSH_INT b, DIV` | `PUSH_INT (a//b)` (if b≠0) |
 | `PUSH_INT a, NEG` | `PUSH_INT (-a)` |
-| `PUSH_INT a, PUSH_INT b, LT/LTE/GT/GTE/EQ/NE` | `PUSH_INT (0 or 1)` |
+| `PUSH_INT a, PUSH_INT b, LT/LTE/GT/GTE/EQ/NE` | `PUSH_BOOL (true or false)` |
 
 Folding stops at any branch or non-constant opcode. The optimizer does not
 reorder or eliminate instructions and does not analyze across basic block

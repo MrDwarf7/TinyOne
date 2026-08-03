@@ -33,6 +33,9 @@ pub enum Op {
     PushNull,
     Pop,
     LoadGlobal,
+    MakeEnum,
+    PushBool,
+    PushFloat,
 }
 
 impl Op {
@@ -69,6 +72,9 @@ impl Op {
             Op::PushNull => "PUSH_NULL",
             Op::Pop => "POP",
             Op::LoadGlobal => "LOAD_GLOBAL",
+            Op::MakeEnum => "MAKE_ENUM",
+            Op::PushBool => "PUSH_BOOL",
+            Op::PushFloat => "PUSH_FLOAT",
         }
     }
 
@@ -105,6 +111,9 @@ impl Op {
             "PUSH_NULL" => Op::PushNull,
             "POP" => Op::Pop,
             "LOAD_GLOBAL" => Op::LoadGlobal,
+            "MAKE_ENUM" => Op::MakeEnum,
+            "PUSH_BOOL" => Op::PushBool,
+            "PUSH_FLOAT" => Op::PushFloat,
             _ => return Err(TinyOneError::compile(format!("Unknown opcode {name:?}"))),
         })
     }
@@ -142,6 +151,9 @@ impl Op {
             Op::PushNull => 29,
             Op::Pop => 30,
             Op::LoadGlobal => 31,
+            Op::MakeEnum => 32,
+            Op::PushBool => 33,
+            Op::PushFloat => 34,
         }
     }
 }

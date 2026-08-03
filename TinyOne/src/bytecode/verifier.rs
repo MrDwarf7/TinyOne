@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::{BUILTINS, Function, Instr, Op, Program, Result, StructDef, TinyOneError};
+use crate::{
+    BUILTINS, EnumVariantDef, Function, Instr, Op, Program, Result, StructDef, TinyOneError,
+};
 
 const MAX_VERIFIER_STEPS: usize = 10_000_000;
 const MAX_STACK_DEPTH: i64 = 65_536;
@@ -12,6 +14,8 @@ const MAX_VERIFIER_STRINGS: usize = 65_536;
 const MAX_VERIFIER_FIELDS: usize = 65_536;
 const MAX_VERIFIER_STRUCTS: usize = 4_096;
 const MAX_VERIFIER_STRUCT_FIELDS: usize = 256;
+const MAX_VERIFIER_ENUM_VARIANTS: usize = 4_096;
+const MAX_VERIFIER_ENUM_VARIANT_FIELDS: usize = 256;
 const MAX_VERIFIER_MODULES: usize = 256;
 const MAX_VERIFIER_MODULE_IMPORTS: usize = 4_096;
 const MAX_VERIFIER_MODULE_EXPORTS: usize = 4_096;
@@ -24,6 +28,7 @@ struct VerificationContext<'a> {
     strings: &'a [String],
     structs: &'a [StructDef],
     fields: &'a [String],
+    enum_variants: &'a [EnumVariantDef],
     global_slot_count: usize,
 }
 
@@ -35,6 +40,7 @@ impl BytecodeVerifier {
             strings: &program.strings,
             structs: &program.structs,
             fields: &program.fields,
+            enum_variants: &program.enum_variants,
             global_slot_count: program.slot_count,
         };
         Self::verify_chunk(
@@ -96,6 +102,21 @@ impl BytecodeVerifier {
                 &format!("struct {:?} fields", item.name),
                 &item.fields,
                 MAX_VERIFIER_STRUCT_FIELDS,
+            )?;
+        }
+        reject_over_limit(
+            "enum variant count",
+            program.enum_variants.len(),
+            MAX_VERIFIER_ENUM_VARIANTS,
+        )?;
+        for item in &program.enum_variants {
+            verify_string_list(
+                &format!(
+                    "enum {:?} variant {:?} fields",
+                    item.enum_name, item.variant_name
+                ),
+                &item.fields,
+                MAX_VERIFIER_ENUM_VARIANT_FIELDS,
             )?;
         }
         for module in &program.modules {
@@ -260,6 +281,35 @@ impl BytecodeVerifier {
                         return Err(TinyOneError::compile(format!(
                             "Struct {:?} expects {expected} field value(s), got {arg2} at instruction {pc} in {chunk_name}",
                             struct_def.name
+                        )));
+                    }
+                    visit(
+                        &mut seen,
+                        &mut todo,
+                        code,
+                        next_pc(pc)?,
+                        next_depth_after_popping_to_one(pc, depth, arg2, chunk_name)?,
+                        pc,
+                        chunk_name,
+                    )?;
+                }
+                Op::MakeEnum => {
+                    let variant_index = checked_index(arg, context.enum_variants.len()).map_err(|_| {
+                        TinyOneError::compile(format!(
+                            "Verifier: invalid enum variant index {arg} at instruction {pc} in {chunk_name}"
+                        ))
+                    })?;
+                    let field_count = usize::try_from(arg2).map_err(|_| {
+                        TinyOneError::compile(format!(
+                            "Verifier: invalid enum variant arity {arg2} at instruction {pc} in {chunk_name}"
+                        ))
+                    })?;
+                    let variant_def = &context.enum_variants[variant_index];
+                    let expected = variant_def.fields.len();
+                    if field_count != expected {
+                        return Err(TinyOneError::compile(format!(
+                            "Enum variant {:?}.{:?} expects {expected} field value(s), got {arg2} at instruction {pc} in {chunk_name}",
+                            variant_def.enum_name, variant_def.variant_name
                         )));
                     }
                     visit(
@@ -542,7 +592,8 @@ fn verify_string_list(name: &str, values: &[String], max_count: usize) -> Result
 
 fn stack_effect(op: Op) -> Option<i64> {
     Some(match op {
-        Op::PushInt | Op::PushString | Op::PushNull | Op::Load | Op::LoadGlobal => 1,
+        Op::PushInt | Op::PushString | Op::PushNull | Op::PushBool | Op::PushFloat | Op::Load
+        | Op::LoadGlobal => 1,
         Op::Store | Op::Pop => -1,
         Op::Add
         | Op::Sub

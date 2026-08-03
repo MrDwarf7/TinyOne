@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TokenKind {
     Int,
+    Float,
     Ident,
     String,
     Let,
@@ -13,6 +14,7 @@ pub(crate) enum TokenKind {
     Break,
     Continue,
     Struct,
+    Enum,
     Import,
     Export,
     As,
@@ -40,14 +42,19 @@ pub(crate) enum TokenKind {
     RBracket,
     Dot,
     Comma,
+    Colon,
+    Arrow,
     Eof,
     Null,
+    True,
+    False,
 }
 
 impl TokenKind {
     pub(crate) fn name(self) -> &'static str {
         match self {
             TokenKind::Int => "INT",
+            TokenKind::Float => "FLOAT",
             TokenKind::Ident => "IDENT",
             TokenKind::String => "STRING",
             TokenKind::Let => "LET",
@@ -60,6 +67,7 @@ impl TokenKind {
             TokenKind::Break => "BREAK",
             TokenKind::Continue => "CONTINUE",
             TokenKind::Struct => "STRUCT",
+            TokenKind::Enum => "ENUM",
             TokenKind::Import => "IMPORT",
             TokenKind::Export => "EXPORT",
             TokenKind::As => "AS",
@@ -87,8 +95,12 @@ impl TokenKind {
             TokenKind::RBracket => "RBRACKET",
             TokenKind::Dot => "DOT",
             TokenKind::Comma => "COMMA",
+            TokenKind::Colon => "COLON",
+            TokenKind::Arrow => "ARROW",
             TokenKind::Eof => "EOF",
             TokenKind::Null => "NULL",
+            TokenKind::True => "TRUE",
+            TokenKind::False => "FALSE",
         }
     }
 }

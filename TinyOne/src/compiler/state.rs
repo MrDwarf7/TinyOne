@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::{Function, ModuleDef, ModuleImportDef, StructDef};
+use crate::{EnumVariantDef, Function, ModuleDef, ModuleImportDef, StructDef};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleInfo {
@@ -23,6 +23,9 @@ pub(crate) struct CompilerSharedState {
     pub(crate) structs: Vec<StructDef>,
     pub(crate) field_indexes: HashMap<String, usize>,
     pub(crate) fields: Vec<String>,
+    /// (enum name, variant name) -> index into `enum_variants`.
+    pub(crate) enum_variant_indexes: HashMap<(String, String), usize>,
+    pub(crate) enum_variants: Vec<EnumVariantDef>,
     pub(crate) string_indexes: HashMap<String, usize>,
     pub(crate) strings: Vec<String>,
     pub(crate) modules: HashMap<String, ModuleInfo>,

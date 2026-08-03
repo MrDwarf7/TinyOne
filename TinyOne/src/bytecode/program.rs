@@ -17,6 +17,18 @@ pub struct StructDef {
     pub fields: Vec<String>,
 }
 
+/// One flattened, program-global entry per enum variant. `tag` is the
+/// variant's 0-based position within its enum's declaration order; `Op::
+/// MakeEnum` indexes this table directly by a flat `variant_id`, so no
+/// nested enum-name lookup is needed on the execution hot path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariantDef {
+    pub enum_name: String,
+    pub variant_name: String,
+    pub tag: u32,
+    pub fields: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleImportDef {
     pub alias: String,
@@ -44,6 +56,7 @@ pub struct Program {
     pub structs: Vec<StructDef>,
     pub fields: Vec<String>,
     pub modules: Vec<ModuleDef>,
+    pub enum_variants: Vec<EnumVariantDef>,
 }
 
 impl Program {

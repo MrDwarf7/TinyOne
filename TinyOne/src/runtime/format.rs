@@ -21,8 +21,9 @@ fn runtime_format_inner(
         Value::I16(value) => Ok(value.to_string()),
         Value::I32(value) => Ok(value.to_string()),
         Value::U64(value) => Ok(value.to_string()),
-        Value::Bf16(bits) => Ok(format!("bf16({bits})")),
-        Value::Float { bits, .. } => Ok(bits.to_string()),
+        // `{:?}` (not `{}`) so whole-number floats print with a decimal
+        // point (`4.0`, not `4`) — Rust's `Display` for `f64` drops it.
+        Value::Float { bits, .. } => Ok(format!("{bits:?}")),
         Value::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
         Value::Unit => Ok("unit".to_string()),
         Value::Null => Ok("null".to_string()),
@@ -153,7 +154,20 @@ fn runtime_format_inner(
                     };
                     Ok(format!("sum({tag}, {payload_str})"))
                 }
-                HeapData::Enum { variant } => Ok(format!("enum({variant})")),
+                HeapData::Enum { variant, fields, .. } => {
+                    if fields.is_empty() {
+                        Ok(format!("{}.{}", object.type_name, variant))
+                    } else {
+                        let parts = fields
+                            .iter()
+                            .map(|(name, value)| {
+                                runtime_format_inner(context, value, seen)
+                                    .map(|rendered| format!("{name}: {rendered}"))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(format!("{}.{}{{{}}}", object.type_name, variant, parts.join(", ")))
+                    }
+                }
                 HeapData::TaggedUnion { tag, payload } => Ok(format!(
                     "union({tag}, {})",
                     runtime_format_inner(context, &*payload, seen)?
