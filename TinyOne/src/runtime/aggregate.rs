@@ -90,6 +90,20 @@ pub(crate) fn runtime_make_struct(
     Ok(Value::Heap(context.heap().alloc_struct(type_name, fields)?))
 }
 
+pub(crate) fn runtime_make_enum(
+    context: &mut TinyRuntimeContext,
+    enum_name: &str,
+    variant_name: &str,
+    tag: u32,
+    field_names: &[String],
+    values: Vec<Value>,
+) -> Result<Value> {
+    let fields = field_names.iter().cloned().zip(values).collect();
+    Ok(Value::Heap(
+        context.heap().alloc_enum(enum_name, variant_name, tag, fields)?,
+    ))
+}
+
 pub(crate) fn runtime_get_field(
     context: &TinyRuntimeContext,
     target: Value,
@@ -97,22 +111,37 @@ pub(crate) fn runtime_get_field(
 ) -> Result<Value> {
     let heap = context.heap();
     let object = heap.get(&target)?;
-    let HeapData::Struct(fields) = &object.data else {
-        return Err(TinyOneError::runtime(format!(
+    match &object.data {
+        HeapData::Struct(fields) => fields
+            .iter()
+            .find(|(name, _)| name == field)
+            .map(|(_, value)| value.clone())
+            .ok_or_else(|| {
+                TinyOneError::runtime(format!(
+                    "Unknown field {field:?} on struct {:?}",
+                    object.type_name
+                ))
+            }),
+        HeapData::Enum { variant, tag, fields } => {
+            if field == "tag" {
+                return Ok(Value::I64(*tag as i64));
+            }
+            fields
+                .iter()
+                .find(|(name, _)| name == field)
+                .map(|(_, value)| value.clone())
+                .ok_or_else(|| {
+                    TinyOneError::runtime(format!(
+                        "Unknown field {field:?} on enum variant {:?}.{variant}",
+                        object.type_name
+                    ))
+                })
+        }
+        _ => Err(TinyOneError::runtime(format!(
             "Cannot read field {field:?} from {}",
             object.kind()
-        )));
-    };
-    fields
-        .iter()
-        .find(|(name, _)| name == field)
-        .map(|(_, value)| value.clone())
-        .ok_or_else(|| {
-            TinyOneError::runtime(format!(
-                "Unknown field {field:?} on struct {:?}",
-                object.type_name
-            ))
-        })
+        ))),
+    }
 }
 
 pub(crate) fn runtime_set_field(
@@ -125,18 +154,35 @@ pub(crate) fn runtime_set_field(
     let object = heap.get_mut(&target)?;
     let type_name = object.type_name.clone();
     let kind = object.kind();
-    let HeapData::Struct(fields) = &mut object.data else {
-        return Err(TinyOneError::runtime(format!(
+    match &mut object.data {
+        HeapData::Struct(fields) => {
+            if let Some((_, field_value)) = fields.iter_mut().find(|(name, _)| name == field) {
+                *field_value = value;
+                Ok(())
+            } else {
+                Err(TinyOneError::runtime(format!(
+                    "Unknown field {field:?} on struct {type_name:?}"
+                )))
+            }
+        }
+        HeapData::Enum { variant, fields, .. } => {
+            if field == "tag" {
+                return Err(TinyOneError::runtime(
+                    "Cannot assign to reserved field \"tag\"",
+                ));
+            }
+            if let Some((_, field_value)) = fields.iter_mut().find(|(name, _)| name == field) {
+                *field_value = value;
+                Ok(())
+            } else {
+                Err(TinyOneError::runtime(format!(
+                    "Unknown field {field:?} on enum variant {type_name:?}.{variant}"
+                )))
+            }
+        }
+        _ => Err(TinyOneError::runtime(format!(
             "Cannot write field {field:?} on {kind}"
-        )));
-    };
-    if let Some((_, field_value)) = fields.iter_mut().find(|(name, _)| name == field) {
-        *field_value = value;
-        Ok(())
-    } else {
-        Err(TinyOneError::runtime(format!(
-            "Unknown field {field:?} on struct {type_name:?}"
-        )))
+        ))),
     }
 }
 

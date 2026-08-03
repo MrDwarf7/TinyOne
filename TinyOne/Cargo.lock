@@ -88,6 +88,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ralloc"
+version = "0.1.0"
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -173,6 +177,7 @@ version = "0.6.0"
 dependencies = [
  "blake2",
  "hex",
+ "ralloc",
  "serde",
  "serde_json",
  "thiserror",

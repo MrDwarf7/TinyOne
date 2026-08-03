@@ -241,6 +241,10 @@ pub(crate) fn runtime_call_builtin(
         "assert" => stdlib::b_assert(&args[0], args.get(1), context),
         "thread_spawn" => stdlib::b_thread_spawn(context, args),
         "thread_join"  => stdlib::b_thread_join(context, args),
+        "fp8"  => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp8, "fp8"),
+        "fp16" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp16, "fp16"),
+        "fp32" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp32, "fp32"),
+        "fp64" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp64, "fp64"),
         _ => Err(TinyOneError::runtime(format!(
             "Missing builtin handler {:?}",
             builtin.name

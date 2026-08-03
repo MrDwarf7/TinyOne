@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::{
-    BUILTINS, Function, Instr, Lexer, ModuleDef, ModuleImportDef, ModuleInfo, Op, Program,
-    Resolver, Result, SharedState, SourceMap, StructDef, SymbolTable, TinyOneError, Token,
-    TokenKind, builtin_index, default_import_alias, module_name_from_import, unique_module_name,
+    BUILTINS, EnumVariantDef, Function, Instr, Lexer, ModuleDef, ModuleImportDef, ModuleInfo, Op,
+    Program, Resolver, Result, SharedState, SourceMap, StructDef, SymbolTable, TinyOneError,
+    Token, TokenKind, builtin_index, default_import_alias, module_name_from_import,
+    unique_module_name,
 };
 
 #[derive(Debug)]
@@ -36,6 +37,7 @@ pub(crate) struct Compiler {
     shared: SharedState,
     local_function_indexes: HashMap<String, usize>,
     local_struct_indexes: HashMap<String, usize>,
+    local_enum_names: HashSet<String>,
     function_globals: HashMap<String, usize>,
     loops: Vec<LoopContext>,
     in_function: bool,
@@ -107,6 +109,7 @@ impl Compiler {
             shared,
             local_function_indexes: HashMap::new(),
             local_struct_indexes: HashMap::new(),
+            local_enum_names: HashSet::new(),
             function_globals: HashMap::new(),
             loops: Vec::new(),
             in_function: false,
@@ -125,6 +128,10 @@ impl Compiler {
                 TokenKind::Struct => {
                     self.accept_imports = false;
                     self.struct_definition(false)?;
+                }
+                TokenKind::Enum => {
+                    self.accept_imports = false;
+                    self.enum_definition(false)?;
                 }
                 TokenKind::Fn => {
                     self.accept_imports = false;
@@ -154,6 +161,7 @@ impl Compiler {
             structs: state.structs.clone(),
             fields: state.fields.clone(),
             modules: state.module_defs.clone(),
+            enum_variants: state.enum_variants.clone(),
         })
     }
 
@@ -254,6 +262,7 @@ impl Compiler {
                 name_token.pos,
             ));
         }
+        self.skip_optional_type_annotation(TokenKind::Colon)?;
         self.eat(TokenKind::Equal)?;
         self.expression()?;
         let slot = self
@@ -269,6 +278,20 @@ impl Compiler {
                 )
             })?;
         self.emit(Op::Store, slot as i64, 0);
+        Ok(())
+    }
+
+    /// Consumes and discards an optional type annotation introduced by
+    /// `marker` (`Colon` for `let`/parameter annotations, `Arrow` for
+    /// function return-type annotations). TinyLang has no static type
+    /// checker (dynamically typed by design — see `docs/v1-roadmap.md`);
+    /// annotations are syntax-only documentation with no effect on compiled
+    /// bytecode.
+    fn skip_optional_type_annotation(&mut self, marker: TokenKind) -> Result<()> {
+        if self.current().kind == marker {
+            self.eat(marker)?;
+            self.eat(TokenKind::Ident)?;
+        }
         Ok(())
     }
 
@@ -572,6 +595,110 @@ impl Compiler {
         Ok(())
     }
 
+    /// Parses `enum Name { Variant, Variant(field, field), ... }`.
+    ///
+    /// Enum declarations are file-local only (no cross-module export, unlike
+    /// `struct`) — `exported` is accepted for call-site symmetry with
+    /// `struct_definition`/`function_definition` but currently unused.
+    fn enum_definition(&mut self, exported: bool) -> Result<()> {
+        let _ = exported;
+        self.eat(TokenKind::Enum)?;
+        let name_token = self.eat(TokenKind::Ident)?;
+        let name = name_token.text.clone();
+        if self.namespaces.contains_key(&name) {
+            return Err(self.error(
+                format!("Enum {name:?} conflicts with an imported namespace"),
+                name_token,
+            ));
+        }
+        if self.local_enum_names.contains(&name) {
+            return Err(self.error(format!("Enum {name:?} is already defined"), name_token));
+        }
+        if self.local_struct_indexes.contains_key(&name)
+            || self.local_function_indexes.contains_key(&name)
+            || builtin_index(&name).is_some()
+        {
+            return Err(self.error(
+                format!("Enum {name:?} conflicts with an existing callable"),
+                name_token,
+            ));
+        }
+
+        let full_name = self.qualified_declaration_name(&name);
+        self.eat(TokenKind::LBrace)?;
+        let mut seen_variants = HashSet::new();
+        let mut tag: u32 = 0;
+        if self.current().kind != TokenKind::RBrace {
+            loop {
+                let variant_token = self.eat(TokenKind::Ident)?;
+                if !seen_variants.insert(variant_token.text.clone()) {
+                    return Err(self.error(
+                        format!("Duplicate enum variant {:?}", variant_token.text),
+                        variant_token,
+                    ));
+                }
+
+                let mut fields = Vec::new();
+                if self.current().kind == TokenKind::LParen {
+                    self.eat(TokenKind::LParen)?;
+                    let mut seen_fields = HashSet::new();
+                    if self.current().kind != TokenKind::RParen {
+                        loop {
+                            let field_token = self.eat(TokenKind::Ident)?;
+                            if field_token.text == "tag" {
+                                return Err(self.error(
+                                    "Enum variant field \"tag\" is reserved".to_string(),
+                                    field_token,
+                                ));
+                            }
+                            if !seen_fields.insert(field_token.text.clone()) {
+                                return Err(self.error(
+                                    format!(
+                                        "Duplicate enum variant field {:?}",
+                                        field_token.text
+                                    ),
+                                    field_token,
+                                ));
+                            }
+                            self.intern_field(&field_token.text);
+                            fields.push(field_token.text);
+                            if self.current().kind != TokenKind::Comma {
+                                break;
+                            }
+                            self.eat(TokenKind::Comma)?;
+                        }
+                    }
+                    self.eat(TokenKind::RParen)?;
+                }
+
+                {
+                    let mut state = self.shared.borrow_mut();
+                    let variant_index = state.enum_variants.len();
+                    state.enum_variant_indexes.insert(
+                        (full_name.clone(), variant_token.text.clone()),
+                        variant_index,
+                    );
+                    state.enum_variants.push(EnumVariantDef {
+                        enum_name: full_name.clone(),
+                        variant_name: variant_token.text,
+                        tag,
+                        fields,
+                    });
+                }
+                tag += 1;
+
+                if self.current().kind != TokenKind::Comma {
+                    break;
+                }
+                self.eat(TokenKind::Comma)?;
+            }
+        }
+        self.eat(TokenKind::RBrace)?;
+
+        self.local_enum_names.insert(name);
+        Ok(())
+    }
+
     fn function_definition(&mut self, exported: bool) -> Result<()> {
         self.eat(TokenKind::Fn)?;
         let name_token = self.eat(TokenKind::Ident)?;
@@ -628,6 +755,7 @@ impl Compiler {
         if self.current().kind != TokenKind::RParen {
             loop {
                 let param = self.eat(TokenKind::Ident)?;
+                self.skip_optional_type_annotation(TokenKind::Colon)?;
                 let Some(slot) = function_symbols.define_current(&param.text) else {
                     return Err(self.error(format!("Duplicate parameter {:?}", param.text), param));
                 };
@@ -640,6 +768,7 @@ impl Compiler {
             }
         }
         self.eat(TokenKind::RParen)?;
+        self.skip_optional_type_annotation(TokenKind::Arrow)?;
 
         let global_slots = self.symbols.top_level_slots();
         let previous_symbols = std::mem::replace(&mut self.symbols, function_symbols);
@@ -796,6 +925,20 @@ impl Compiler {
                 })?;
                 self.emit(Op::PushInt, value, 0);
             }
+            TokenKind::Float => {
+                self.eat(TokenKind::Float)?;
+                let value = token.text.parse::<f64>().map_err(|_| {
+                    self.error(
+                        format!("Float literal {:?} is out of range", token.text),
+                        token,
+                    )
+                })?;
+                // Floats have no dedicated constant pool; the bit pattern is
+                // carried directly in the instruction's i64 arg (matching
+                // the JSON artifact format's existing raw-bits convention
+                // for floats) and reinterpreted by PushFloat at execution.
+                self.emit(Op::PushFloat, value.to_bits() as i64, 0);
+            }
             TokenKind::String => {
                 self.eat(TokenKind::String)?;
                 let index = self.intern_string(&token.text);
@@ -804,6 +947,14 @@ impl Compiler {
             TokenKind::Null => {
                 self.eat(TokenKind::Null)?;
                 self.emit(Op::PushNull, 0, 0);
+            }
+            TokenKind::True => {
+                self.eat(TokenKind::True)?;
+                self.emit(Op::PushBool, 1, 0);
+            }
+            TokenKind::False => {
+                self.eat(TokenKind::False)?;
+                self.emit(Op::PushBool, 0, 0);
             }
             TokenKind::LBracket => {
                 self.eat(TokenKind::LBracket)?;
@@ -880,8 +1031,11 @@ impl Compiler {
         matches!(
             self.current().kind,
             TokenKind::Int
+                | TokenKind::Float
                 | TokenKind::String
                 | TokenKind::Null
+                | TokenKind::True
+                | TokenKind::False
                 | TokenKind::Ident
                 | TokenKind::LBracket
                 | TokenKind::LParen
@@ -915,6 +1069,9 @@ impl Compiler {
     }
 
     fn qualified_call_expression(&mut self, namespace: &Token, member: &Token) -> Result<()> {
+        if self.local_enum_names.contains(&namespace.text) {
+            return self.enum_constructor_call(namespace, member);
+        }
         let info = self
             .namespaces
             .get(&namespace.text)
@@ -964,6 +1121,40 @@ impl Compiler {
             ));
         }
         self.emit(Op::MakeStruct, struct_index as i64, arg_count as i64);
+        Ok(())
+    }
+
+    fn enum_constructor_call(&mut self, namespace: &Token, member: &Token) -> Result<()> {
+        let full_name = self.qualified_declaration_name(&namespace.text);
+        let variant_index = {
+            let state = self.shared.borrow();
+            state
+                .enum_variant_indexes
+                .get(&(full_name, member.text.clone()))
+                .copied()
+        }
+        .ok_or_else(|| {
+            self.error_at(
+                format!(
+                    "Enum {:?} has no variant {:?}",
+                    namespace.text, member.text
+                ),
+                member.pos,
+            )
+        })?;
+        let field_count = self.shared.borrow().enum_variants[variant_index].fields.len();
+        self.eat(TokenKind::LParen)?;
+        let arg_count = self.argument_list()?;
+        if arg_count != field_count {
+            return Err(self.error_at(
+                format!(
+                    "Enum variant {}.{} expects {field_count} field value(s), got {arg_count}",
+                    namespace.text, member.text
+                ),
+                self.current().pos,
+            ));
+        }
+        self.emit(Op::MakeEnum, variant_index as i64, arg_count as i64);
         Ok(())
     }
 

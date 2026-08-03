@@ -6,6 +6,7 @@ pub(crate) mod format;
 pub(crate) mod heap;
 pub(crate) mod limits;
 pub(crate) mod memory;
+pub(crate) mod minifloat;
 pub(crate) mod pointers;
 pub(crate) mod stdlib;
 pub(crate) mod sync;
@@ -15,7 +16,8 @@ pub(crate) mod vm;
 
 pub(crate) use aggregate::{
     expect_string, runtime_array_pop, runtime_array_push, runtime_get_field, runtime_index,
-    runtime_make_array, runtime_make_struct, runtime_set_field, runtime_set_index,
+    runtime_make_array, runtime_make_enum, runtime_make_struct, runtime_set_field,
+    runtime_set_index,
 };
 pub(crate) use arithmetic::{
     checked_bounded_len, checked_byte_range, checked_collection_index, checked_div,
@@ -43,6 +45,7 @@ pub(crate) use pointers::{
     runtime_read_uint, runtime_write_uint, validate_pointer_base,
 };
 pub use typing::TypeKind;
+pub(crate) use minifloat::round_to_kind;
 pub(crate) use value::Value;
 pub use value::{HeapRef, RawPointer, RuntimeValue};
 pub use vm::{TinyRunReport, VM};

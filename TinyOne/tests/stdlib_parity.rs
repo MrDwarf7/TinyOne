@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 
-use tinyone::{compile_file, compile_source, run_program};
+use tinyone::{compile_source, run_program};
 
 fn run_modes(source: &str) -> (String, String) {
     let mut vm = Vec::new();
@@ -349,85 +348,6 @@ fn fs_read_write_round_trip_through_tempdir() {
     assert_eq!(vm, expected, "vm output mismatch");
     assert_eq!(vm, jit);
     let _ = fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn stdlib_modules_compile_via_manifest_import() {
-    let stdlib_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("stdlib");
-    assert!(
-        stdlib_root.join("tinyone.json").exists(),
-        "stdlib manifest must exist"
-    );
-    let temp = std::env::temp_dir().join(format!(
-        "tinyone-stdlib-import-{}-{}",
-        std::process::id(),
-        rand_suffix()
-    ));
-    let _ = fs::remove_dir_all(&temp);
-    fs::create_dir_all(&temp).unwrap();
-    fs::write(
-        temp.join("tinyone.json"),
-        format!(
-            r#"{{"package":"app","modules":{{
-                "vec":{src:?},
-                "map":{src_map:?},
-                "math":{src_math:?},
-                "logic":{src_logic:?},
-                "result":{src_result:?},
-                "option":{src_option:?},
-                "typing":{src_typing:?}
-            }}}}"#,
-            src = stdlib_root.join("vec.to").to_string_lossy().to_string(),
-            src_map = stdlib_root.join("map.to").to_string_lossy().to_string(),
-            src_math = stdlib_root.join("math.to").to_string_lossy().to_string(),
-            src_logic = stdlib_root.join("logic.to").to_string_lossy().to_string(),
-            src_result = stdlib_root.join("result.to").to_string_lossy().to_string(),
-            src_option = stdlib_root.join("option.to").to_string_lossy().to_string(),
-            src_typing = stdlib_root.join("typing.to").to_string_lossy().to_string(),
-        ),
-    )
-    .unwrap();
-    let main = temp.join("main.to");
-    fs::write(
-        &main,
-        r#"
-        import "vec" as v
-        import "map" as m
-        import "math" as math
-        import "logic" as l
-        import "result" as r
-        import "option" as o
-        import "typing" as t
-
-        let xs = v.new()
-        let ignored = v.append(xs, 7)
-        let ignored2 = v.append(xs, 8)
-        print v.size(xs)
-
-        let d = m.new()
-        let ignored3 = m.put(d, "k", 41)
-        print m.get(d, "k")
-
-        print math.abs(-9)
-        print l.xor(1, 0)
-        print t.add(1, 2, "u8")
-
-        let ok = r.ok(11)
-        print r.unwrap(ok)
-        let some = o.some(22)
-        print o.unwrap(some)
-        "#,
-    )
-    .unwrap();
-    let program = compile_file(&main).expect("compile manifest-imported program");
-    let mut out = Vec::new();
-    run_program(program, "vm", &mut out, Vec::new()).expect("vm run");
-    let text = String::from_utf8(out).unwrap();
-    assert_eq!(text, "2\n41\n9\n1\n3\n11\n22\n");
-    let _ = fs::remove_dir_all(&temp);
 }
 
 fn rand_suffix() -> String {

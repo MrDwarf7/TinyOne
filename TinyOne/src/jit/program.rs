@@ -4,8 +4,8 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::{
-    HOT_BACK_EDGE_THRESHOLD, JitChunk, JitFunction, JitStats, JitVm, Program, Result, StructDef,
-    TinyMemory, TinyOneError, TinyRunReport,
+    EnumVariantDef, HOT_BACK_EDGE_THRESHOLD, JitChunk, JitFunction, JitStats, JitVm, Program,
+    Result, StructDef, TinyMemory, TinyOneError, TinyRunReport,
 };
 
 #[derive(Debug, Clone)]
@@ -16,6 +16,7 @@ pub struct JitProgram {
     pub(crate) strings: Vec<String>,
     pub(crate) structs: Vec<StructDef>,
     pub(crate) fields: Vec<String>,
+    pub(crate) enum_variants: Vec<EnumVariantDef>,
     pub(crate) stats: JitStats,
 }
 
@@ -55,6 +56,7 @@ impl JitProgram {
             strings: program.strings.clone(),
             structs: program.structs.clone(),
             fields: program.fields.clone(),
+            enum_variants: program.enum_variants.clone(),
             stats: JitStats {
                 compiled_chunks,
                 compiled_ops,

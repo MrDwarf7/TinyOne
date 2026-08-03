@@ -132,6 +132,7 @@ fn minimal_program() -> Program {
         structs: Vec::new(),
         fields: Vec::new(),
         modules: Vec::new(),
+        enum_variants: Vec::new(),
     }
 }
 

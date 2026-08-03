@@ -114,7 +114,7 @@ implementation:
 typedef enum TinyValueKind {
   TINY_KIND_I8 = 0, TINY_KIND_I16, TINY_KIND_I32, TINY_KIND_I64,
   TINY_KIND_U8, TINY_KIND_U16, TINY_KIND_U32, TINY_KIND_U64,
-  TINY_KIND_BF16, TINY_KIND_FP16, TINY_KIND_FP32, TINY_KIND_FP64,
+  TINY_KIND_FP8, TINY_KIND_FP16, TINY_KIND_FP32, TINY_KIND_FP64,
   TINY_KIND_BOOL, TINY_KIND_UNIT, TINY_KIND_NULL,
   TINY_KIND_FUNCTION, TINY_KIND_REFERENCE, TINY_KIND_PHANTOM,
   TINY_KIND_ZST, TINY_KIND_UNSAFE,
@@ -304,7 +304,7 @@ Native code is outside the VM's safety boundary, so:
 | TinyOne | C | Notes |
 |---------|---|-------|
 | `i8..i64` / `u8..u64` | `int8_t..int64_t` / `uint8_t..uint64_t` | exact width |
-| `fp32` / `fp64` | `float` / `double` | bf16/fp16 require explicit widening |
+| `fp32` / `fp64` | `float` / `double` | fp8/fp16 require explicit widening |
 | `bool` | `_Bool` / `int` | per signature |
 | `String` | `const char *` | UTF-8, NUL-appended copy for the call |
 | `Buffer<T>` | `T* + size` | pinned, bounds-checked, aligned |

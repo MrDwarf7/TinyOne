@@ -7,8 +7,12 @@ use crate::backend::{FixedRegionBackend, MemoryBackend, RegionRequest};
 use crate::region::{self, ArenaSlot};
 use crate::sync::SpinLock;
 
-const ARENA_COUNT: usize = 4;
-const ARENA_BYTES: usize = 64 * 1024;
+pub(crate) const ARENA_COUNT: usize = 4;
+// 4 * 2 MiB = 8 MiB total static pool — 2x headroom over TinyOne's
+// MAX_HEAP_BYTES (4 MiB, see TinyOne/src/runtime/limits.rs) so a
+// VmAllocator-backed shadow allocation exists for every live VM heap byte
+// without exhausting Ralloc's fixed arena storage.
+pub(crate) const ARENA_BYTES: usize = 2 * 1024 * 1024;
 const ARENA_ALIGN: usize = 64;
 pub(crate) const MAX_NATIVE_ALIGNMENT: usize = 4096;
 
@@ -403,8 +407,11 @@ mod tests {
         let _guard = region::TEST_LOCK.lock();
         super::reset_for_tests();
 
-        let first = unsafe { ralloc_malloc(40 * 1024) };
-        let second = unsafe { ralloc_malloc(40 * 1024) };
+        // Each allocation is just over half an arena, so the first fits in
+        // arena 0 but the second cannot and must overflow into arena 1.
+        let chunk = (super::ARENA_BYTES / 2) + 1024;
+        let first = unsafe { ralloc_malloc(chunk) };
+        let second = unsafe { ralloc_malloc(chunk) };
 
         assert!(!first.is_null());
         assert!(!second.is_null());

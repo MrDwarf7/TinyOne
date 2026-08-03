@@ -34,6 +34,12 @@ pub(crate) enum JitOp {
     MakeStruct(usize, usize),
     GetField(usize),
     SetField(usize),
+    MakeEnum(usize, usize),
+    PushBool(bool),
+    /// IEEE-754 bit pattern of an `f64` literal (not the `f64` itself — `f64`
+    /// is not `Eq`, and `JitOp` derives it). Reconstructed with
+    /// `f64::from_bits` at the point of use.
+    PushFloat(u64),
     Builtin(usize, usize),
     Return,
     Print,
@@ -71,6 +77,12 @@ impl JitOp {
             ),
             Op::GetField => Self::GetField(jit_operand(instr.arg, "field index")?),
             Op::SetField => Self::SetField(jit_operand(instr.arg, "field index")?),
+            Op::MakeEnum => Self::MakeEnum(
+                jit_operand(instr.arg, "enum variant index")?,
+                jit_operand(instr.arg2, "enum variant arity")?,
+            ),
+            Op::PushBool => Self::PushBool(instr.arg != 0),
+            Op::PushFloat => Self::PushFloat(instr.arg as u64),
             Op::Builtin => Self::Builtin(
                 jit_operand(instr.arg, "builtin index")?,
                 jit_operand(instr.arg2, "builtin arity")?,
@@ -128,6 +140,9 @@ impl JitOp {
             Self::MakeStruct(index, field_count) => format!("struct s{index} fields={field_count}"),
             Self::GetField(field) => format!("get.field {field}"),
             Self::SetField(field) => format!("set.field {field}"),
+            Self::MakeEnum(index, field_count) => format!("enum v{index} fields={field_count}"),
+            Self::PushBool(value) => format!("push.bool {value}"),
+            Self::PushFloat(bits) => format!("push.f {}", f64::from_bits(bits)),
             Self::Builtin(index, arg_count) => format!("builtin b{index} argc={arg_count}"),
             Self::Return => "return".to_string(),
             Self::Print => "print".to_string(),

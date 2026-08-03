@@ -42,8 +42,8 @@ impl PeepholeOptimizer {
                 {
                     let a = code[i].arg;
                     let b = code[i + 1].arg;
-                    if let Some(value) = fold_binop(code[i + 2].op, a, b) {
-                        out.push(Instr::new(Op::PushInt, value, 0));
+                    if let Some(folded) = fold_binop(code[i + 2].op, a, b) {
+                        out.push(folded);
                         i += 3;
                         changed = true;
                         continue;
@@ -58,18 +58,24 @@ impl PeepholeOptimizer {
     }
 }
 
-fn fold_binop(op: Op, a: i64, b: i64) -> Option<i64> {
+/// Folds a constant binary op into a single push instruction. Comparisons
+/// fold to `PUSH_BOOL`, not `PUSH_INT` — the unoptimized `Lt`/`Lte`/`Gt`/
+/// `Gte`/`Eq`/`Ne` opcodes all produce `Value::Bool` at runtime
+/// (`runtime_compare`), so a constant-folded comparison must match: `1 < 2`
+/// and `let a = 1; let b = 2; a < b` need to print identically regardless of
+/// whether this optimizer fires.
+fn fold_binop(op: Op, a: i64, b: i64) -> Option<Instr> {
     Some(match op {
-        Op::Add => a.checked_add(b)?,
-        Op::Sub => a.checked_sub(b)?,
-        Op::Mul => a.checked_mul(b)?,
-        Op::Div if b != 0 => floor_div(a, b)?,
-        Op::Lt => (a < b) as i64,
-        Op::Lte => (a <= b) as i64,
-        Op::Gt => (a > b) as i64,
-        Op::Gte => (a >= b) as i64,
-        Op::Eq => (a == b) as i64,
-        Op::Ne => (a != b) as i64,
+        Op::Add => Instr::new(Op::PushInt, a.checked_add(b)?, 0),
+        Op::Sub => Instr::new(Op::PushInt, a.checked_sub(b)?, 0),
+        Op::Mul => Instr::new(Op::PushInt, a.checked_mul(b)?, 0),
+        Op::Div if b != 0 => Instr::new(Op::PushInt, floor_div(a, b)?, 0),
+        Op::Lt => Instr::new(Op::PushBool, (a < b) as i64, 0),
+        Op::Lte => Instr::new(Op::PushBool, (a <= b) as i64, 0),
+        Op::Gt => Instr::new(Op::PushBool, (a > b) as i64, 0),
+        Op::Gte => Instr::new(Op::PushBool, (a >= b) as i64, 0),
+        Op::Eq => Instr::new(Op::PushBool, (a == b) as i64, 0),
+        Op::Ne => Instr::new(Op::PushBool, (a != b) as i64, 0),
         _ => return None,
     })
 }

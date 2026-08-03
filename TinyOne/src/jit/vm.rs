@@ -3,10 +3,10 @@ use std::io::Write;
 
 use crate::{
     JitOp, JitProgram, MAX_CALL_DEPTH, Result, TinyMemory, TinyOneError, TinyRunReport,
-    TinyRuntimeContext, Value, checked_div, checked_div_int, pop_args, runtime_add,
+    TinyRuntimeContext, TypeKind, Value, checked_div, checked_div_int, pop_args, runtime_add,
     runtime_add_int, runtime_call_builtin, runtime_compare, runtime_compare_int, runtime_get_field,
-    runtime_index, runtime_is_false, runtime_make_array, runtime_make_struct, runtime_mul,
-    runtime_mul_int, runtime_neg, runtime_null, runtime_print, runtime_set_field,
+    runtime_index, runtime_is_false, runtime_make_array, runtime_make_enum, runtime_make_struct,
+    runtime_mul, runtime_mul_int, runtime_neg, runtime_null, runtime_print, runtime_set_field,
     runtime_set_index, runtime_sub, runtime_sub_int,
 };
 
@@ -102,6 +102,11 @@ impl<'a> JitVm<'a> {
             match instr {
                 JitOp::PushInt(value) => stack.push(Value::I64(value)),
                 JitOp::PushNull => stack.push(runtime_null()),
+                JitOp::PushBool(value) => stack.push(Value::Bool(value)),
+                JitOp::PushFloat(bits) => stack.push(Value::Float {
+                    kind: TypeKind::Fp64,
+                    bits: f64::from_bits(bits),
+                }),
                 JitOp::Pop => {
                     jit_pop(&mut stack)?;
                 }
@@ -251,6 +256,20 @@ impl<'a> JitVm<'a> {
                         TinyOneError::runtime(format!("Invalid field index {field_index}"))
                     })?;
                     runtime_set_field(&mut self.context, target, field, value)?;
+                }
+                JitOp::MakeEnum(variant_id, field_count) => {
+                    let values = pop_args(&mut stack, field_count)?;
+                    let variant_def = self.program.enum_variants.get(variant_id).ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid enum variant index {variant_id}"))
+                    })?;
+                    stack.push(runtime_make_enum(
+                        &mut self.context,
+                        &variant_def.enum_name,
+                        &variant_def.variant_name,
+                        variant_def.tag,
+                        &variant_def.fields,
+                        values,
+                    )?);
                 }
                 JitOp::Builtin(builtin_index, arg_count) => {
                     let args = pop_args(&mut stack, arg_count)?;

@@ -280,7 +280,6 @@ fn value_to_json(value: &RuntimeValue) -> JsonValue {
         RuntimeValue::U16(v)   => json!({"type": "u16", "value": v}),
         RuntimeValue::U32(v)   => json!({"type": "u32", "value": v}),
         RuntimeValue::U64(v)   => json!({"type": "u64", "value": v}),
-        RuntimeValue::Bf16(v)  => json!({"type": "bf16", "bits": v}),
         RuntimeValue::Float { kind, bits } => json!({"type": kind.name(), "value": bits}),
         RuntimeValue::Bool(b)  => json!({"type": "bool", "value": b}),
         RuntimeValue::Unit     => json!({"type": "unit"}),

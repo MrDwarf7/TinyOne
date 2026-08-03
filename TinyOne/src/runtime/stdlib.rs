@@ -16,7 +16,7 @@ use crate::runtime::typing::{
 };
 use crate::{
     HeapData, Result, TinyMemory, TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, expect_int,
-    expect_string, integer_value_from_kind, runtime_cast_int, runtime_integer_kind,
+    expect_string, integer_value_from_kind, round_to_kind, runtime_cast_int, runtime_integer_kind,
     runtime_integer_value, validate_pointer_base, VM,
 };
 
@@ -38,6 +38,18 @@ fn runtime_integer_type_name(value: &Value) -> Option<&'static str> {
 
 pub fn b_int_cast(value: &Value, kind: TypeKind, operation: &str) -> Result<Value> {
     runtime_cast_int(value, kind, operation)
+}
+
+/// Casts `value` to a `Value::Float` of the given float `kind`, rounding to
+/// that format's precision (`round_to_kind`). Integer operands are promoted
+/// to `f64` first. This is the only way to produce a non-`Fp64` float in
+/// TinyLang source — float literals are always `Fp64` (see `Op::PushFloat`).
+pub fn b_float_cast(value: &Value, kind: TypeKind, operation: &str) -> Result<Value> {
+    let bits = match value {
+        Value::Float { bits, .. } => *bits,
+        _ => runtime_integer_value(value, operation)? as f64,
+    };
+    Ok(Value::Float { kind, bits: round_to_kind(bits, kind) })
 }
 
 // ---------------------------------------------------------------------------
@@ -1102,7 +1114,6 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
             runtime_integer_type_name(value).unwrap_or(TypeKind::I64.name())
         }
         Value::U64(_) => TypeKind::U64.name(),
-        Value::Bf16(_) => TypeKind::Bf16.name(),
         Value::Float { kind, .. } => kind.name(),
         Value::Bool(_) => TypeKind::Bool.name(),
         Value::Unit => TypeKind::Unit.name(),
@@ -1135,10 +1146,11 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
                 HeapData::Mutex(_) => TypeKind::Mutex.name(),
                 HeapData::Atomic(_) => TypeKind::Atomic.name(),
                 HeapData::Thread(_) => TypeKind::Thread.name(),
+                HeapData::Enum { .. } => TypeKind::Enum.name(),
                 HeapData::Char(_) | HeapData::CharBuffer(_) | HeapData::Vec(_)
                 | HeapData::Record(_) | HeapData::Dictionary(_) | HeapData::Box(_)
                 | HeapData::Alloc { .. } | HeapData::Closure { .. } | HeapData::Sum { .. }
-                | HeapData::Enum { .. } | HeapData::TaggedUnion { .. }
+                | HeapData::TaggedUnion { .. }
                 | HeapData::Result { .. } | HeapData::Option { .. } | HeapData::Dyn { .. }
                 | HeapData::FileDescriptor(_) => {
                     unimplemented!("Phase 2: type_of() not yet implemented for this HeapData variant — grep 'Phase 2:' to find all stubs")

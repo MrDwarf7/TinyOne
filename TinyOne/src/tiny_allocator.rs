@@ -4,18 +4,27 @@
 //! - An [`AllocTable`] — the live-allocation registry keyed by `vm_address`.
 //! - A [`MemoryLog`] — a bounded ring-buffer of operation records for diagnostics.
 //! - A [`HookRegistry`] — dispatches [`MemoryEvent`]s to registered observers.
+//! - A side table of real `ralloc::VmAllocation`s keyed by native id.
 //! - A sequence counter and shutdown flag.
 //!
-//! # Phase 2 vs Phase 3
-//! All Ralloc interaction is stubbed out in this phase.  Placeholder types are
-//! marked with `// PHASE3: replace with VmAllocation` so they are easy to audit
-//! before Phase 3 integration.
+//! # Phase 3
+//! Every VM heap allocation tracked in [`AllocTable`] now has a matching real
+//! allocation from `ralloc::VmAllocator`, stored in the `native` side table
+//! rather than inside [`AllocRecord`] itself (records stay `Clone`, and
+//! `VmAllocation` is deliberately `!Clone`). This does not change where
+//! TinyOne's heap object *bytes* live — `runtime/heap.rs` keeps owning those
+//! directly — it makes the allocator's bookkeeping shadow a real allocator
+//! instead of a placeholder counter, so native exhaustion is a real,
+//! reportable condition.
 //!
 //! # Thread safety
 //! [`TinyAllocator`] is `Send + Sync`.  Interior mutability is managed by the
-//! locks embedded in [`AllocTable`], [`MemoryLog`], and [`HookRegistry`].
+//! locks embedded in [`AllocTable`], [`MemoryLog`], [`HookRegistry`], and the
+//! `native` table.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::alloc_table::{AllocKind, AllocRecord, AllocTable, AllocTableError, AllocTableStats, VmAllocHandle};
@@ -262,8 +271,13 @@ pub struct TinyAllocator {
     table:    AllocTable,
     log:      MemoryLog,
     hooks:    HookRegistry,
-    /// Monotonic sequence counter; used as both log `seq` and as the
-    /// placeholder native allocation id.
+    /// Real Ralloc-backed allocations, keyed by the same id stored in each
+    /// live record's `native_handle`. Lives beside `table` rather than
+    /// inside it because `VmAllocation` is `!Clone` and `AllocTable::get`
+    /// returns cloned records.
+    native:   Mutex<HashMap<u64, ralloc::VmAllocation>>,
+    /// Monotonic sequence counter; used as both log `seq` and as the native
+    /// allocation id (the key into `native`).
     seq:      AtomicU64,
     /// Set to `true` by [`shutdown_drain`] to block further allocations.
     ///
@@ -284,6 +298,7 @@ impl TinyAllocator {
             table:    AllocTable::new(),
             log,
             hooks:    HookRegistry::new(),
+            native:   Mutex::new(HashMap::new()),
             seq:      AtomicU64::new(1),
             shutdown: AtomicBool::new(false),
         }
@@ -335,14 +350,34 @@ impl TinyAllocator {
             return Err(TinyAllocatorError::InvalidSize { size });
         }
 
-        // 3. Claim the next sequence number; this doubles as the placeholder
-        //    native allocation id for Phase 2.
+        // 3. Claim the next sequence number; this doubles as the native
+        //    allocation id (the key into `native`).
         let seq = self.next_seq();
+        let native_id: u64 = seq;
 
-        // PHASE3: replace with VmAllocation obtained from VmAllocator::global().allocate(size, align)
-        let native_id: u64 = seq; // PHASE3: replace with VmAllocation
+        // 4. Make the real native allocation before touching the table, so a
+        //    native OOM never leaves a record behind with nothing backing it.
+        let native_alloc = match ralloc::VmAllocator::global().allocate(size) {
+            Ok(alloc) => alloc,
+            Err(_) => {
+                self.log.log(MemoryLogEntry::failure(
+                    seq,
+                    thread_id,
+                    OperationType::Error,
+                    vm_address,
+                    vm_generation,
+                    "native_alloc_failed",
+                ));
+                self.hooks.dispatch(MemoryEvent::OutOfMemory {
+                    requested_size: size,
+                    live_bytes: self.table.stats().live_bytes,
+                    limit_bytes: ralloc::VmAllocator::capacity(),
+                });
+                return Err(TinyAllocatorError::NativeAllocFailed);
+            }
+        };
 
-        // 4. Record in the allocation table.
+        // 5. Record in the allocation table.
         let record = AllocRecord {
             vm_address,
             vm_generation,
@@ -354,13 +389,23 @@ impl TinyAllocator {
             log_seq: seq,
             live: true,
         };
-        self.table.insert(record).map_err(|e| match e {
-            AllocTableError::AlreadyExists => TinyAllocatorError::AllocationTableFull,
-            // Other errors cannot occur on insert.
-            _ => TinyAllocatorError::AllocationTableFull,
-        })?;
+        match self.table.insert(record) {
+            Ok(()) => {
+                self.native.lock().unwrap().insert(native_id, native_alloc);
+            }
+            Err(e) => {
+                // The table rejected the record; release the native
+                // allocation we already made so it doesn't leak.
+                ralloc::VmAllocator::global().deallocate(native_alloc);
+                return Err(match e {
+                    AllocTableError::AlreadyExists => TinyAllocatorError::AllocationTableFull,
+                    // Other errors cannot occur on insert.
+                    _ => TinyAllocatorError::AllocationTableFull,
+                });
+            }
+        }
 
-        // 5. Log success.
+        // 6. Log success.
         self.log.log(MemoryLogEntry::success(
             seq,
             thread_id,
@@ -370,7 +415,7 @@ impl TinyAllocator {
             size,
         ));
 
-        // 6. Dispatch hook event.
+        // 7. Dispatch hook event.
         self.hooks.dispatch(MemoryEvent::Allocated {
             vm_address,
             vm_generation,
@@ -404,8 +449,13 @@ impl TinyAllocator {
         let seq = self.next_seq();
 
         match self.table.remove(vm_address, vm_generation) {
-            Ok(_record) => {
-                // PHASE3: call VmAllocator::global().deallocate(record.native_handle_as_vmallocation())
+            Ok(record) => {
+                if let Some(handle) = record.native_handle {
+                    let native_alloc = self.native.lock().unwrap().remove(&handle.0);
+                    if let Some(native_alloc) = native_alloc {
+                        ralloc::VmAllocator::global().deallocate(native_alloc);
+                    }
+                }
 
                 self.log.log(MemoryLogEntry::success(
                     seq,
@@ -474,14 +524,16 @@ impl TinyAllocator {
 
     /// Resize the allocation at `vm_address` / `vm_generation` to `new_size`.
     ///
-    /// Phase 2 updates the size recorded in the table.  Phase 3 will issue a
-    /// real `VmAllocator::reallocate` call and update the native handle.
+    /// The native `VmAllocation` is reallocated first; the `AllocTable`
+    /// record is only updated once that succeeds. On native failure the
+    /// original allocation is restored unchanged and the table is untouched.
     ///
     /// # Errors
     /// Returns [`TinyAllocatorError::NotFound`] or
     /// [`TinyAllocatorError::GenerationMismatch`] if the address/generation pair
-    /// is not a live allocation, or [`TinyAllocatorError::InvalidSize`] for
-    /// a zero `new_size`.
+    /// is not a live allocation, [`TinyAllocatorError::InvalidSize`] for a
+    /// zero `new_size`, or [`TinyAllocatorError::NativeAllocFailed`] if the
+    /// native reallocation could not be satisfied.
     pub fn reallocate(
         &self,
         vm_address: usize,
@@ -513,11 +565,34 @@ impl TinyAllocator {
 
         let old_size = old_record.byte_len;
 
-        // PHASE3: VmAllocator::global().reallocate(&mut native_handle, new_size)?
+        // Reallocate the native backing first. On failure, restore the
+        // original allocation untouched and leave the table alone entirely.
+        if let Some(handle) = old_record.native_handle {
+            let existing = self.native.lock().unwrap().remove(&handle.0);
+            if let Some(native_alloc) = existing {
+                match ralloc::VmAllocator::global().reallocate(native_alloc, new_size) {
+                    Ok(new_alloc) => {
+                        self.native.lock().unwrap().insert(handle.0, new_alloc);
+                    }
+                    Err((original, _error)) => {
+                        self.native.lock().unwrap().insert(handle.0, original);
+                        self.log.log(MemoryLogEntry::failure(
+                            seq,
+                            thread_id,
+                            OperationType::Error,
+                            vm_address,
+                            vm_generation,
+                            "native_realloc_failed",
+                        ));
+                        return Err(TinyAllocatorError::NativeAllocFailed);
+                    }
+                }
+            }
+        }
 
-        // Phase 2: update by remove + re-insert with the new size.
-        // We already hold a `get` snapshot so remove cannot fail with a
-        // different error.
+        // Update the table's bookkeeping now that the native reallocation
+        // has already succeeded. We already hold a `get` snapshot so remove
+        // cannot fail with a different error.
         let removed = self.table.remove(vm_address, vm_generation).map_err(|_| {
             TinyAllocatorError::NotFound { vm_address }
         })?;
@@ -677,7 +752,16 @@ impl TinyAllocator {
         let live_count = live_records.iter().filter(|r| r.live).count();
         let live_bytes: usize = live_records.iter().filter(|r| r.live).map(|r| r.byte_len).sum();
 
-        // PHASE3: for each live record, call VmAllocator::global().deallocate(...)
+        // Release every remaining native allocation. `native` only ever holds
+        // entries for records `allocate()` has inserted and `free()`/
+        // `reallocate()` haven't already removed, so draining it here matches
+        // exactly what `drain_for_shutdown` just pulled out of the table.
+        {
+            let mut native = self.native.lock().unwrap();
+            for (_native_id, native_alloc) in native.drain() {
+                ralloc::VmAllocator::global().deallocate(native_alloc);
+            }
+        }
 
         let seq = self.next_seq();
         self.log.log(MemoryLogEntry::success(
