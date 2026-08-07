@@ -129,10 +129,10 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
             "tinylang: mode={} check={} slots={} functions={} structs={} modules={} fingerprint={}",
             args.mode,
             args.check,
-            program.slot_count,
-            program.functions.len(),
-            program.structs.len(),
-            program.modules.len(),
+            program.slot_count(),
+            program.functions().len(),
+            program.structs().len(),
+            program.modules().len(),
             program.fingerprint()
         );
     }

@@ -1,12 +1,10 @@
 # TinyOne ABI Contract
 
-These invariants hold for all current entry points. They are not subject
+These invariants are the frozen ABI version 1 contract. They are not subject
 to the ABI stability question — they describe observable behavior that
 TinyOne guarantees today and will preserve across versions.
 
-See [`versioning.md`](versioning.md) for what changes before v1 and
-what freezes after. See [`schemas.md`](schemas.md) for the exact JSON
-field contracts per endpoint.
+See [`schemas.md`](schemas.md) for the exact JSON field contracts per endpoint.
 
 ## Panic Boundary
 
@@ -23,9 +21,9 @@ shape should never appear in normal use — it indicates a library bug.
 
 ## Null Safety
 
-Every `const char *` parameter that is not marked `/* nullable */` in
-`tinyone.h` accepts a null pointer without crashing. Passing null returns
-a structured compile error:
+Every required `const char *` parameter is documented as non-null in
+`tinylang.h`. Passing null still returns a structured compile error rather
+than crashing:
 
 ```json
 {"ok": false, "kind": "compile", "error": "... pointer was null"}
@@ -42,6 +40,9 @@ for freeing it with `tinyone_free_string`. Freeing with the C standard
 `free()` is undefined behavior.
 
 `tinyone_free_string(NULL)` is always safe and is a no-op.
+
+A non-null argument must be an outstanding pointer returned by one of the JSON
+entry points and must be freed exactly once.
 
 Do not share a returned `char *` pointer across threads without
 synchronization; free it from the same thread that called the function,

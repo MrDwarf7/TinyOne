@@ -14,7 +14,7 @@ optimizer, verifier, portable VM, heap/runtime model, bytecode artifact
 support, adaptive execution support, host integration surfaces, CLI tooling,
 and early allocator-integration scaffolding.
 
-Current crate version: ``0.6.0`` (the implementation is now managed as the
+Current crate version: ``1.0.0`` (the implementation is now managed as the
 public v1 release line while language work proceeds internally under v2).
 
 The current Rust crate lives in ``TinyOne/`` in this checkout. TinyLang is the
@@ -244,7 +244,9 @@ The FFI surface uses JSON-over-C-string entry points:
 * ``tinyone_free_string``
 
 Returned strings must be released with ``tinyone_free_string``. The ABI is
-explicitly unstable before v1.
+stable at version 1. Check ``tinyone_abi_version()`` against
+``TINYONE_ABI_VERSION`` before using the API; incompatible ABI changes require
+a new major ABI version.
 
 Documentation
 -------------
@@ -259,7 +261,7 @@ The main documentation tree is ``docs/``:
 * ``docs/bytecode.md`` describes opcodes, artifacts, verifier rules, and JIT
 * ``docs/memory-model.md`` describes heap handles, pointer checks, and limits
 * ``docs/stdlib.md`` describes builtins and stdlib bridge behavior
-* ``docs/v1-roadmap.md`` tracks v1 release and stable-ABI blockers
+* ``docs/v1-roadmap.md`` records the completed v1 stabilization work
 * ``docs/v2-roadmap.md`` tracks the active internal v2 language roadmap
 
 The change-document process is defined by the TinyLang documentation-change

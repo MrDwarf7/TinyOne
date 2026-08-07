@@ -86,9 +86,9 @@ fn imports_and_artifact_roundtrip() {
     .unwrap();
 
     let program = compile_file(&main_path).unwrap();
-    assert_eq!(program.modules.len(), 1);
-    assert_eq!(program.modules[0].exported_functions, vec!["sum_pair"]);
-    assert_eq!(program.modules[0].exported_structs, vec!["Pair"]);
+    assert_eq!(program.modules().len(), 1);
+    assert_eq!(program.modules()[0].exported_functions(), &["sum_pair"]);
+    assert_eq!(program.modules()[0].exported_structs(), &["Pair"]);
 
     let loaded = Program::from_artifact(program.to_artifact()).unwrap();
     assert_eq!(program.fingerprint(), loaded.fingerprint());

@@ -6,6 +6,8 @@ target/
 .vscode/
 .idea/
 *.swp
+__pycache__/
+*.py[cod]
 
 # OS
 .DS_Store
@@ -18,3 +20,6 @@ Thumbs.db
 
 # Local-only docs
 docs/superpowers/*
+
+# Local-only development/preparation
+git-prep/*

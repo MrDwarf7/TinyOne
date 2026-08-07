@@ -53,6 +53,19 @@ cargo test --manifest-path TinyOne/Cargo.toml --test abi_api_soundness \
   c_header_ffi_smoke_covers_ownership_null_and_mode_contracts
 ```
 
+For host validation, run the Python tooling through `uv` and compile the C,
+C++, and Rust consumer fixtures:
+
+```sh
+uv run --no-project python -m unittest discover -s Tools -p 'test_*.py'
+bash scripts/consumer-compile.sh                 # Unix
+powershell -File scripts/consumer-compile.ps1    # Windows
+bash scripts/consumer-smoke.sh                   # Unix native C smoke
+```
+
+CI runs the C smoke executable with native compilers on Ubuntu, macOS, and
+Windows. C++, Rust, and Zig consumers use the same generated `tinylang.h`.
+
 ## Code Quality
 
 ```sh

@@ -2,18 +2,17 @@
 
 Target release date: **August 1, 2026**
 
-This document describes the work required before v1 is tagged and the ABI is
-declared stable. Items are grouped by area and ordered by blocking priority:
-items earlier in each section must be resolved before items that follow them.
+This document records the v1 stabilization work completed for the `v1.0.0`
+release. The C ABI is now stable; current compatibility rules are maintained
+in [`docs/abi/versioning.md`](abi/versioning.md).
 
 ---
 
-## Blocking: ABI Stability
+## Completed: ABI Stability
 
-The C FFI ABI is explicitly marked **UNSTABLE** until all items in this section
-are resolved. Once the ABI is declared stable, changes to function signatures,
-JSON response schemas, or the `tinyone.h` layout are breaking changes and
-require a major version bump.
+The C FFI ABI is **STABLE** at version 1. Changes to function signatures, JSON
+response schemas, or the `tinyone.h` layout are breaking changes and require a
+new major ABI version.
 
 ### 1. Stable JSON response schema
 
@@ -173,7 +172,7 @@ sole reference implementation until further notice.
 
 ## Release Checklist
 
-The following steps must be completed in order before tagging v1:
+The following release steps were completed for `v1.0.0`:
 
 1. All six blocking items above resolved and tested
 2. `cargo test --manifest-path TinyOne/Cargo.toml` — all tests pass
@@ -190,6 +189,6 @@ The following steps must be completed in order before tagging v1:
    operators, all statements, module system, builtin categories, overflow
    behavior, bounds-checking behavior
 9. CHANGELOG or release notes written
-10. Version bumped from `0.5.0` to `1.0.0` in `TinyOne/Cargo.toml`
-11. Git tag `v1.0.0` pushed; ABI stability formally declared in
+10. Version set to `1.0.0` in `TinyOne/Cargo.toml`
+11. Git tag `v1.0.0` created; ABI stability formally declared in
     `docs/ffi/c-integration.md` and README

@@ -268,15 +268,18 @@ UTF-8 byte length of string `s`.
 Unicode scalar count of `s`.
 
 #### `str_byte_at(s, byte_index) → int`
-Returns the byte value at `byte_index`.
+Returns the byte value at `byte_index`. The index is a zero-based UTF-8 byte
+offset, not a Unicode-scalar position. Negative, too-large, or out-of-bounds
+indexes are runtime errors.
 
 #### `str_char_at(s, char_index) → string`
 Returns a single-character string containing the Unicode scalar at
-`char_index`. Runtime error if `char_index >= str_char_len(s)`.
+`char_index`. Negative, too-large, or out-of-bounds indexes are runtime errors.
 
 #### `str_slice(s, start_char, end_char) → string`
 Returns the substring from `start_char` (inclusive) to `end_char` (exclusive),
-measured in Unicode scalar positions.
+measured in Unicode scalar positions. Negative, too-large, or reversed bounds
+are runtime errors.
 
 #### `str_concat(a, b) → string`
 Returns a new string that is the concatenation of `a` and `b`.

@@ -93,6 +93,53 @@ fn io_capture_round_trips_writeln() {
 }
 
 #[test]
+fn io_and_string_helpers_match_backends() {
+    let source = r#"
+    let ignored = io_write(io_stderr(), "err")
+    let ignored2 = io_flush(io_stdout())
+    let captured = io_capture_stderr()
+    print captured
+    print io_stdin()
+    print str_concat("left", "right")
+    print i64(7)
+    print fp64(1)
+    "#;
+    assert_parity(source, "err\n0\nleftright\n7\n1.0\n");
+}
+
+#[test]
+fn typed_arithmetic_and_assert_helpers_match_backends() {
+    let source = r#"
+    print check_int_range(127, "i8")
+    print typed_sub(9, 4, "i64")
+    print typed_mul(6, 7, "i64")
+    print typed_div(20, 5, "i64")
+    print typed_neg(9, "i64")
+    print assert(1, "must pass")
+    "#;
+    assert_parity(source, "127\n5\n42\n4\n-9\n1\n");
+}
+
+#[test]
+fn io_read_line_consumes_the_same_input_in_both_backends() {
+    let source = r#"
+    print io_read_line()
+    "#;
+    let program = compile_source(source).expect("compile");
+    for mode in ["vm", "jit"] {
+        let mut output = Vec::new();
+        run_program(
+            Arc::clone(&program),
+            mode,
+            &mut output,
+            vec!["from-input".to_string()],
+        )
+        .expect("run");
+        assert_eq!(String::from_utf8(output).unwrap(), "from-input\n");
+    }
+}
+
+#[test]
 fn string_byte_vs_char_indexing() {
     let source = r#"
     let text = "héllo"

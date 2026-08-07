@@ -1,9 +1,7 @@
 # ABI Versioning and Stability
 
-**Current ABI status: UNSTABLE.** Do not pin to a specific ABI version
-until v1 is tagged and stability is declared. See the
-[v1 roadmap](../v1-roadmap.md) for the work required before that
-declaration.
+**ABI version 1 is declared stable.** Consumers must check
+`tinyone_abi_version()` against `TINYONE_ABI_VERSION` before using the API.
 
 ## What Constitutes a Breaking Change
 
@@ -42,35 +40,44 @@ The following changes break binary or source compatibility for callers:
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Function signatures in `tinyone.h` | UNSTABLE | May change before v1 |
+| Function signatures in `tinyone.h` | STABLE | Frozen at ABI version 1 |
 | Response envelope shape (4 kinds) | STABLE | Frozen now |
-| `value` object keys per endpoint | UNSTABLE | Audit pending (roadmap item 1) |
-| `memory` array encoding | UNSTABLE | Encoding not yet frozen |
+| `value` object keys per endpoint | STABLE | Frozen by the committed JSON schema |
+| `memory` array encoding | STABLE | Frozen by the committed JSON schema and contract tests |
 | Phase-1 opcode ordinals (1–29) | STABLE | Frozen; artifact round-trips depend on them |
-| Phase-2 opcode ordinals (30+) | UNSTABLE | May change before v1 |
+| Phase-2 opcode ordinals (30+) | INTERNAL | May change with a future artifact version; not exposed as C declarations |
 | Phase-1 builtin slots (0–34) | STABLE | Frozen |
-| Phase-2 builtin slots (35+) | UNSTABLE | Order may change before v1 |
+| Phase-2 builtin slots (35+) | INTERNAL | Order may change with a future language/artifact version |
 | Artifact `format`/`version` fields | STABLE | `"tinyone-bytecode"` / `1` |
 
-## v1 Stability Declaration
+## ABI Version 1 Stability Declaration
 
-When v1 is tagged, the following will be declared stable and will not
-change without a major version bump:
+The following are stable and will not change without a major ABI version bump:
 
 1. All function signatures in `tinyone.h`
 2. All four response envelope shapes
 3. All `value` object keys for every entry point
 4. The `memory` array encoding
-5. Phase-1 opcode ordinals, Phase-2 opcode ordinals, and Phase-2 builtin slot order
+5. Phase-1 opcode ordinals and Phase-1 builtin slot order used by artifact version 1
 
-Before v1 can be declared, the [v1 roadmap](../v1-roadmap.md) items 1–5
-(ABI blocking) must be resolved. Key items:
+The exact nullability, ownership, threading, panic, and error rules are part
+of the contract in [`contract.md`](contract.md) and the generated header.
 
-- **Item 1:** JSON response schema audit and contract tests committed
-- **Item 2:** `Program` field visibility scoped to `pub(crate)`
-- **Item 3:** `VerifiedProgram` adopted on all execution paths
-- **Item 4:** `tinyone_free_string` wrapped in `catch_unwind`
-- **Item 5:** Void `extern "C"` entry point policy decided and documented
+## Compatibility Guidance
+
+At startup, compare the library result from `tinyone_abi_version()` with the
+header constant `TINYONE_ABI_VERSION`. Refuse to load the library when the
+values differ; do not infer compatibility from the package version.
+
+For JSON responses, branch on the documented `ok` and `kind` fields, validate
+the fields your application requires, and ignore unknown success fields. Do
+not parse human-readable `error` text. A `compile`, `runtime`, or `panic`
+response is an application-visible failure, not an ABI mismatch.
+
+For bytecode artifacts, accept only `format: "tinyone-bytecode"` and
+`version: 1` unless the consumer explicitly supports another format version.
+ABI version 1 does not promise compatibility for internal Rust layouts, heap
+addresses, JIT listing text, or the Rust API.
 
 ## Decay Policy
 

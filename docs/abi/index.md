@@ -4,8 +4,8 @@ TinyOne's C ABI is the interface between the compiled `libtinyone` shared
 library and any host application. It covers the JSON response contract,
 the panic boundary, ownership rules, and the versioning policy.
 
-**ABI status: UNSTABLE** until v1 is tagged. See
-[versioning.md](versioning.md) for what that means in practice.
+**ABI version 1 is stable.** See [versioning.md](versioning.md) for the frozen
+compatibility rules.
 
 For how to link and call the library from C, see
 [`ffi/c-integration.md`](../ffi/c-integration.md).

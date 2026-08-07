@@ -3,12 +3,11 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::{
-    BytecodeVerifier, HeapData, Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats,
-    TinyMemory, TinyOneError, TinyRuntimeContext, TypeKind, Value, checked_div,
-    checked_non_negative_usize, pop_args, runtime_add, runtime_call_builtin, runtime_compare,
-    runtime_get_field, runtime_index, runtime_is_false, runtime_make_array, runtime_make_enum,
-    runtime_make_struct, runtime_mul, runtime_neg, runtime_null, runtime_print, runtime_set_field,
-    runtime_set_index, runtime_sub,
+    HeapData, Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory, TinyOneError,
+    TinyRuntimeContext, TypeKind, Value, VerifiedProgram, checked_div, checked_non_negative_usize,
+    pop_args, runtime_add, runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index,
+    runtime_is_false, runtime_make_array, runtime_make_enum, runtime_make_struct, runtime_mul,
+    runtime_neg, runtime_null, runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,19 +45,18 @@ fn lookup_field(fields: &[String], index: usize) -> Result<&str> {
 
 impl VM {
     pub fn new(program: Arc<Program>, memory: TinyMemory, inputs: Vec<String>) -> Result<Self> {
-        BytecodeVerifier::verify(&program)?;
-        Ok(Self::new_unchecked(program, memory, inputs))
+        let verified = VerifiedProgram::verify_arc(program)?;
+        Ok(Self::new_unchecked(&verified, memory, inputs))
     }
 
-    /// Construct a VM without re-verifying. Only call this when the caller
-    /// has already run `BytecodeVerifier::verify` on the same program.
+    /// Construct a VM without re-verifying from a verification token.
     pub(crate) fn new_unchecked(
-        program: Arc<Program>,
+        verified: &VerifiedProgram,
         memory: TinyMemory,
         inputs: Vec<String>,
     ) -> Self {
         Self {
-            program,
+            program: verified.program_arc(),
             memory,
             context: TinyRuntimeContext::new(inputs),
             call_depth: 0,
@@ -66,12 +64,12 @@ impl VM {
     }
 
     pub(crate) fn new_unchecked_with_context(
-        program: Arc<Program>,
+        verified: &VerifiedProgram,
         memory: TinyMemory,
         context: TinyRuntimeContext,
     ) -> Self {
         Self {
-            program,
+            program: verified.program_arc(),
             memory,
             context,
             call_depth: 0,

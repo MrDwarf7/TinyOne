@@ -306,3 +306,115 @@ fn reject_over_limit(name: &str, got: usize, max: usize) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn minimal() -> JsonValue {
+        json!({
+            "format": "tinyone-bytecode",
+            "version": 1,
+            "code": [{"op": "HALT", "arg": 0, "arg2": 0}],
+            "slot_count": 0,
+            "names": [],
+            "functions": [],
+            "strings": [],
+            "structs": [],
+            "fields": [],
+            "modules": []
+        })
+    }
+
+    fn rejects(mut artifact: JsonValue, field: &str) {
+        let error = Program::from_artifact(artifact.take()).expect_err("limit must reject");
+        assert!(error.to_string().contains(field), "{error}");
+    }
+
+    #[test]
+    fn rejects_every_top_level_collection_limit() {
+        let mut artifact = minimal();
+        artifact["structs"] = JsonValue::Array(vec![json!({}); MAX_STRUCTS + 1]);
+        rejects(artifact, "structs limit");
+
+        let mut artifact = minimal();
+        artifact["fields"] = JsonValue::Array(vec![json!(""); MAX_FIELDS + 1]);
+        rejects(artifact, "fields limit");
+
+        let mut artifact = minimal();
+        artifact["modules"] = JsonValue::Array(vec![json!({}); MAX_MODULES + 1]);
+        rejects(artifact, "modules limit");
+
+        let mut artifact = minimal();
+        artifact["names"] = JsonValue::Array(vec![json!(""); MAX_NAMES + 1]);
+        rejects(artifact, "names limit");
+    }
+
+    #[test]
+    fn rejects_nested_struct_and_module_limits_before_collecting() {
+        let mut artifact = minimal();
+        artifact["structs"] = json!([{
+            "name": "TooWide",
+            "fields": vec![""; MAX_STRUCT_FIELDS + 1]
+        }]);
+        rejects(artifact, "struct fields limit");
+
+        let mut artifact = minimal();
+        artifact["modules"] = json!([{
+            "name": "m", "path": "m",
+            "imports": vec![{}; MAX_MODULE_IMPORTS + 1],
+            "exported_functions": [], "exported_structs": []
+        }]);
+        rejects(artifact, "module imports limit");
+
+        let mut artifact = minimal();
+        artifact["modules"] = json!([{
+            "name": "m", "path": "m", "imports": [],
+            "exported_functions": vec![""; MAX_MODULE_EXPORTS + 1],
+            "exported_structs": []
+        }]);
+        rejects(artifact, "module function exports limit");
+    }
+
+    #[test]
+    fn rejects_nested_function_and_total_code_limits_before_verification() {
+        let mut artifact = minimal();
+        artifact["functions"] = json!([{
+            "name": "too_long",
+            "param_count": 0,
+            "code": vec![json!({"op": "HALT", "arg": 0, "arg2": 0}); MAX_CODE_OPS + 1],
+            "slot_count": 0,
+            "names": []
+        }]);
+        rejects(artifact, "function code limit");
+
+        let mut artifact = minimal();
+        artifact["functions"] = json!([{
+            "name": "too_many_params",
+            "param_count": MAX_SLOT_COUNT + 1,
+            "code": [{"op": "HALT", "arg": 0, "arg2": 0}],
+            "slot_count": 0,
+            "names": []
+        }]);
+        rejects(artifact, "param_count limit");
+
+        let function = json!({
+            "name": "f",
+            "param_count": 0,
+            "code": vec![json!({"op": "HALT", "arg": 0, "arg2": 0}); MAX_CODE_OPS],
+            "slot_count": 0,
+            "names": []
+        });
+        let mut artifact = minimal();
+        artifact["functions"] = JsonValue::Array(vec![function; 5]);
+        rejects(artifact, "total code limit");
+    }
+
+    #[test]
+    fn rejects_text_budget_overflow() {
+        let mut artifact = minimal();
+        artifact["strings"] = json!(["x".repeat(MAX_TEXT_BYTES + 1)]);
+        rejects(artifact, "strings limit");
+    }
+}

@@ -26,6 +26,7 @@ DEFAULT_HEADER = DEFAULT_GENERATED_HEADER
 DEFAULT_CBINDGEN_CONFIG = ROOT / "cbindgen.toml"
 DEFAULT_CBINDGEN_SOURCE = DEFAULT_FFI
 EXPECTED_PACKAGE_NAME = "tinylang"
+EXPECTED_ABI_VERSION = 1
 
 
 RUST_EXPORT_RE = re.compile(
@@ -35,6 +36,9 @@ RUST_EXPORT_RE = re.compile(
     re.MULTILINE,
 )
 HEADER_SYMBOL_RE = re.compile(r"\b(tinyone_[A-Za-z0-9_]+)\s*\(")
+HEADER_ABI_VERSION_RE = re.compile(
+    r"#\s*define\s+TINYONE_ABI_VERSION\s+([0-9]+)u?\b"
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,7 @@ class AbiSymbols:
     header_path: Path
     rust_sha256: str
     header_sha256: str
+    header_abi_version: int | None
 
     @property
     def missing_from_header(self) -> tuple[str, ...]:
@@ -56,7 +61,11 @@ class AbiSymbols:
 
     @property
     def has_drift(self) -> bool:
-        return bool(self.missing_from_header or self.missing_from_rust)
+        return bool(
+            self.missing_from_header
+            or self.missing_from_rust
+            or self.header_abi_version != EXPECTED_ABI_VERSION
+        )
 
 
 def read_text(path: Path) -> str:
@@ -85,6 +94,13 @@ def header_symbols(path: Path) -> tuple[str, ...]:
     return tuple(sorted(set(HEADER_SYMBOL_RE.findall(text))))
 
 
+def header_abi_version(path: Path) -> int | None:
+    matches = HEADER_ABI_VERSION_RE.findall(read_text(path))
+    if len(matches) != 1:
+        return None
+    return int(matches[0])
+
+
 def collect_symbols(ffi_path: Path, header_path: Path) -> AbiSymbols:
     return AbiSymbols(
         rust_symbols=rust_exports(ffi_path),
@@ -93,6 +109,7 @@ def collect_symbols(ffi_path: Path, header_path: Path) -> AbiSymbols:
         header_path=header_path,
         rust_sha256=sha256_file(ffi_path),
         header_sha256=sha256_file(header_path),
+        header_abi_version=header_abi_version(header_path),
     )
 
 
@@ -125,6 +142,8 @@ def render_manifest(symbols: AbiSymbols) -> str:
         f"  rust_ffi_sha256: {symbols.rust_sha256}",
         f"  c_header: {rel(symbols.header_path)}",
         f"  c_header_sha256: {symbols.header_sha256}",
+        f"  expected_abi_version: {EXPECTED_ABI_VERSION}",
+        f"  header_abi_version: {symbols.header_abi_version}",
         "rust_symbols:",
         *yaml_list(symbols.rust_symbols),
         "header_symbols:",
@@ -188,6 +207,11 @@ def command_check(args: argparse.Namespace) -> int:
         print("Header declarations missing from Rust exports:")
         for symbol in symbols.missing_from_rust:
             print(f"  - {symbol}")
+    if symbols.header_abi_version != EXPECTED_ABI_VERSION:
+        print(
+            "Header ABI version mismatch: "
+            f"expected {EXPECTED_ABI_VERSION}, got {symbols.header_abi_version!r}."
+        )
     return 1
 
 
@@ -205,6 +229,8 @@ def command_generate_header(args: argparse.Namespace) -> int:
         return 2
 
     cbindgen = shutil.which(args.cbindgen)
+    if cbindgen is None and Path(args.cbindgen).is_file():
+        cbindgen = str(Path(args.cbindgen).resolve())
     if cbindgen is None:
         print(
             "cbindgen is not available on PATH; cannot generate tinylang.h.",
@@ -218,13 +244,17 @@ def command_generate_header(args: argparse.Namespace) -> int:
         return 2
 
     output = args.output
-    command = [
-        cbindgen,
+    command = (
+        [sys.executable, cbindgen]
+        if Path(cbindgen).suffix.lower() == ".py"
+        else [cbindgen]
+    )
+    command.extend([
         "--lang",
         "c",
         "--output",
         str(output),
-    ]
+    ])
     if config is not None:
         command.extend(["--config", str(config)])
     command.append(str(source))

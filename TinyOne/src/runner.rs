@@ -3,7 +3,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::{
-    BytecodeVerifier, JitCache, Program, Result, TinyMemory, TinyOneError, TinyRunReport, VM,
+    JitCache, Program, Result, TinyMemory, TinyOneError, TinyRunReport, VM, VerifiedProgram,
     compile_source,
 };
 
@@ -40,13 +40,12 @@ pub fn run_program_with_env(
     sys_args: Vec<String>,
     sys_env: HashMap<String, String>,
 ) -> Result<TinyMemory> {
-    BytecodeVerifier::verify(&program)?;
+    let verified = VerifiedProgram::verify_arc(Arc::clone(&program))?;
     let mode = RunMode::parse(mode)?;
     match mode {
         RunMode::Vm => {
-            let slot_count = program.slot_count;
-            let mut vm =
-                VM::new_unchecked(Arc::clone(&program), TinyMemory::new(slot_count), inputs);
+            let slot_count = verified.program().slot_count;
+            let mut vm = VM::new_unchecked(&verified, TinyMemory::new(slot_count), inputs);
             vm.context.program_arc = Some(Arc::clone(&program));
             vm.set_sys_args(sys_args);
             vm.set_sys_env(sys_env);
@@ -54,7 +53,7 @@ pub fn run_program_with_env(
         }
         RunMode::Jit => {
             let mut cache = JitCache::new();
-            cache.run_program_with_env_unchecked(&program, stdout, inputs, sys_args, sys_env)
+            cache.run_program_with_env_unchecked(&verified, stdout, inputs, sys_args, sys_env)
         }
     }
 }
@@ -65,19 +64,18 @@ pub fn run_program_report(
     stdout: &mut dyn Write,
     inputs: Vec<String>,
 ) -> Result<TinyRunReport> {
-    BytecodeVerifier::verify(&program)?;
+    let verified = VerifiedProgram::verify_arc(Arc::clone(&program))?;
     let mode = RunMode::parse(mode)?;
     match mode {
         RunMode::Vm => {
-            let slot_count = program.slot_count;
-            let mut vm =
-                VM::new_unchecked(Arc::clone(&program), TinyMemory::new(slot_count), inputs);
+            let slot_count = verified.program().slot_count;
+            let mut vm = VM::new_unchecked(&verified, TinyMemory::new(slot_count), inputs);
             vm.context.program_arc = Some(Arc::clone(&program));
             vm.run_report(stdout)
         }
         RunMode::Jit => {
             let mut cache = JitCache::new();
-            cache.run_program_report_unchecked(&program, stdout, inputs)
+            cache.run_program_report_unchecked(&verified, stdout, inputs)
         }
     }
 }

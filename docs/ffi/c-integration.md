@@ -4,8 +4,8 @@ TinyOne builds as a `cdylib` alongside the CLI binary. All public entry points
 are declared in `tinylang.h` at the repository root. This document covers how to
 embed TinyOne in a C or C++ application.
 
-**ABI STATUS: UNSTABLE.** Do not pin to a specific ABI version until v1 is
-tagged and the ABI is declared stable.
+**ABI VERSION 1.** The public C ABI is frozen. Check
+`tinyone_abi_version()` against `TINYONE_ABI_VERSION` before use.
 
 ## Building the Library
 
@@ -49,6 +49,10 @@ The committed generated C header for the current ABI is `tinylang.h`. It keeps
 exported symbols named `tinyone_*`; do not rename the C symbols as part of
 ordinary header work.
 
+`tinyone_abi_version()` returns the ABI version reported by the library, and
+`TINYONE_ABI_VERSION` is the matching header constant. Both are `1` for the
+declared ABI.
+
 Before changing `TinyOne/src/ffi.rs` or `tinylang.h`, run:
 
 ```sh
@@ -60,13 +64,13 @@ That command uses only Python's standard library and compares exported
 available for review:
 
 ```sh
-python3 Tools/abi_manifest.py manifest
+uv run --no-project python Tools/abi_manifest.py manifest
 ```
 
 Header generation is optional and requires a local `cbindgen` binary:
 
 ```sh
-python3 Tools/abi_manifest.py generate-header --output tinylang.h
+uv run --no-project python Tools/abi_manifest.py generate-header --output tinylang.h
 ```
 
 If `cbindgen` is missing, the tool reports that explicitly and still supports
@@ -103,7 +107,7 @@ rather than unwinding into the caller.
 
 ## Parameter Nullability
 
-Unless a parameter is annotated `/* nullable */` in `tinylang.h`, it must be a
+Unless a parameter is documented as nullable in `tinylang.h`, it must be a
 valid NUL-terminated UTF-8 C string. Passing `NULL` for a non-nullable parameter
 does **not** crash — it returns a structured `{"ok":false,"kind":"compile","error":"… pointer was null"}` response.
 
@@ -361,11 +365,10 @@ independently safe.
 
 ## Known Limitations
 
-- `tinyone_free_string` calls `CString::from_raw` without a `catch_unwind`
-  guard. Passing a double-freed pointer or a non-NUL-terminated pointer is
-  undefined behavior rather than a clean panic. Obey the ownership contract.
-- Future void-returning entry points cannot use the internal `respond()` helper.
-  Any new `void extern "C"` function added to the library must install its own
-  `catch_unwind` guard.
-- The ABI is UNSTABLE. JSON response schemas, function signatures, and the
-  header layout may change before v1.
+- `tinyone_free_string` is panic-contained, but passing a double-freed pointer
+  or a non-NUL-terminated pointer remains undefined behavior. Obey the
+  ownership contract.
+- All future `extern "C"` entry points must be panic-contained. Functions that
+  return JSON must use the internal `respond()` helper; void-returning
+  functions must use an equivalent `catch_unwind` guard before being exported.
+- ABI version 1 is frozen; incompatible changes require a new ABI version.

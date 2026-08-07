@@ -8,11 +8,26 @@ use crate::region::{self, ArenaSlot};
 use crate::sync::SpinLock;
 
 pub(crate) const ARENA_COUNT: usize = 4;
-// 4 * 2 MiB = 8 MiB total static pool — 2x headroom over TinyOne's
-// MAX_HEAP_BYTES (4 MiB, see TinyOne/src/runtime/limits.rs) so a
-// VmAllocator-backed shadow allocation exists for every live VM heap byte
-// without exhausting Ralloc's fixed arena storage.
-pub(crate) const ARENA_BYTES: usize = 2 * 1024 * 1024;
+// 4 * 8 MiB = 32 MiB total static pool.
+//
+// TinyOne's containers (Array/Map/Vec/Dictionary/Closure captures) now own
+// their real backing bytes directly (RallocVec, growing via amortized
+// doubling) rather than just shadow-tracking a Rust-native Vec. Sizing must
+// cover the worst case, not just TinyOne's MAX_HEAP_BYTES (4 MiB, see
+// TinyOne/src/runtime/limits.rs) logical budget directly:
+//   - A single object can reach the *entire* 4 MiB logical budget (e.g. one
+//     array at MAX_ARRAY_LENGTH). Amortized doubling means its physical
+//     capacity can be up to 2x that (8 MiB) once grown.
+//   - `max_allocation_size()` is one arena's size — a single allocation
+//     cannot span arenas — so one arena must alone be >= that 8 MiB worst
+//     case; hence ARENA_BYTES = 8 MiB, not just a bigger ARENA_COUNT.
+//   - Growing that object one step further reallocates old (~4 MiB) and new
+//     (~8 MiB) capacity *simultaneously* for the duration of the copy
+//     (`ralloc::VmAllocator::reallocate` allocates-then-copies-then-frees),
+//     needing ~12 MiB transiently across the pool.
+// 32 MiB leaves comfortable headroom above that ~12 MiB transient worst case
+// for other concurrent allocations (other heap objects, other threads).
+pub(crate) const ARENA_BYTES: usize = 8 * 1024 * 1024;
 const ARENA_ALIGN: usize = 64;
 pub(crate) const MAX_NATIVE_ALIGNMENT: usize = 4096;
 

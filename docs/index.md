@@ -31,12 +31,15 @@ Working on the TinyOne runtime implementation:
 - [VM and JIT Operation](vm.md) — dispatch loop, frame model, quickening lifecycle, JitCache
 - [Memory Model](memory-model.md) — heap slab, generation tags, ownership rules, resource limits
 - [Contributing Guide](contributing.md) — build, test, adding features, builtins, and stdlib modules
-- [v1 Roadmap](v1-roadmap.md) — work required before the stable ABI release
+- [v1 Roadmap](v1-roadmap.md) — completed v1 stabilization work
 - [v2 Roadmap](v2-roadmap.md) — current language-generation commitments and implementation tracks
 
 ---
 
 ## All Documents
+
+The [v1.0.0 release notes](release-notes-v1.0.0.md) summarize the stable ABI
+and compatibility guidance for consumers.
 
 | File | Description |
 | --- | --- |
