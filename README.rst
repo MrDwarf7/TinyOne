@@ -15,7 +15,7 @@ optimizer, verifier, portable VM, heap/runtime model, bytecode artifact
 support, adaptive execution support, host integration surfaces, CLI tooling,
 and early allocator-integration scaffolding.
 
-Current crate version: ``1.0.0`` (the implementation is now managed as the
+Current crate version: ``1.1.0`` (the implementation is now managed as the
 public v1 release line while language work proceeds internally under v2).
 
 The current Rust crate lives in ``TinyOne/`` in this checkout. TinyLang is the
