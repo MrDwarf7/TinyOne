@@ -1,8 +1,8 @@
 # TinyLang FFI v2 — Unified Typed C ABI
 
 - **Status:** Draft / Planned
-- **ABI status:** UNSTABLE. This document defines the *intended* shape of the
-  v1-stable FFI surface. Nothing here is stable until v1 is tagged.
+- **ABI status:** Planned v2 redesign. This document explores the future shape
+  of the FFI after the frozen v1 ABI; nothing here changes the v1 contract.
 - **Naming:** the public header is `tinylang.h` (branding), but the exported
   symbols remain `tinyone_*` and the library remains `libtinyone`. Name and
   symbols are intentionally decoupled — no ABI-wide symbol rename is implied.
@@ -78,7 +78,7 @@ serialization cost, so JSON is the right trade there.
 
 ### 2.4 Non-goals (v2)
 
-- A stable ABI commitment before v1.
+- Reopening or changing the frozen v1 ABI during the v1 lifecycle.
 - Marshalling every TinyOne type outbound (only a C-ABI-compatible subset is
   permitted in `extern` signatures — see §6).
 - A general C++-name-mangled or Rust-native ABI (the boundary is always C ABI).
@@ -487,8 +487,8 @@ contract or add guards; decide during implementation.
 
 ## 10. Versioning
 
-- The FFI ABI is UNSTABLE until v1; this surface is the **candidate v1-stable
-  ABI**.
+- The v1 FFI ABI is frozen for the v1 lifecycle; this document describes a
+  possible v2 replacement and is not a promise of backward compatibility.
 - `TinyValueKind` and all status/enum tags are **append-only** — never renumber
   or remove a tag.
 - `repr(C)` structs evolve additively (no field reordering; version the struct

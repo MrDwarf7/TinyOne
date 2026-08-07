@@ -1,8 +1,13 @@
 # TinyOne ABI Contract
 
-These invariants are the frozen ABI version 1 contract. They are not subject
-to the ABI stability question — they describe observable behavior that
-TinyOne guarantees today and will preserve across versions.
+These invariants are the frozen ABI version 1 contract. They remain frozen for
+the entire v1 lifecycle. TinyLang v2 is expected to make massive changes to
+the language boundary, so this contract does not promise compatibility across
+the v2 version jump.
+
+TinyLang does not promise to retain every historical implementation or keep
+old versions available forever. For comments, concerns, or questions, use the
+[TinyLang community forum](https://tl.404connernotfound.dev).
 
 See [`schemas.md`](schemas.md) for the exact JSON field contracts per endpoint.
 
@@ -80,3 +85,24 @@ Every execution path (VM and JIT, FFI and Rust API) runs
 A program that passes verification will not crash the host process due
 to malformed bytecode — all bytecode errors surface as structured
 `TinyOneError` values.
+
+## Text Input Limits
+
+The C ABI bounds every NUL-terminated text parameter before parsing or
+compilation. Source text is limited to 1 MiB, paths to 32 KiB, execution modes
+to 16 bytes, and `inputs_json` to 8 MiB, excluding the trailing NUL. Source
+files loaded by `compile_file` and imports use the same 1 MiB source limit.
+Oversized values return a structured compile error and are not parsed.
+
+## Process Sandbox
+
+The `run_source`, `run_file`, `run_artifact`, and JIT-listing C entry points
+execute inside the dedicated `tinyone-sandbox-worker` process. The parent waits
+for at most five seconds, then terminates the worker and returns a structured
+runtime error. The worker must be installed beside the host executable, or its
+path may be supplied through `TINYONE_SANDBOX_WORKER`.
+
+This is process isolation and deadline enforcement, not an OS security policy:
+the worker inherits the host account's filesystem and other operating-system
+permissions. Use a restricted account/container/job object when the input is
+from an untrusted principal.

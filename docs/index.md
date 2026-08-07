@@ -1,5 +1,14 @@
 # TinyLang Documentation
 
+> **Design status:** TinyLang v1 is an active release line. The v1 ABI is
+> frozen for the entire v1 lifecycle. Syntax, FFI details beyond the frozen
+> ABI, allocator, VM, JIT, memory design, and semantics may still evolve.
+> TinyLang v2 is expected to make major changes, including a new language
+> boundary design. These documents describe the current line and are not a
+> promise of perpetual compatibility.
+>
+> Send comments, concerns, and questions to the [TinyLang community forum](https://tl.404connernotfound.dev).
+
 ## Language Users
 
 Writing TinyLang programs:
@@ -20,7 +29,7 @@ Embedding the TinyOne implementation in a host application:
 - [Rust API Reference](ffi/rust-api.md) — compile_source, run_source, JitCache, and more
 - [ABI Contract](abi/contract.md) — panic boundary, null safety, thread safety, response envelope
 - [ABI Schemas](abi/schemas.md) — exact JSON response schemas per endpoint
-- [ABI Versioning](abi/versioning.md) — breaking-change policy, stability status, v1 plan
+- [ABI Versioning](abi/versioning.md) — frozen v1 policy and the v2 compatibility boundary
 
 ## Contributors
 
@@ -38,15 +47,16 @@ Working on the TinyOne runtime implementation:
 
 ## All Documents
 
-The [v1.0.0 release notes](release-notes-v1.0.0.md) summarize the stable ABI
-and compatibility guidance for consumers.
+The [v1.0.0 release notes](release-notes-v1.0.0.md) summarize the frozen v1 ABI
+and current compatibility guidance for consumers. TinyLang does not promise to
+keep old implementations or all historical language versions available forever.
 
 | File | Description |
 | --- | --- |
 | [`abi/contract.md`](abi/contract.md) | Runtime invariants: panic boundary, null safety, ownership, thread safety |
 | [`abi/index.md`](abi/index.md) | ABI area navigation |
 | [`abi/schemas.md`](abi/schemas.md) | JSON response schemas per entry point |
-| [`abi/versioning.md`](abi/versioning.md) | Breaking-change policy and v1 stability plan |
+| [`abi/versioning.md`](abi/versioning.md) | Frozen v1 policy and v2 compatibility boundary |
 | [`adversarial-findings.md`](adversarial-findings.md) | Adversarial test findings from Phase 1 review |
 | [`architecture.md`](architecture.md) | Pipeline, module map, stage details, key invariants |
 | [`audit-findings.md`](audit-findings.md) | Audit findings from Phase 1 review |

@@ -37,8 +37,8 @@ void tinyone_free_string(char *value);
  * # Safety
  *
  * `source` must be non-null and point to a valid NUL-terminated UTF-8 C
- * string for the duration of the call. A null pointer returns a compile
- * error response.
+ * string for the duration of the call and must be no larger than 1 MiB.
+ * A null pointer or oversized string returns a compile error response.
  */
 char *tinyone_lex_source_json(const char *source);
 
@@ -46,8 +46,8 @@ char *tinyone_lex_source_json(const char *source);
  * # Safety
  *
  * `source` must be non-null and point to a valid NUL-terminated UTF-8 C
- * string for the duration of the call. A null pointer returns a compile
- * error response.
+ * string for the duration of the call and must be no larger than 1 MiB.
+ * A null pointer or oversized string returns a compile error response.
  */
 char *tinyone_compile_source_json(const char *source);
 
@@ -55,8 +55,8 @@ char *tinyone_compile_source_json(const char *source);
  * # Safety
  *
  * `path` must be non-null and point to a valid NUL-terminated UTF-8 C string
- * for the duration of the call. A null pointer returns a compile error
- * response.
+ * for the duration of the call and must be no larger than 32 KiB. A null
+ * pointer or oversized string returns a compile error response.
  */
 char *tinyone_compile_file_json(const char *path);
 
@@ -64,9 +64,9 @@ char *tinyone_compile_file_json(const char *path);
  * # Safety
  *
  * `source` and `mode` must be non-null and point to valid NUL-terminated
- * UTF-8 C strings for the duration of the call. `inputs_json` is nullable;
- * null means an empty input queue. Any non-null pointer must point to a valid
- * NUL-terminated UTF-8 C string for the duration of the call.
+ * UTF-8 C strings for the duration of the call. `source` is limited to 1 MiB
+ * and `mode` to 16 bytes. `inputs_json` is nullable; null means an empty input
+ * queue. A non-null `inputs_json` is limited to 8 MiB.
  */
 char *tinyone_run_source_json(const char *source, const char *mode, const char *inputs_json);
 
@@ -74,9 +74,9 @@ char *tinyone_run_source_json(const char *source, const char *mode, const char *
  * # Safety
  *
  * `path` and `mode` must be non-null and point to valid NUL-terminated UTF-8
- * C strings for the duration of the call. `inputs_json` is nullable; null
- * means an empty input queue. Any non-null pointer must point to a valid
- * NUL-terminated UTF-8 C string for the duration of the call.
+ * C strings for the duration of the call. `path` is limited to 32 KiB and
+ * `mode` to 16 bytes. `inputs_json` is nullable; null means an empty input
+ * queue. A non-null `inputs_json` is limited to 8 MiB.
  */
 char *tinyone_run_file_json(const char *path, const char *mode, const char *inputs_json);
 
@@ -84,10 +84,11 @@ char *tinyone_run_file_json(const char *path, const char *mode, const char *inpu
  * # Safety
  *
  * `artifact_json` and `mode` must be non-null and point to valid NUL-terminated
- * UTF-8 C strings for the duration of the call. `inputs_json` is nullable;
- * null means an empty input queue. Any non-null pointer must point to a valid
- * NUL-terminated UTF-8 C string for the duration of the call.
+ * UTF-8 C strings for the duration of the call. `mode` is limited to 16 bytes.
+ * `inputs_json` is nullable; null means an empty input queue. A non-null
+ * `inputs_json` is limited to 8 MiB.
  * `artifact_json` must not exceed the documented artifact byte limit.
+ * `mode` is limited to 16 bytes and `inputs_json` to 8 MiB.
  */
 char *tinyone_run_artifact_json(const char *artifact_json,
                                 const char *mode,

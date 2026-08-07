@@ -15,6 +15,10 @@ crate-type = ["rlib", "cdylib"]
 name = "tinylang"
 path = "src/main.rs"
 
+[[bin]]
+name = "tinyone-sandbox-worker"
+path = "src/bin/tinyone-sandbox-worker.rs"
+
 [[test]]
 name = "language_suite"
 path = "tests/language_suite.rs"

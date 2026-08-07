@@ -32,9 +32,12 @@ pub use bytecode::{
 };
 pub(crate) use compiler::{
     Compiler, CompilerSharedState, ModuleInfo, Resolver, SharedState, SymbolTable,
-    default_import_alias, module_name_from_import, resolve_import, unique_module_name,
+    default_import_alias, module_name_from_import, read_source_file, resolve_import,
+    unique_module_name,
 };
 pub use error::{Result, TinyOneError};
+#[doc(hidden)]
+pub use ffi::sandbox_worker_main;
 pub(crate) use jit::{HOT_BACK_EDGE_THRESHOLD, JitChunk, JitFunction, JitOp, JitVm};
 pub use jit::{JitCache, JitCacheStats, JitProgram, JitStats, write_jit_listing};
 pub use runner::{

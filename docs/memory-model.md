@@ -1,5 +1,11 @@
 # Memory Model
 
+This is the current TinyOne memory and allocator design. It may change during
+v1 as implementation work continues; the v1 ABI freeze does not freeze the
+internal allocator or memory model. TinyLang v2 is expected to make major
+changes. Send comments, concerns, and questions to the [TinyLang community
+forum](https://tl.404connernotfound.dev).
+
 The TinyOne runtime implementation manages two memory regions: the **stack-frame memory** (fixed slots per function call) and the **heap** (dynamic allocation for all aggregate values). This document covers how each region works, how references are validated, and what resource limits apply.
 
 For the value types that use heap allocation, see [`syntax/types.md`](syntax/types.md). For the opcodes that interact with memory, see [`bytecode.md`](bytecode.md).
