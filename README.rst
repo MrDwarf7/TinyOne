@@ -3,7 +3,8 @@ TinyLang
 
 TinyOne is the v1 release generation of TinyLang, a portable systems
 programming language designed around a compact VM, bounded runtime
-assumptions, stable host-integration direction, and a small reasoning surface.
+assumptions, a small reasoning surface, and the freedom to discover its own
+best design.
 
 TinyLang is not tiny because its syntax is minimal. It is tiny where systems
 usually become expensive: runtime footprint, allocator design, host
@@ -34,10 +35,24 @@ General Information
 - Developer tools: ``Tools/``
 - Allocator work-in-progress: ``Ralloc/``
 
-TinyLang is now in its v1 release line. The language, bytecode format, builtin
-set, JSON artifacts, C ABI, and documentation process remain versioned release
-surfaces; see the v1 roadmap for stabilization work and the v2 roadmap for
-active language evolution.
+TinyLang is now in its v1 release line, but v1 and earlier are deliberately
+discovery versions. The syntax, bytecode format, builtin set, JSON artifacts,
+FFI details, allocator, VM, JIT, memory design, and semantics are subject to
+change. The v1 ABI itself is frozen for the entire v1 lifecycle. Nothing in
+the syntax, FFI, or allocator documentation is a promise of permanence or
+perfection. These versions exist to test theories, kill stereotypes, and
+proactively develop the model we are working toward.
+
+TinyLang v2 will be a major version jump with massive changes, including a new
+language-boundary design. The ABI is being saved for that major jump because
+it defines how two languages communicate. Documentation describes current
+behavior and design direction, not an unchangeable promise across v2.
+
+TinyLang is working toward a language that leaves no excess overhead, uses the
+smallest footprint it can without giving up reliability, and proactively pushes
+the idea of necessary performance loss out the window. Reaching that goal means
+changing the v2 ABI, FFI, allocator, VM, JIT, and surrounding implementation
+model when the evidence says we should.
 
 What Tiny Means
 ---------------
@@ -243,10 +258,10 @@ The FFI surface uses JSON-over-C-string entry points:
 * ``tinyone_jit_listing_json``
 * ``tinyone_free_string``
 
-Returned strings must be released with ``tinyone_free_string``. The ABI is
-stable at version 1. Check ``tinyone_abi_version()`` against
-``TINYONE_ABI_VERSION`` before using the API; incompatible ABI changes require
-a new major ABI version.
+Returned strings must be released with ``tinyone_free_string``. The v1 ABI is
+frozen for the entire v1 lifecycle. Check ``tinyone_abi_version()`` against
+``TINYONE_ABI_VERSION`` before using the API; expect major incompatibilities
+when TinyLang v2 introduces its new language-boundary design.
 
 Documentation
 -------------
@@ -310,6 +325,19 @@ Known Implementation Gaps
 
 This section intentionally records gaps between current implementation,
 documentation, tests, and earlier claims.
+
+Documentation status
+^^^^^^^^^^^^^^^^^^^^
+
+The syntax, FFI, allocator, VM, JIT, memory model, and semantics described here
+are works in progress. These pages explain current behavior so it can be tested
+and challenged; they do not guarantee that the described design, spelling,
+layout, ownership rules, or behavior will remain unchanged. The v1 ABI is the
+exception: it is frozen for v1, while v2 is expected to replace it.
+
+TinyLang will not store every old version of the code, keep all historical
+TinyLang versions available forever, or promise backward compatibility any time
+soon. Users should pin the specific source revision or release they need.
 
 Repository and documentation drift
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -407,7 +435,7 @@ Repository Layout
 
     .
     |-- README.rst
-    |-- LICENSE.md
+    |-- License.rst
     |-- tinylang.h
     |-- TinyOne/
     |   |-- Cargo.toml
@@ -449,8 +477,8 @@ The v1 release direction is documented in ``docs/v1-roadmap.md``. Active v2
 language development is documented in ``docs/v2-roadmap.md``. The v1 release
 themes include:
 
-* stable JSON response schemas
-* stable C ABI policy
+* stable v1 JSON response schemas
+* frozen v1 C ABI policy
 * safer verified-program execution typing
 * clearer public/private bytecode program ownership
 * better test coverage for Phase 2 builtins and artifact limits
@@ -462,4 +490,12 @@ themes include:
 License
 -------
 
-See ``LICENSE.md``.
+See ``License.rst``.
+
+Feedback and Community
+----------------------
+
+Comments, concerns, and questions should be sent to the TinyLang community
+forum at https://tl.404connernotfound.dev. This is the project channel for
+discussing the evolving design and reporting issues with the current
+documentation or implementation.

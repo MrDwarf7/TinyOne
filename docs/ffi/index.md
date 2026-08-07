@@ -1,5 +1,13 @@
 # FFI Integration
 
+The FFI documentation describes the current v1 integration surface. The v1 ABI
+is frozen for the v1 lifecycle, but FFI behavior and supporting implementation
+details may change as TinyLang develops. TinyLang v2 is expected to make major
+changes to how language boundaries work.
+
+Send FFI comments, concerns, and questions to the [TinyLang community
+forum](https://tl.404connernotfound.dev).
+
 TinyOne compiles to a shared library (`libtinyone.so` / `.dylib` / `.dll`)
 and a Rust crate. This section covers how to integrate TinyOne into a host
 application from both C and Rust.

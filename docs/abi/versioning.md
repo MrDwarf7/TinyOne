@@ -1,7 +1,14 @@
 # ABI Versioning and Stability
 
-**ABI version 1 is declared stable.** Consumers must check
+**ABI version 1 is frozen for the entire v1 lifecycle.** Consumers must check
 `tinyone_abi_version()` against `TINYONE_ABI_VERSION` before using the API.
+TinyLang v2 is a major version jump with an expected redesign of the language
+boundary and does not promise backward compatibility with v1.
+
+TinyLang will not keep every old implementation or historical language version
+available forever. Pin the specific release or source revision you depend on.
+Send comments, concerns, and questions to the [TinyLang community
+forum](https://tl.404connernotfound.dev).
 
 ## What Constitutes a Breaking Change
 

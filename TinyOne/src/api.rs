@@ -1,12 +1,11 @@
 use std::cell::RefCell;
-use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::{
     BytecodeVerifier, Compiler, CompilerSharedState, Lexer, PeepholeOptimizer, Program, Result,
-    TinyOneError, resolve_import,
+    TinyOneError, read_source_file, resolve_import,
 };
 
 pub fn compile_source(source: &str) -> Result<Arc<Program>> {
@@ -50,8 +49,7 @@ pub fn compile_file(path: impl AsRef<Path>) -> Result<Arc<Program>> {
         .as_ref()
         .canonicalize()
         .map_err(|error| TinyOneError::compile(format!("File error: {error}")))?;
-    let source = fs::read_to_string(&path)
-        .map_err(|error| TinyOneError::compile(format!("File error: {error}")))?;
+    let source = read_source_file(&path)?;
     let shared = Rc::new(RefCell::new(CompilerSharedState::default()));
     let mut compiler = Compiler::new(
         source,

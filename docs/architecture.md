@@ -1,5 +1,12 @@
 # TinyOne Implementation Architecture
 
+This document describes the current implementation, not a permanent
+architecture promise. TinyLang v1 keeps its ABI frozen, but the allocator, VM,
+JIT, memory design, syntax, and semantics may evolve. TinyLang v2 is expected
+to make major changes as the language boundary and implementation model are
+redesigned. Send comments, concerns, and questions to the [TinyLang community
+forum](https://tl.404connernotfound.dev).
+
 This document describes how the TinyOne implementation is structured
 internally: the pipeline each TinyLang program travels through, the major
 modules, and the invariants each stage owns.
@@ -264,5 +271,5 @@ no allocation. All JSON responses follow `{"ok": true/false, "kind": "…",
    both carry a generation counter. A freed-then-reallocated slot has a
    different generation, so stale references are caught at the next access.
 
-5. **ABI version 1 is stable.** The `extern "C"` entry points, their JSON
-   schemas, and the `tinylang.h` header are frozen by the ABI contract.
+5. **ABI version 1 is frozen.** The `extern "C"` entry points, their JSON
+   schemas, and the `tinylang.h` header remain frozen for the v1 lifecycle.

@@ -1,11 +1,31 @@
 use blake2::{Blake2b512, Digest};
 use serde_json::Value as JsonValue;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::{CompilerSharedState, Result, TinyOneError};
 
 pub(crate) type Resolver = fn(&str, &str) -> Result<(String, String)>;
+
+const MAX_SOURCE_BYTES: usize = 1024 * 1024;
+
+pub(crate) fn read_source_file(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| TinyOneError::compile(format!("File error: {error}")))?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take((MAX_SOURCE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| TinyOneError::compile(format!("File error: {error}")))?;
+    if bytes.len() > MAX_SOURCE_BYTES {
+        return Err(TinyOneError::compile(format!(
+            "Source rejected: byte size limit {MAX_SOURCE_BYTES} exceeded"
+        )));
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| TinyOneError::compile(format!("Source must be UTF-8: {error}")))
+}
 
 pub(crate) fn resolve_import(from_filename: &str, import_path: &str) -> Result<(String, String)> {
     let base = Path::new(from_filename)
@@ -17,7 +37,7 @@ pub(crate) fn resolve_import(from_filename: &str, import_path: &str) -> Result<(
         .unwrap_or_else(|| base.join(import_path))
         .canonicalize()
         .map_err(|error| TinyOneError::compile(format!("Import error: {error}")))?;
-    let source = fs::read_to_string(&path)
+    let source = read_source_file(&path)
         .map_err(|error| TinyOneError::compile(format!("Import error: {error}")))?;
     Ok((path.to_string_lossy().to_string(), source))
 }

@@ -1,8 +1,15 @@
 # Language Syntax Reference
 
-This section is the authoritative reference for TinyLang syntax.
+This section documents the current TinyLang syntax. It is not a promise that
+the syntax, grammar, keywords, or semantics will remain unchanged. The v1 ABI
+is frozen for the v1 lifecycle, but syntax remains subject to discovery and
+revision before TinyLang v2.
+
 The [README](../../README.rst) includes an inline language overview with
-examples; these files are the complete and precise reference.
+examples; these files are the current reference, not a permanent contract.
+
+Send syntax comments, concerns, and questions to the [TinyLang community
+forum](https://tl.404connernotfound.dev).
 
 ## Documents in This Area
 

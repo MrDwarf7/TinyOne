@@ -374,6 +374,49 @@ fn ffi_success_responses_are_valid_json() {
 }
 
 #[test]
+fn ffi_text_parameters_are_length_bounded() {
+    let oversized_source = CString::new(vec![b' '; 1024 * 1024 + 1]).expect("no NUL");
+    let oversized_mode = CString::new("x".repeat(17)).expect("no NUL");
+    let oversized_inputs = CString::new(vec![b' '; 8 * 1024 * 1024 + 1]).expect("no NUL");
+
+    assert_ffi_error(
+        take_ffi_json(unsafe { tinyone_lex_source_json(oversized_source.as_ptr()) }),
+        "compile",
+        "exceeds byte limit",
+    );
+    assert_ffi_error(
+        take_ffi_json(unsafe {
+            tinyone_run_source_json(
+                CString::new("print 1").unwrap().as_ptr(),
+                oversized_mode.as_ptr(),
+                std::ptr::null(),
+            )
+        }),
+        "compile",
+        "exceeds byte limit",
+    );
+    let source = cstring("read_str()");
+    let mode = cstring("vm");
+    assert_ffi_error(
+        take_ffi_json(unsafe {
+            tinyone_run_source_json(source.as_ptr(), mode.as_ptr(), oversized_inputs.as_ptr())
+        }),
+        "compile",
+        "exceeds byte limit",
+    );
+}
+
+#[test]
+fn ffi_infinite_program_is_terminated_by_sandbox() {
+    let source = cstring("while 1 == 1 { }");
+    let mode = cstring("vm");
+    let response = take_ffi_json(unsafe {
+        tinyone_run_source_json(source.as_ptr(), mode.as_ptr(), std::ptr::null())
+    });
+    assert_ffi_error(response, "runtime", "sandbox execution exceeded");
+}
+
+#[test]
 fn ffi_null_pointers_return_valid_json_errors() {
     let null = std::ptr::null();
     assert_ffi_error(

@@ -4,8 +4,14 @@ TinyOne builds as a `cdylib` alongside the CLI binary. All public entry points
 are declared in `tinylang.h` at the repository root. This document covers how to
 embed TinyOne in a C or C++ application.
 
-**ABI VERSION 1.** The public C ABI is frozen. Check
-`tinyone_abi_version()` against `TINYONE_ABI_VERSION` before use.
+**ABI VERSION 1.** The public C ABI is frozen for the entire v1 lifecycle.
+Check `tinyone_abi_version()` against `TINYONE_ABI_VERSION` before use. Expect
+major changes to the language boundary in TinyLang v2.
+
+This guide describes the current v1 integration surface, not a promise that
+old FFI designs or implementations will remain available forever. Send
+comments, concerns, and questions to the [TinyLang community
+forum](https://tl.404connernotfound.dev).
 
 ## Building the Library
 
@@ -13,7 +19,7 @@ embed TinyOne in a C or C++ application.
 # Debug (for development and testing)
 cargo build --manifest-path TinyOne/Cargo.toml
 
-# Release (for embedding)
+# Release (for embedding; includes the sandbox worker)
 cargo build --release --manifest-path TinyOne/Cargo.toml
 ```
 
@@ -24,6 +30,10 @@ Output locations:
 | Linux | `TinyOne/target/debug/libtinyone.so` | `TinyOne/target/release/libtinyone.so` |
 | macOS | `TinyOne/target/debug/libtinyone.dylib` | `TinyOne/target/release/libtinyone.dylib` |
 | Windows | `TinyOne/target/debug/tinyone.dll` | `TinyOne/target/release/tinyone.dll` |
+
+The `tinyone-sandbox-worker` executable produced in the same target directory
+must be shipped beside the host executable (or configured with
+`TINYONE_SANDBOX_WORKER`) for the execution entry points.
 
 ## Linking
 
@@ -113,6 +123,18 @@ does **not** crash — it returns a structured `{"ok":false,"kind":"compile","er
 
 The `inputs_json` parameter in all `run_*` functions is nullable. Passing `NULL`
 is equivalent to passing an empty input queue.
+
+All text parameters are length-bounded before parsing or compilation: source is
+limited to 1 MiB, paths to 32 KiB, execution modes to 16 bytes, and
+`inputs_json` to 8 MiB (limits exclude the trailing NUL). File and imported
+source files are subject to the same 1 MiB source limit.
+
+Execution entry points run in the `tinyone-sandbox-worker` child process. The
+parent enforces a five-second wall-clock deadline and terminates the worker if
+it is exceeded. Install the worker beside the host executable, or set
+`TINYONE_SANDBOX_WORKER` to its path. The worker inherits the host process's OS
+permissions; use a restricted account, container, or Windows job object for
+untrusted principals requiring stronger isolation.
 
 ## Entry Points
 

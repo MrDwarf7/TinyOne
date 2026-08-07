@@ -1,9 +1,13 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
+use std::io::{Read, Write};
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
 use crate::bytecode::artifact::MAX_ARTIFACT_BYTES;
@@ -14,6 +18,40 @@ use crate::{
 
 /// The declared, frozen C ABI version.
 pub const TINYONE_ABI_VERSION: u32 = 1;
+
+/// Maximum UTF-8 source text accepted by the C ABI, excluding the trailing NUL.
+pub(crate) const MAX_FFI_SOURCE_BYTES: usize = 1024 * 1024;
+/// Maximum path text accepted by the C ABI, excluding the trailing NUL.
+pub(crate) const MAX_FFI_PATH_BYTES: usize = 32 * 1024;
+/// Maximum execution-mode text accepted by the C ABI, excluding the trailing NUL.
+const MAX_FFI_MODE_BYTES: usize = 16;
+/// Maximum JSON input-queue text accepted by the C ABI, excluding the trailing NUL.
+const MAX_FFI_INPUTS_BYTES: usize = 8 * 1024 * 1024;
+const SANDBOX_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_SANDBOX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SandboxRequest {
+    RunSource {
+        source: String,
+        mode: String,
+        inputs: Vec<String>,
+    },
+    RunFile {
+        path: String,
+        mode: String,
+        inputs: Vec<String>,
+    },
+    RunArtifact {
+        artifact_json: String,
+        mode: String,
+        inputs: Vec<String>,
+    },
+    JitListing {
+        artifact_json: String,
+    },
+}
 
 #[unsafe(no_mangle)]
 /// Return the declared stable TinyOne C ABI version.
@@ -40,12 +78,12 @@ pub unsafe extern "C" fn tinyone_free_string(value: *mut c_char) {
 /// # Safety
 ///
 /// `source` must be non-null and point to a valid NUL-terminated UTF-8 C
-/// string for the duration of the call. A null pointer returns a compile
-/// error response.
+/// string for the duration of the call and must be no larger than 1 MiB.
+/// A null pointer or oversized string returns a compile error response.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_lex_source_json(source: *const c_char) -> *mut c_char {
     respond(|| {
-        let source = read_string(source, "source")?;
+        let source = read_string_limited(source, "source", MAX_FFI_SOURCE_BYTES)?;
         Ok(json!({"tokens": lex_source(&source)?}))
     })
 }
@@ -53,12 +91,12 @@ pub unsafe extern "C" fn tinyone_lex_source_json(source: *const c_char) -> *mut 
 /// # Safety
 ///
 /// `source` must be non-null and point to a valid NUL-terminated UTF-8 C
-/// string for the duration of the call. A null pointer returns a compile
-/// error response.
+/// string for the duration of the call and must be no larger than 1 MiB.
+/// A null pointer or oversized string returns a compile error response.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_compile_source_json(source: *const c_char) -> *mut c_char {
     respond(|| {
-        let source = read_string(source, "source")?;
+        let source = read_string_limited(source, "source", MAX_FFI_SOURCE_BYTES)?;
         program_payload(compile_source(&source)?)
     })
 }
@@ -66,12 +104,12 @@ pub unsafe extern "C" fn tinyone_compile_source_json(source: *const c_char) -> *
 /// # Safety
 ///
 /// `path` must be non-null and point to a valid NUL-terminated UTF-8 C string
-/// for the duration of the call. A null pointer returns a compile error
-/// response.
+/// for the duration of the call and must be no larger than 32 KiB. A null
+/// pointer or oversized string returns a compile error response.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_compile_file_json(path: *const c_char) -> *mut c_char {
     respond(|| {
-        let path = read_string(path, "path")?;
+        let path = read_string_limited(path, "path", MAX_FFI_PATH_BYTES)?;
         program_payload(compile_file(Path::new(&path))?)
     })
 }
@@ -79,9 +117,9 @@ pub unsafe extern "C" fn tinyone_compile_file_json(path: *const c_char) -> *mut 
 /// # Safety
 ///
 /// `source` and `mode` must be non-null and point to valid NUL-terminated
-/// UTF-8 C strings for the duration of the call. `inputs_json` is nullable;
-/// null means an empty input queue. Any non-null pointer must point to a valid
-/// NUL-terminated UTF-8 C string for the duration of the call.
+/// UTF-8 C strings for the duration of the call. `source` is limited to 1 MiB
+/// and `mode` to 16 bytes. `inputs_json` is nullable; null means an empty input
+/// queue. A non-null `inputs_json` is limited to 8 MiB.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_run_source_json(
     source: *const c_char,
@@ -89,26 +127,23 @@ pub unsafe extern "C" fn tinyone_run_source_json(
     inputs_json: *const c_char,
 ) -> *mut c_char {
     respond(|| {
-        let source = read_string(source, "source")?;
-        let mode = read_string(mode, "mode")?;
+        let source = read_string_limited(source, "source", MAX_FFI_SOURCE_BYTES)?;
+        let mode = read_string_limited(mode, "mode", MAX_FFI_MODE_BYTES)?;
         let inputs = read_inputs(inputs_json)?;
-        let mut stdout = Vec::new();
-        let report = run_source_report(&source, &mode, &mut stdout, inputs)?;
-        run_payload(
-            stdout,
-            report.memory,
-            report.heap_before_shutdown,
-            report.heap_after_shutdown,
-        )
+        run_sandboxed(SandboxRequest::RunSource {
+            source,
+            mode,
+            inputs,
+        })
     })
 }
 
 /// # Safety
 ///
 /// `path` and `mode` must be non-null and point to valid NUL-terminated UTF-8
-/// C strings for the duration of the call. `inputs_json` is nullable; null
-/// means an empty input queue. Any non-null pointer must point to a valid
-/// NUL-terminated UTF-8 C string for the duration of the call.
+/// C strings for the duration of the call. `path` is limited to 32 KiB and
+/// `mode` to 16 bytes. `inputs_json` is nullable; null means an empty input
+/// queue. A non-null `inputs_json` is limited to 8 MiB.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_run_file_json(
     path: *const c_char,
@@ -116,21 +151,21 @@ pub unsafe extern "C" fn tinyone_run_file_json(
     inputs_json: *const c_char,
 ) -> *mut c_char {
     respond(|| {
-        let path = read_string(path, "path")?;
-        let mode = read_string(mode, "mode")?;
+        let path = read_string_limited(path, "path", MAX_FFI_PATH_BYTES)?;
+        let mode = read_string_limited(mode, "mode", MAX_FFI_MODE_BYTES)?;
         let inputs = read_inputs(inputs_json)?;
-        let program = compile_file(Path::new(&path))?;
-        run_compiled_program(program, &mode, inputs)
+        run_sandboxed(SandboxRequest::RunFile { path, mode, inputs })
     })
 }
 
 /// # Safety
 ///
 /// `artifact_json` and `mode` must be non-null and point to valid NUL-terminated
-/// UTF-8 C strings for the duration of the call. `inputs_json` is nullable;
-/// null means an empty input queue. Any non-null pointer must point to a valid
-/// NUL-terminated UTF-8 C string for the duration of the call.
+/// UTF-8 C strings for the duration of the call. `mode` is limited to 16 bytes.
+/// `inputs_json` is nullable; null means an empty input queue. A non-null
+/// `inputs_json` is limited to 8 MiB.
 /// `artifact_json` must not exceed the documented artifact byte limit.
+/// `mode` is limited to 16 bytes and `inputs_json` to 8 MiB.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_run_artifact_json(
     artifact_json: *const c_char,
@@ -138,11 +173,14 @@ pub unsafe extern "C" fn tinyone_run_artifact_json(
     inputs_json: *const c_char,
 ) -> *mut c_char {
     respond(|| {
-        let artifact = read_artifact_json(artifact_json)?;
-        let mode = read_string(mode, "mode")?;
+        let artifact_json = read_string_limited(artifact_json, "artifact", MAX_ARTIFACT_BYTES)?;
+        let mode = read_string_limited(mode, "mode", MAX_FFI_MODE_BYTES)?;
         let inputs = read_inputs(inputs_json)?;
-        let program = Arc::new(Program::from_artifact(artifact)?);
-        run_compiled_program(program, &mode, inputs)
+        run_sandboxed(SandboxRequest::RunArtifact {
+            artifact_json,
+            mode,
+            inputs,
+        })
     })
 }
 
@@ -154,10 +192,204 @@ pub unsafe extern "C" fn tinyone_run_artifact_json(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_jit_listing_json(artifact_json: *const c_char) -> *mut c_char {
     respond(|| {
-        let artifact = read_artifact_json(artifact_json)?;
-        let program = Program::from_artifact(artifact)?;
-        Ok(json!({"listing": JitProgram::compile(&program)?.listing()}))
+        let artifact_json = read_string_limited(artifact_json, "artifact", MAX_ARTIFACT_BYTES)?;
+        run_sandboxed(SandboxRequest::JitListing { artifact_json })
     })
+}
+
+fn run_sandboxed(request: SandboxRequest) -> Result<JsonValue> {
+    let request = serde_json::to_vec(&request).map_err(|error| {
+        TinyOneError::runtime(format!("sandbox request serialization failed: {error}"))
+    })?;
+    let worker = sandbox_worker_path()?;
+    let mut child = Command::new(worker)
+        .arg("--tinyone-sandbox-worker")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            TinyOneError::runtime(format!("sandbox worker could not start: {error}"))
+        })?;
+
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| TinyOneError::runtime("sandbox worker stdin was unavailable"))?
+        .write_all(&request)
+        .and_then(|_| {
+            // Closing stdin tells the worker that the complete request has arrived.
+            Ok(())
+        })
+        .map_err(|error| TinyOneError::runtime(format!("sandbox request failed: {error}")))?;
+
+    let deadline = Instant::now() + SANDBOX_TIMEOUT;
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| TinyOneError::runtime(format!("sandbox wait failed: {error}")))?
+            .is_some()
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(TinyOneError::runtime(format!(
+                "sandbox execution exceeded {} seconds",
+                SANDBOX_TIMEOUT.as_secs()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let mut output = Vec::new();
+    child
+        .stdout
+        .take()
+        .ok_or_else(|| TinyOneError::runtime("sandbox worker stdout was unavailable"))?
+        .take((MAX_SANDBOX_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut output)
+        .map_err(|error| TinyOneError::runtime(format!("sandbox response read failed: {error}")))?;
+    if output.len() > MAX_SANDBOX_RESPONSE_BYTES {
+        return Err(TinyOneError::runtime(
+            "sandbox response exceeded byte limit",
+        ));
+    }
+    let response: JsonValue = serde_json::from_slice(&output).map_err(|error| {
+        TinyOneError::runtime(format!("sandbox response was invalid JSON: {error}"))
+    })?;
+    if response.get("ok").and_then(JsonValue::as_bool) == Some(true) {
+        return response
+            .get("value")
+            .cloned()
+            .ok_or_else(|| TinyOneError::runtime("sandbox response omitted its value"));
+    }
+    let message = response
+        .get("error")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("sandbox worker returned an invalid error response");
+    match response.get("kind").and_then(JsonValue::as_str) {
+        Some("compile") => Err(TinyOneError::compile(message)),
+        Some("runtime") | Some("panic") => Err(TinyOneError::runtime(message)),
+        _ => Err(TinyOneError::runtime(message)),
+    }
+}
+
+fn sandbox_worker_path() -> Result<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("TINYONE_SANDBOX_WORKER") {
+        let path = std::path::PathBuf::from(path);
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(TinyOneError::runtime(format!(
+            "TINYONE_SANDBOX_WORKER does not identify a file: {}",
+            path.display()
+        )));
+    }
+
+    let current = std::env::current_exe().map_err(|error| {
+        TinyOneError::runtime(format!("could not locate sandbox worker: {error}"))
+    })?;
+    let directories: Vec<_> = current
+        .ancestors()
+        .map(std::path::Path::to_path_buf)
+        .collect();
+    let name = if cfg!(windows) {
+        "tinyone-sandbox-worker.exe"
+    } else {
+        "tinyone-sandbox-worker"
+    };
+    for directory in directories {
+        let exact = directory.join(name);
+        if exact.is_file() {
+            return Ok(exact);
+        }
+        let deps = directory.join("deps");
+        if let Ok(entries) = std::fs::read_dir(deps) {
+            if let Some(path) = entries.flatten().map(|entry| entry.path()).find(|path| {
+                path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|value| {
+                            value.starts_with("tinyone_sandbox_worker-")
+                                && value.ends_with(if cfg!(windows) { ".exe" } else { "" })
+                        })
+            }) {
+                return Ok(path);
+            }
+        }
+    }
+    Err(TinyOneError::runtime(format!(
+        "sandbox worker not found; install {name} beside the host or set TINYONE_SANDBOX_WORKER"
+    )))
+}
+
+/// Entry point for the dedicated worker process used by the C ABI.
+#[doc(hidden)]
+pub fn sandbox_worker_main() {
+    let mut request_bytes = Vec::new();
+    let read_result = std::io::stdin()
+        .take((MAX_ARTIFACT_BYTES + MAX_FFI_INPUTS_BYTES + MAX_FFI_SOURCE_BYTES) as u64)
+        .read_to_end(&mut request_bytes);
+    let response = match read_result {
+        Ok(_) => match serde_json::from_slice::<SandboxRequest>(&request_bytes) {
+            Ok(request) => response_cstring(|| execute_sandbox_request(request)),
+            Err(error) => response_cstring(|| {
+                Err(TinyOneError::runtime(format!(
+                    "invalid sandbox request: {error}"
+                )))
+            }),
+        },
+        Err(error) => response_cstring(|| {
+            Err(TinyOneError::runtime(format!(
+                "sandbox request read failed: {error}"
+            )))
+        }),
+    };
+    let _ = std::io::stdout().write_all(response.as_bytes());
+}
+
+fn execute_sandbox_request(request: SandboxRequest) -> Result<JsonValue> {
+    match request {
+        SandboxRequest::RunSource {
+            source,
+            mode,
+            inputs,
+        } => {
+            let mut stdout = Vec::new();
+            let report = run_source_report(&source, &mode, &mut stdout, inputs)?;
+            run_payload(
+                stdout,
+                report.memory,
+                report.heap_before_shutdown,
+                report.heap_after_shutdown,
+            )
+        }
+        SandboxRequest::RunFile { path, mode, inputs } => {
+            let program = compile_file(Path::new(&path))?;
+            run_compiled_program(program, &mode, inputs)
+        }
+        SandboxRequest::RunArtifact {
+            artifact_json,
+            mode,
+            inputs,
+        } => {
+            let artifact = serde_json::from_str(&artifact_json).map_err(|error| {
+                TinyOneError::compile(format!("artifact must be valid JSON: {error}"))
+            })?;
+            let program = Arc::new(Program::from_artifact(artifact)?);
+            run_compiled_program(program, &mode, inputs)
+        }
+        SandboxRequest::JitListing { artifact_json } => {
+            let artifact = serde_json::from_str(&artifact_json).map_err(|error| {
+                TinyOneError::compile(format!("artifact must be valid JSON: {error}"))
+            })?;
+            let program = Program::from_artifact(artifact)?;
+            Ok(json!({"listing": JitProgram::compile(&program)?.listing()}))
+        }
+    }
 }
 
 fn respond(callback: impl FnOnce() -> Result<JsonValue>) -> *mut c_char {
@@ -202,26 +434,10 @@ fn fallback_response() -> CString {
     unsafe { CString::from_vec_with_nul_unchecked(FALLBACK.to_vec()) }
 }
 
-fn read_string(value: *const c_char, name: &str) -> Result<String> {
-    if value.is_null() {
-        return Err(TinyOneError::compile(format!("{name} pointer was null")));
-    }
-    unsafe { CStr::from_ptr(value) }
-        .to_str()
-        .map(ToOwned::to_owned)
-        .map_err(|error| TinyOneError::compile(format!("{name} must be UTF-8: {error}")))
-}
-
 fn read_json(value: *const c_char, name: &str) -> Result<JsonValue> {
-    let text = read_string(value, name)?;
+    let text = read_string_limited(value, name, MAX_FFI_INPUTS_BYTES)?;
     serde_json::from_str(&text)
         .map_err(|error| TinyOneError::compile(format!("{name} must be valid JSON: {error}")))
-}
-
-fn read_artifact_json(value: *const c_char) -> Result<JsonValue> {
-    let text = read_string_limited(value, "artifact", MAX_ARTIFACT_BYTES)?;
-    serde_json::from_str(&text)
-        .map_err(|error| TinyOneError::compile(format!("artifact must be valid JSON: {error}")))
 }
 
 fn read_string_limited(value: *const c_char, name: &str, max_bytes: usize) -> Result<String> {
