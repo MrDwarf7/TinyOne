@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import glob
 import hashlib
 import json
 import os
@@ -414,6 +415,26 @@ def build_file_results(
         )
 
     return results
+
+
+def expand_file_paths(paths: Sequence[Path]) -> list[Path]:
+    """Expand shell-style file globs for shells that do not do it for us.
+
+    Unix shells normally expand ``git-prep/*`` before Python starts, but
+    PowerShell passes wildcard arguments to native/Python processes unchanged.
+    Expanding here makes the CLI portable across shells. Explicit paths retain
+    their original spelling and unmatched patterns are left intact so the
+    normal ``not a file`` diagnostic remains useful.
+    """
+    expanded: list[Path] = []
+    for path in paths:
+        pattern = os.fspath(path)
+        if glob.has_magic(pattern):
+            matches = sorted(glob.glob(pattern, recursive=True))
+            expanded.extend(Path(match) for match in matches)
+        else:
+            expanded.append(path)
+    return expanded
 
 
 def build_tree_result(
@@ -963,7 +984,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not args.paths:
                 raise ValueError("at least one file path is required unless --tree is used")
             results = build_file_results(
-                paths=args.paths,
+                paths=expand_file_paths(args.paths),
                 algorithm=algorithm,
                 chunk_size=args.chunk_size,
                 name=args.name,
