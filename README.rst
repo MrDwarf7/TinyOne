@@ -158,7 +158,8 @@ Language Overview
 The implemented language currently includes:
 
 * integer and string literals
-* ``null``
+* `
+ull``
 * ``let`` bindings
 * assignment to existing variables
 * expression statements
@@ -276,32 +277,31 @@ The main documentation tree is ``docs/``:
 * ``docs/bytecode.md`` describes opcodes, artifacts, verifier rules, and JIT
 * ``docs/memory-model.md`` describes heap handles, pointer checks, and limits
 * ``docs/stdlib.md`` describes builtins and stdlib bridge behavior
-* ``docs/v1-roadmap.md`` records the completed v1 stabilization work
 * ``docs/v2-roadmap.md`` tracks the active internal v2 language roadmap
 
 The change-document process is defined by the TinyLang documentation-change
 system:
 
-``TOR``
+``TLR``
     TinyLang Request. A lightweight request for a change, fix, clarification,
     or improvement.
 
-``TOP``
+``TLP``
     TinyLang Proposal. A structured design proposal for significant language,
     compiler, tooling, documentation, standard-library, ecosystem, or governance
     changes.
 
-``TOIN``
+``TLIN``
     TinyLang Implementation Notice. A release-facing or pre-release notice
     explaining what is being implemented, what changed, and how users should
     migrate.
 
 The intended path is::
 
-    TOR -> TOP -> TOIN
+    TLR -> TLP -> TLIN
 
-Small accepted changes may go directly from TOR to TOIN. Major language changes
-should not skip the TOP stage.
+Small accepted changes may go directly from TLR to TLIN. Major language changes
+should not skip the TLP stage.
 
 Developer Tools
 ---------------
@@ -450,7 +450,6 @@ Repository Layout
     |   |-- bytecode.md
     |   |-- memory-model.md
     |   |-- stdlib.md
-    |   |-- v1-roadmap.md
     |   `-- v2-roadmap.md
     |-- Developer/
     |   |-- typing_system.md
@@ -473,8 +472,7 @@ generation of the implementation line; v2 is the active internal roadmap.
 Release Direction
 -----------------
 
-The v1 release direction is documented in ``docs/v1-roadmap.md``. Active v2
-language development is documented in ``docs/v2-roadmap.md``. The v1 release
+Active v2 language development is documented in ``docs/v2-roadmap.md``. The v1 release
 themes include:
 
 * stable v1 JSON response schemas

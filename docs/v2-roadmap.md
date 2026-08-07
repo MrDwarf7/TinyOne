@@ -46,8 +46,8 @@ type checking where those constraints provide value.
   representations synchronized as the language grows.
 - Maintain parity tests for direct calls, function values, captured calls,
   generic declarations, artifacts, and both execution backends.
-- Continue the v1 ABI stabilization work tracked in `docs/v1-roadmap.md`;
-  entering v2 does not silently make the C ABI stable.
+- Preserve the frozen v1 ABI policy as v2 evolves; entering v2 does not silently
+  make the C ABI unstable for existing v1 consumers.
 
 ## V2 status
 

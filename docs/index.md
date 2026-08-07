@@ -40,15 +40,14 @@ Working on the TinyOne runtime implementation:
 - [VM and JIT Operation](vm.md) — dispatch loop, frame model, quickening lifecycle, JitCache
 - [Memory Model](memory-model.md) — heap slab, generation tags, ownership rules, resource limits
 - [Contributing Guide](contributing.md) — build, test, adding features, builtins, and stdlib modules
-- [v1 Roadmap](v1-roadmap.md) — completed v1 stabilization work
 - [v2 Roadmap](v2-roadmap.md) — current language-generation commitments and implementation tracks
+- [Community Forum](Community_Forum.md) — request, proposal, and implementation-notice process
 
 ---
 
 ## All Documents
 
-The [v1.0.0 release notes](release-notes-v1.0.0.md) summarize the frozen v1 ABI
-and current compatibility guidance for consumers. TinyLang does not promise to
+TinyLang's v1 ABI is frozen for the v1 lifecycle. TinyLang does not promise to
 keep old implementations or all historical language versions available forever.
 
 | File | Description |
@@ -68,12 +67,10 @@ keep old implementations or all historical language versions available forever.
 | [`ffi/index.md`](ffi/index.md) | FFI area navigation |
 | [`ffi/rust-api.md`](ffi/rust-api.md) | Rust crate public API: compile, run, JIT, artifacts, verification |
 | [`memory-model.md`](memory-model.md) | Heap slab, HeapRef generation validation, ownership rules, limits |
-| [`release-gate-phase1.md`](release-gate-phase1.md) | Phase 1 soundness gate report |
 | [`stdlib.md`](stdlib.md) | Phase-1 core builtins and Phase-2 stdlib bridge reference |
 | [`syntax/expressions.md`](syntax/expressions.md) | Operators, precedence table, arithmetic, comparisons, unsafe gate |
 | [`syntax/index.md`](syntax/index.md) | Syntax area navigation |
 | [`syntax/modules.md`](syntax/modules.md) | Import/export, path resolution, tinyone.json manifest, worked example |
 | [`syntax/statements.md`](syntax/statements.md) | Every statement form with syntax, semantics, and examples |
 | [`syntax/types.md`](syntax/types.md) | All value types: creation, mutation, errors, ownership |
-| [`v1-roadmap.md`](v1-roadmap.md) | Blocking and non-blocking work items before v1 ABI stability |
 | [`vm.md`](vm.md) | VM dispatch, frame model, JIT compilation, hot-loop quickening, JitCache |
