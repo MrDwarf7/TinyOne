@@ -1,7 +1,7 @@
 TinyLang
 ========
 
-TinyOne is the first major generation of TinyLang, a portable systems
+TinyOne is the v1 release generation of TinyLang, a portable systems
 programming language designed around a compact VM, bounded runtime
 assumptions, stable host-integration direction, and a small reasoning surface.
 
@@ -14,13 +14,13 @@ optimizer, verifier, portable VM, heap/runtime model, bytecode artifact
 support, adaptive execution support, host integration surfaces, CLI tooling,
 and early allocator-integration scaffolding.
 
-Current crate version: ``0.6.0``.
+Current crate version: ``0.6.0`` (the implementation is now managed as the
+public v1 release line while language work proceeds internally under v2).
 
 The current Rust crate lives in ``TinyOne/`` in this checkout. TinyLang is the
-durable language identity. TinyOne is the current beta implementation line for
-the intended v1 generation, not a separate language that users must relearn.
-Future major generations may use names such as TinyTwo or TinyThree while
-remaining generations of TinyLang.
+durable language identity and TinyOne is its v1 implementation generation.
+TinyLang v2 is the active internal language roadmap: v2 features are developed
+on the v1 release foundation without creating a separate user-facing language.
 
 .. contents::
 
@@ -34,10 +34,10 @@ General Information
 - Developer tools: ``Tools/``
 - Allocator work-in-progress: ``Ralloc/``
 
-TinyLang is pre-1.0 software. The language, bytecode format, builtin set,
-JSON artifacts, C ABI, and documentation process are still allowed to change
-while the implementation is being brought into line with the intended v1
-surface.
+TinyLang is now in its v1 release line. The language, bytecode format, builtin
+set, JSON artifacts, C ABI, and documentation process remain versioned release
+surfaces; see the v1 roadmap for stabilization work and the v2 roadmap for
+active language evolution.
 
 What Tiny Means
 ---------------
@@ -259,7 +259,8 @@ The main documentation tree is ``docs/``:
 * ``docs/bytecode.md`` describes opcodes, artifacts, verifier rules, and JIT
 * ``docs/memory-model.md`` describes heap handles, pointer checks, and limits
 * ``docs/stdlib.md`` describes builtins and stdlib bridge behavior
-* ``docs/v1-roadmap.md`` tracks stable-ABI blockers
+* ``docs/v1-roadmap.md`` tracks v1 release and stable-ABI blockers
+* ``docs/v2-roadmap.md`` tracks the active internal v2 language roadmap
 
 The change-document process is defined by the TinyLang documentation-change
 system:
@@ -419,7 +420,8 @@ Repository Layout
     |   |-- bytecode.md
     |   |-- memory-model.md
     |   |-- stdlib.md
-    |   `-- v1-roadmap.md
+    |   |-- v1-roadmap.md
+    |   `-- v2-roadmap.md
     |-- Developer/
     |   |-- typing_system.md
     |   |-- ownership_semantics_and_memory_safety.md
@@ -435,14 +437,15 @@ Repository Layout
         `-- tests/
 
 The ``TinyOne/`` directory name is still present on disk for the Rust crate.
-The user-facing language name is TinyLang. TinyOne names this major generation
-of the TinyLang implementation line.
+The user-facing language name is TinyLang. TinyOne names the v1 release
+generation of the implementation line; v2 is the active internal roadmap.
 
 Release Direction
 -----------------
 
-The v1 direction is documented in ``docs/v1-roadmap.md`` and the design notes
-under ``Developer/``. Major themes include:
+The v1 release direction is documented in ``docs/v1-roadmap.md``. Active v2
+language development is documented in ``docs/v2-roadmap.md``. The v1 release
+themes include:
 
 * stable JSON response schemas
 * stable C ABI policy
