@@ -19,13 +19,25 @@ jobs:
           components: rustfmt, clippy
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
+
+      # Fix for Git Bash shadowing MSVC link.exe
+      - name: Remove Git usr/bin from PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $filtered = ($env:PATH -split ';' | Where-Object { $_ -notlike '*Git\usr\bin*' }) -join ';'
+          echo "PATH=$filtered" >> $env:GITHUB_ENV
+
       - uses: astral-sh/setup-uv@v5
         with:
           version: latest
+
       - name: Run Python tooling through uv
         shell: bash
         run: uv run --no-project --python 3.12 python -m unittest discover -s Tools -p 'test_*.py'
-      - name: Rust checks and tests
+
+      - name: Rust checks and tests (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cargo fmt --manifest-path TinyOne/Cargo.toml -- --check
@@ -33,15 +45,28 @@ jobs:
           cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets
           cargo test --manifest-path TinyOne/Cargo.toml
           cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks --test language_suite
+
+      - name: Rust checks and tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path TinyOne/Cargo.toml -- --check
+          cargo check --manifest-path TinyOne/Cargo.toml
+          cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets
+          cargo test --manifest-path TinyOne/Cargo.toml
+          cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks --test language_suite
+
       - name: ABI drift
         shell: bash
         run: uv run --no-project --python 3.12 python Tools/abi_manifest.py check
+
       - name: Consumer compile fixtures (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           cargo build --manifest-path TinyOne/Cargo.toml
           bash scripts/consumer-compile.sh
+
       - name: Consumer compile fixtures (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -66,10 +91,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
+
+      - name: Remove Git usr/bin from PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $filtered = ($env:PATH -split ';' | Where-Object { $_ -notlike '*Git\usr\bin*' }) -join ';'
+          echo "PATH=$filtered" >> $env:GITHUB_ENV
+
       - name: C smoke (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: bash scripts/consumer-smoke.sh
+
       - name: C smoke (Windows MSVC)
         if: runner.os == 'Windows'
         shell: pwsh
