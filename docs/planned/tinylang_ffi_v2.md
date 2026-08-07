@@ -135,7 +135,7 @@ typedef struct TinyValue {
 } TinyValue;
 ```
 
-Mirrors the variants in `RuntimeValue` (`ffi.rs:273-308`) and the 43 `TypeKind`
+Mirrors the variants in `RuntimeValue` (`ffi.rs:273-308`) and the 45 `TypeKind`
 members from the Phase 1 type work. Floats carry their bit pattern (faithful
 NaN/inf/-0, matching the IEEE-754 rules in `typing_system.md`).
 

@@ -46,6 +46,8 @@ pub enum TypeKind {
     Mutex,
     Atomic,
     Thread,
+    /// A mutable single-value heap cell created by `alloc`.
+    Cell,
 }
 
 impl TypeKind {
@@ -95,7 +97,63 @@ impl TypeKind {
             TypeKind::Mutex => 41,
             TypeKind::Atomic => 42,
             TypeKind::Thread => 43,
+            // Appended to preserve the IDs of all previously published kinds.
+            TypeKind::Cell => 44,
         }
+    }
+
+    /// Inverse of [`TypeKind::type_id`]. Used by `runtime::value_codec` to
+    /// decode a `TypeKind` back out of a `Value::Float`/`Value::Zst`'s
+    /// fixed-width byte encoding.
+    pub(crate) const fn from_type_id(id: u16) -> Option<TypeKind> {
+        Some(match id {
+            0 => TypeKind::Unit,
+            1 => TypeKind::Bool,
+            2 => TypeKind::I8,
+            3 => TypeKind::I16,
+            4 => TypeKind::I32,
+            5 => TypeKind::I64,
+            6 => TypeKind::U8,
+            7 => TypeKind::U16,
+            8 => TypeKind::U32,
+            9 => TypeKind::U64,
+            10 => TypeKind::Fp8,
+            11 => TypeKind::Fp16,
+            12 => TypeKind::Fp32,
+            13 => TypeKind::Fp64,
+            14 => TypeKind::Char,
+            15 => TypeKind::String,
+            16 => TypeKind::CharBuffer,
+            17 => TypeKind::Array,
+            18 => TypeKind::Vec,
+            19 => TypeKind::Buffer,
+            20 => TypeKind::Map,
+            21 => TypeKind::Dictionary,
+            22 => TypeKind::Struct,
+            23 => TypeKind::Record,
+            24 => TypeKind::Pointer,
+            25 => TypeKind::Reference,
+            26 => TypeKind::Box,
+            27 => TypeKind::Alloc,
+            28 => TypeKind::Function,
+            29 => TypeKind::Closure,
+            30 => TypeKind::Sum,
+            31 => TypeKind::Enum,
+            32 => TypeKind::TaggedUnion,
+            33 => TypeKind::Phantom,
+            34 => TypeKind::Zst,
+            35 => TypeKind::Unsafe,
+            36 => TypeKind::Dyn,
+            37 => TypeKind::Null,
+            38 => TypeKind::Result,
+            39 => TypeKind::Option,
+            40 => TypeKind::FileDescriptor,
+            41 => TypeKind::Mutex,
+            42 => TypeKind::Atomic,
+            43 => TypeKind::Thread,
+            44 => TypeKind::Cell,
+            _ => return None,
+        })
     }
 
     pub const fn name(self) -> &'static str {
@@ -144,6 +202,7 @@ impl TypeKind {
             TypeKind::Mutex => "Mutex",
             TypeKind::Atomic => "Atomic",
             TypeKind::Thread => "Thread",
+            TypeKind::Cell => "Cell",
         }
     }
 
@@ -231,6 +290,7 @@ impl TypeKind {
             "Mutex" => TypeKind::Mutex,
             "Atomic" => TypeKind::Atomic,
             "Thread" => TypeKind::Thread,
+            "Cell" => TypeKind::Cell,
             _ => return None,
         })
     }
@@ -240,25 +300,25 @@ impl TypeKind {
     pub fn from_runtime_value(v: &crate::Value) -> Self {
         use crate::Value;
         match v {
-            Value::Unit            => TypeKind::Unit,
-            Value::Bool(_)         => TypeKind::Bool,
-            Value::I8(_)           => TypeKind::I8,
-            Value::I16(_)          => TypeKind::I16,
-            Value::I32(_)          => TypeKind::I32,
-            Value::I64(_)          => TypeKind::I64,
-            Value::U8(_)           => TypeKind::U8,
-            Value::U16(_)          => TypeKind::U16,
-            Value::U32(_)          => TypeKind::U32,
-            Value::U64(_)          => TypeKind::U64,
+            Value::Unit => TypeKind::Unit,
+            Value::Bool(_) => TypeKind::Bool,
+            Value::I8(_) => TypeKind::I8,
+            Value::I16(_) => TypeKind::I16,
+            Value::I32(_) => TypeKind::I32,
+            Value::I64(_) => TypeKind::I64,
+            Value::U8(_) => TypeKind::U8,
+            Value::U16(_) => TypeKind::U16,
+            Value::U32(_) => TypeKind::U32,
+            Value::U64(_) => TypeKind::U64,
             Value::Float { kind, .. } => *kind,
-            Value::Null            => TypeKind::Null,
-            Value::Function(_)     => TypeKind::Function,
-            Value::Pointer(_)      => TypeKind::Pointer,
-            Value::Reference(_)    => TypeKind::Reference,
-            Value::Phantom         => TypeKind::Phantom,
-            Value::Zst(k)          => *k,
-            Value::Unsafe          => TypeKind::Unsafe,
-            Value::Heap(r)         => unimplemented!(
+            Value::Null => TypeKind::Null,
+            Value::Function(_) => TypeKind::Function,
+            Value::Pointer(_) => TypeKind::Pointer,
+            Value::Reference(_) => TypeKind::Reference,
+            Value::Phantom => TypeKind::Phantom,
+            Value::Zst(k) => *k,
+            Value::Unsafe => TypeKind::Unsafe,
+            Value::Heap(r) => unimplemented!(
                 "from_runtime_value(Heap): call heap.get(r).type_kind() for heap types; \
                  HeapRef alone does not carry TypeKind — {r:?}"
             ),
@@ -414,6 +474,7 @@ mod tests {
             TypeKind::Mutex,
             TypeKind::Atomic,
             TypeKind::Thread,
+            TypeKind::Cell,
         ];
         let ids: Vec<u16> = all.iter().map(|kind| kind.type_id()).collect();
         let mut sorted = ids.clone();

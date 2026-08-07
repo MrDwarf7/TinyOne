@@ -45,7 +45,8 @@ pub fn run_program_with_env(
     match mode {
         RunMode::Vm => {
             let slot_count = program.slot_count;
-            let mut vm = VM::new_unchecked(Arc::clone(&program), TinyMemory::new(slot_count), inputs);
+            let mut vm =
+                VM::new_unchecked(Arc::clone(&program), TinyMemory::new(slot_count), inputs);
             vm.context.program_arc = Some(Arc::clone(&program));
             vm.set_sys_args(sys_args);
             vm.set_sys_env(sys_env);
@@ -69,7 +70,8 @@ pub fn run_program_report(
     match mode {
         RunMode::Vm => {
             let slot_count = program.slot_count;
-            let mut vm = VM::new_unchecked(Arc::clone(&program), TinyMemory::new(slot_count), inputs);
+            let mut vm =
+                VM::new_unchecked(Arc::clone(&program), TinyMemory::new(slot_count), inputs);
             vm.context.program_arc = Some(Arc::clone(&program));
             vm.run_report(stdout)
         }

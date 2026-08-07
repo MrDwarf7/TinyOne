@@ -21,7 +21,10 @@ pub fn compile_source_unoptimized(source: &str) -> Result<Arc<Program>> {
     compile_source_unoptimized_with_filename(source, "<source>")
 }
 
-pub fn compile_source_unoptimized_with_filename(source: &str, filename: &str) -> Result<Arc<Program>> {
+pub fn compile_source_unoptimized_with_filename(
+    source: &str,
+    filename: &str,
+) -> Result<Arc<Program>> {
     let shared = Rc::new(RefCell::new(CompilerSharedState::default()));
     let mut compiler = Compiler::new(source, filename, None, false, "", shared)?;
     let program = compiler.compile()?;
@@ -36,9 +39,8 @@ pub fn optimize_program(program: Arc<Program>) -> Arc<Program> {
 
 pub fn compile_source_with_filename(source: &str, filename: &str) -> Result<Arc<Program>> {
     let program = compile_source_unoptimized_with_filename(source, filename)?;
-    let program = PeepholeOptimizer::optimize(
-        Arc::try_unwrap(program).unwrap_or_else(|arc| (*arc).clone()),
-    );
+    let program =
+        PeepholeOptimizer::optimize(Arc::try_unwrap(program).unwrap_or_else(|arc| (*arc).clone()));
     BytecodeVerifier::verify(&program)?;
     Ok(Arc::new(program))
 }

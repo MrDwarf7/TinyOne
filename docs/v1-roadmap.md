@@ -146,9 +146,9 @@ explicitly documented as out-of-scope for v1.
 
 | Gap | Status |
 | --- | --- |
-| No closures or first-class functions | By design; functions are top-level only |
+| Closures and first-class functions | Deferred to v2; v2 now includes callable function values and closures |
 | No static type checker | By design; TinyLang is dynamically typed |
-| No generics or templates | Out of scope for v1 |
+| Generics or templates | Deferred to v2; v2 includes erased generic function declarations |
 | No exceptions or structured error propagation | Use `result`/`option` stdlib |
 | No garbage collector | Manual heap with `unsafe free`; by design |
 | No tail-call optimization | Not planned for v1 |

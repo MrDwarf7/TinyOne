@@ -14,8 +14,8 @@ use std::thread;
 
 use tinyone::alloc_table::{AllocKind, AllocRecord, AllocTable, AllocTableError};
 use tinyone::memory_log::{MemoryLog, MemoryLogEntry, OperationType};
-use tinyone::vm_hooks::{HookRegistry, MemoryErrorPusher, MemoryEvent, VmMemoryHook};
 use tinyone::tiny_allocator::{TinyAllocator, TinyAllocatorConfig, TinyAllocatorError};
+use tinyone::vm_hooks::{HookRegistry, MemoryErrorPusher, MemoryEvent, VmMemoryHook};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -53,11 +53,17 @@ fn alloc_table_stale_generation_rejected() {
     // First occupant: gen=1.
     table.insert(make_record(100, 1, 32)).unwrap();
     // gen=1 lookup succeeds.
-    assert!(table.get(100, 1).is_some(), "gen=1 must be found while live");
+    assert!(
+        table.get(100, 1).is_some(),
+        "gen=1 must be found while live"
+    );
 
     // Remove the first occupant.
     table.remove(100, 1).unwrap();
-    assert!(table.get(100, 1).is_none(), "gen=1 must be gone after remove");
+    assert!(
+        table.get(100, 1).is_none(),
+        "gen=1 must be gone after remove"
+    );
 
     // Second occupant: same address, incremented generation.
     table.insert(make_record(100, 2, 64)).unwrap();
@@ -72,7 +78,11 @@ fn alloc_table_stale_generation_rejected() {
     // Correct gen=2 lookup MUST succeed.
     let current = table.get(100, 2);
     assert!(current.is_some(), "gen=2 must be found");
-    assert_eq!(current.unwrap().byte_len, 64, "gen=2 must return the new record");
+    assert_eq!(
+        current.unwrap().byte_len,
+        64,
+        "gen=2 must return the new record"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,7 +108,10 @@ fn alloc_table_double_free_detected() {
     );
     let err = result.unwrap_err();
     assert!(
-        matches!(err, AllocTableError::NotFound | AllocTableError::GenerationMismatch { .. }),
+        matches!(
+            err,
+            AllocTableError::NotFound | AllocTableError::GenerationMismatch { .. }
+        ),
         "expected NotFound or GenerationMismatch on double-free; got {err:?}"
     );
 }
@@ -170,7 +183,10 @@ fn memory_log_ring_overflow_no_panic() {
         len <= 4,
         "log.len() must never exceed capacity=4; got len={len}"
     );
-    assert_eq!(len, 4, "ring buffer must stay exactly at capacity after overflow");
+    assert_eq!(
+        len, 4,
+        "ring buffer must stay exactly at capacity after overflow"
+    );
 
     let snap = log.snapshot();
     assert_eq!(snap.len(), 4, "snapshot must contain exactly 4 entries");
@@ -230,7 +246,10 @@ fn memory_log_concurrent_log_no_deadlock() {
 
     // All 16*1000=16000 writes completed; ring saturates at 512.
     let len = log.len();
-    assert_eq!(len, 512, "log must be at capacity (512) after 16 000 concurrent writes");
+    assert_eq!(
+        len, 512,
+        "log must be at capacity (512) after 16 000 concurrent writes"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -254,7 +273,9 @@ struct CountingHook {
 
 impl CountingHook {
     fn new() -> Arc<Self> {
-        Arc::new(Self { count: Mutex::new(0) })
+        Arc::new(Self {
+            count: Mutex::new(0),
+        })
     }
     fn count(&self) -> u32 {
         *self.count.lock().unwrap()
@@ -512,8 +533,7 @@ fn tiny_allocator_reallocate_stale_gen_returns_error() {
     assert!(
         matches!(
             err,
-            TinyAllocatorError::GenerationMismatch { .. }
-                | TinyAllocatorError::NotFound { .. }
+            TinyAllocatorError::GenerationMismatch { .. } | TinyAllocatorError::NotFound { .. }
         ),
         "reallocate with wrong gen must return GenerationMismatch or NotFound; got {err:?}"
     );
@@ -561,7 +581,9 @@ fn tiny_allocator_native_allocation_is_real_and_reclaimed_by_free() {
 
     // Freeing one allocation returns its arena's space to Ralloc.
     let freed = filled.pop().unwrap();
-    alloc.free(freed.vm_address, freed.vm_generation, 0).unwrap();
+    alloc
+        .free(freed.vm_address, freed.vm_generation, 0)
+        .unwrap();
 
     let reclaimed = alloc
         .allocate(9_999, 1, AllocKind::Buffer, chunk, 0)
@@ -569,9 +591,13 @@ fn tiny_allocator_native_allocation_is_real_and_reclaimed_by_free() {
 
     // Clean up so this test doesn't leak native pool space that other tests
     // in this binary may depend on.
-    alloc.free(reclaimed.vm_address, reclaimed.vm_generation, 0).unwrap();
+    alloc
+        .free(reclaimed.vm_address, reclaimed.vm_generation, 0)
+        .unwrap();
     for result in filled {
-        alloc.free(result.vm_address, result.vm_generation, 0).unwrap();
+        alloc
+            .free(result.vm_address, result.vm_generation, 0)
+            .unwrap();
     }
 }
 
@@ -667,7 +693,11 @@ fn alloc_table_stats_live_bytes_never_underflows() {
         );
     }
 
-    assert_eq!(table.stats().live_bytes, 0, "live_bytes must be 0 after all frees");
+    assert_eq!(
+        table.stats().live_bytes,
+        0,
+        "live_bytes must be 0 after all frees"
+    );
 }
 
 // ── Bonus F: HookRegistry concurrent register+dispatch does not deadlock ───────
@@ -741,16 +771,17 @@ fn memory_error_pusher_exactly_at_capacity_no_panic() {
         vm_address: 99,
         vm_generation: 1,
     });
-    assert_eq!(pusher.error_count(), 3, "pusher must still hold exactly 3 events after eviction");
+    assert_eq!(
+        pusher.error_count(),
+        3,
+        "pusher must still hold exactly 3 events after eviction"
+    );
 
     // Drain and verify oldest was evicted.
     let events = pusher.drain_errors();
     assert_eq!(events.len(), 3);
     // The first event (vm_address=0, StalePointer) should have been evicted.
-    let first_addr_is_zero = matches!(
-        &events[0],
-        MemoryEvent::StalePointer { vm_address: 0, .. }
-    );
+    let first_addr_is_zero = matches!(&events[0], MemoryEvent::StalePointer { vm_address: 0, .. });
     assert!(
         !first_addr_is_zero,
         "vm_address=0 StalePointer should have been evicted; events[0]: {:?}",
@@ -790,5 +821,47 @@ fn alloc_table_concurrent_mixed_operations() {
     }
 
     // Table must be empty after all concurrent removes complete.
-    assert!(table.is_empty(), "table must be empty after all concurrent removes");
+    assert!(
+        table.is_empty(),
+        "table must be empty after all concurrent removes"
+    );
+}
+
+// ── Bonus J: allocate_owned records bookkeeping without a native table entry ──
+//
+// `HeapData::String`/`Buffer`/`CharBuffer` now own their real `VmAllocation`
+// directly (via `RallocBytes`), so `TinyHeap` records their bookkeeping
+// through `TinyAllocator::allocate_owned` instead of `allocate` — this must
+// NOT make a second real Ralloc allocation (that would double-book the
+// arena for the most common heap object kinds), and the resulting record's
+// `native_handle` must be `None` so `free()`/`shutdown_drain()`'s existing
+// "nothing to release here" branch applies without any special-casing.
+
+#[test]
+fn tiny_allocator_allocate_owned_records_bookkeeping_without_native_entry() {
+    let alloc = TinyAllocator::with_defaults();
+
+    let before = alloc.stats();
+    let result = alloc
+        .allocate_owned(42, 1, AllocKind::String, 13, 0)
+        .expect("allocate_owned should succeed");
+    assert_eq!(result.vm_address, 42);
+    assert_eq!(result.effective_size, 13);
+
+    let after_alloc = alloc.stats();
+    assert_eq!(after_alloc.live_count, before.live_count + 1);
+    assert_eq!(after_alloc.live_bytes, before.live_bytes + 13);
+    assert_eq!(after_alloc.total_allocated, before.total_allocated + 1);
+
+    // free() must succeed even though allocate_owned never touched the
+    // native side table (no VmAllocation to release here — RallocBytes
+    // owns and releases the real memory itself).
+    alloc
+        .free(42, 1, 0)
+        .expect("free should succeed for an owned record");
+
+    let after_free = alloc.stats();
+    assert_eq!(after_free.live_count, before.live_count);
+    assert_eq!(after_free.live_bytes, before.live_bytes);
+    assert_eq!(after_free.total_freed, before.total_freed + 1);
 }

@@ -8,10 +8,13 @@ pub(crate) mod limits;
 pub(crate) mod memory;
 pub(crate) mod minifloat;
 pub(crate) mod pointers;
+pub(crate) mod ralloc_record;
+pub(crate) mod ralloc_vec;
 pub(crate) mod stdlib;
 pub(crate) mod sync;
 pub(crate) mod typing;
 pub(crate) mod value;
+pub(crate) mod value_codec;
 pub(crate) mod vm;
 
 pub(crate) use aggregate::{
@@ -37,6 +40,7 @@ pub(crate) use limits::{
     VALUE_BYTES,
 };
 pub use memory::TinyMemory;
+pub(crate) use minifloat::round_to_kind;
 pub(crate) use pointers::{
     expect_pointer, runtime_cast_pointer, runtime_make_buffer, runtime_make_field_pointer,
     runtime_make_pointer, runtime_pointer_add, runtime_pointer_address, runtime_pointer_at,
@@ -45,8 +49,6 @@ pub(crate) use pointers::{
     runtime_read_uint, runtime_write_uint, validate_pointer_base,
 };
 pub use typing::TypeKind;
-pub(crate) use minifloat::round_to_kind;
 pub(crate) use value::Value;
 pub use value::{HeapRef, RawPointer, RuntimeValue};
 pub use vm::{TinyRunReport, VM};
-pub(crate) use sync::{TinyMutex, TinyThreadHandle};

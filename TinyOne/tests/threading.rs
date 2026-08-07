@@ -19,7 +19,11 @@ print r1 + r2
     let s = String::from_utf8(out).unwrap();
     let lines: Vec<&str> = s.trim().lines().collect();
     // Last line must be 3 (r1 + r2 = 1 + 2)
-    assert_eq!(lines.last(), Some(&"3"), "expected last line to be 3, got: {s:?}");
+    assert_eq!(
+        lines.last(),
+        Some(&"3"),
+        "expected last line to be 3, got: {s:?}"
+    );
     // All lines: the two thread prints and the final sum
     assert_eq!(lines.len(), 3, "expected 3 lines total, got: {s:?}");
 }
@@ -37,7 +41,10 @@ print 1
     let result = run_source(src, "vm", &mut out, Vec::new());
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("already joined"), "expected 'already joined' in: {msg}");
+    assert!(
+        msg.contains("already joined"),
+        "expected 'already joined' in: {msg}"
+    );
 }
 
 #[test]

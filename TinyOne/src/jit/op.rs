@@ -40,6 +40,8 @@ pub(crate) enum JitOp {
     /// is not `Eq`, and `JitOp` derives it). Reconstructed with
     /// `f64::from_bits` at the point of use.
     PushFloat(u64),
+    PushFunction(usize),
+    CallValue(usize),
     Builtin(usize, usize),
     Return,
     Print,
@@ -83,6 +85,8 @@ impl JitOp {
             ),
             Op::PushBool => Self::PushBool(instr.arg != 0),
             Op::PushFloat => Self::PushFloat(instr.arg as u64),
+            Op::PushFunction => Self::PushFunction(jit_operand(instr.arg, "function index")?),
+            Op::CallValue => Self::CallValue(jit_operand(instr.arg, "call arity")?),
             Op::Builtin => Self::Builtin(
                 jit_operand(instr.arg, "builtin index")?,
                 jit_operand(instr.arg2, "builtin arity")?,
@@ -143,6 +147,8 @@ impl JitOp {
             Self::MakeEnum(index, field_count) => format!("enum v{index} fields={field_count}"),
             Self::PushBool(value) => format!("push.bool {value}"),
             Self::PushFloat(bits) => format!("push.f {}", f64::from_bits(bits)),
+            Self::PushFunction(index) => format!("push.fn {index}"),
+            Self::CallValue(count) => format!("call.value args={count}"),
             Self::Builtin(index, arg_count) => format!("builtin b{index} argc={arg_count}"),
             Self::Return => "return".to_string(),
             Self::Print => "print".to_string(),

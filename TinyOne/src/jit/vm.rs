@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
-    JitOp, JitProgram, MAX_CALL_DEPTH, Result, TinyMemory, TinyOneError, TinyRunReport,
+    HeapData, JitOp, JitProgram, MAX_CALL_DEPTH, Result, TinyMemory, TinyOneError, TinyRunReport,
     TinyRuntimeContext, TypeKind, Value, checked_div, checked_div_int, pop_args, runtime_add,
     runtime_add_int, runtime_call_builtin, runtime_compare, runtime_compare_int, runtime_get_field,
     runtime_index, runtime_is_false, runtime_make_array, runtime_make_enum, runtime_make_struct,
@@ -30,9 +30,12 @@ pub(crate) struct JitVm<'a> {
 
 impl<'a> JitVm<'a> {
     pub(crate) fn new(program: &'a mut JitProgram, inputs: Vec<String>) -> Self {
+        let source_program = std::sync::Arc::clone(&program.source_program);
+        let mut context = TinyRuntimeContext::new(inputs);
+        context.program_arc = Some(source_program);
         Self {
             program,
-            context: TinyRuntimeContext::new(inputs),
+            context,
             call_depth: 0,
         }
     }
@@ -107,6 +110,14 @@ impl<'a> JitVm<'a> {
                     kind: TypeKind::Fp64,
                     bits: f64::from_bits(bits),
                 }),
+                JitOp::PushFunction(function_index) => {
+                    if function_index >= self.program.functions.len() {
+                        return Err(TinyOneError::runtime(format!(
+                            "Invalid function index {function_index}"
+                        )));
+                    }
+                    stack.push(Value::Function(function_index as u32));
+                }
                 JitOp::Pop => {
                     jit_pop(&mut stack)?;
                 }
@@ -215,6 +226,47 @@ impl<'a> JitVm<'a> {
                         self.call_function(function_index, &mut stack, arg_count, stdout, globals)?;
                     stack.push(result);
                 }
+                JitOp::CallValue(arg_count) => {
+                    let args = pop_args(&mut stack, arg_count)?;
+                    let callable = jit_pop(&mut stack)?;
+                    let (function_index, call_args) = match callable {
+                        Value::Function(index) => (index as usize, args),
+                        Value::Heap(reference) => {
+                            let captures = {
+                                let heap = self.context.heap();
+                                let object = heap.get(&Value::Heap(reference))?;
+                                let HeapData::Closure {
+                                    function_id,
+                                    captures,
+                                } = &object.data
+                                else {
+                                    return Err(TinyOneError::runtime(
+                                        "CallValue expects a function or Closure",
+                                    ));
+                                };
+                                (
+                                    *function_id as usize,
+                                    crate::runtime::heap::decode_array_values(captures),
+                                )
+                            };
+                            let (function_index, mut captures) = captures;
+                            captures.extend(args);
+                            (function_index, captures)
+                        }
+                        _ => {
+                            return Err(TinyOneError::runtime(
+                                "CallValue expects a function or Closure",
+                            ));
+                        }
+                    };
+                    let globals = global_memory.unwrap_or(&*memory);
+                    stack.push(self.call_function_with_args(
+                        function_index,
+                        call_args,
+                        stdout,
+                        globals,
+                    )?);
+                }
                 JitOp::MakeArray(count) => {
                     let values = pop_args(&mut stack, count)?;
                     stack.push(runtime_make_array(&mut self.context, values)?);
@@ -259,9 +311,12 @@ impl<'a> JitVm<'a> {
                 }
                 JitOp::MakeEnum(variant_id, field_count) => {
                     let values = pop_args(&mut stack, field_count)?;
-                    let variant_def = self.program.enum_variants.get(variant_id).ok_or_else(|| {
-                        TinyOneError::runtime(format!("Invalid enum variant index {variant_id}"))
-                    })?;
+                    let variant_def =
+                        self.program.enum_variants.get(variant_id).ok_or_else(|| {
+                            TinyOneError::runtime(format!(
+                                "Invalid enum variant index {variant_id}"
+                            ))
+                        })?;
                     stack.push(runtime_make_enum(
                         &mut self.context,
                         &variant_def.enum_name,
@@ -282,8 +337,9 @@ impl<'a> JitVm<'a> {
                 JitOp::Return => return Ok(Some(jit_pop(&mut stack)?)),
                 JitOp::Print => {
                     if !self.context.queued_stdout.is_empty() {
-                        stdout.write_all(&self.context.queued_stdout)
-                            .map_err(|e| TinyOneError::runtime(format!("stdout flush error: {e}")))?;
+                        stdout.write_all(&self.context.queued_stdout).map_err(|e| {
+                            TinyOneError::runtime(format!("stdout flush error: {e}"))
+                        })?;
                         self.context.queued_stdout.clear();
                     }
                     let value = jit_pop(&mut stack)?;
@@ -291,8 +347,9 @@ impl<'a> JitVm<'a> {
                 }
                 JitOp::Halt => {
                     if !self.context.queued_stdout.is_empty() {
-                        stdout.write_all(&self.context.queued_stdout)
-                            .map_err(|e| TinyOneError::runtime(format!("stdout flush error: {e}")))?;
+                        stdout.write_all(&self.context.queued_stdout).map_err(|e| {
+                            TinyOneError::runtime(format!("stdout flush error: {e}"))
+                        })?;
                         self.context.queued_stdout.clear();
                     }
                     if !stack.is_empty() {
@@ -320,6 +377,17 @@ impl<'a> JitVm<'a> {
         stdout: &mut dyn Write,
         global_memory: &TinyMemory,
     ) -> Result<Value> {
+        let args = pop_args(caller_stack, arg_count)?;
+        self.call_function_with_args(function_index, args, stdout, global_memory)
+    }
+
+    fn call_function_with_args(
+        &mut self,
+        function_index: usize,
+        args: Vec<Value>,
+        stdout: &mut dyn Write,
+        global_memory: &TinyMemory,
+    ) -> Result<Value> {
         let (chunk_index, slot_count, param_count) = {
             let function = self.program.functions.get(function_index).ok_or_else(|| {
                 TinyOneError::runtime(format!("Invalid function index {function_index}"))
@@ -330,10 +398,12 @@ impl<'a> JitVm<'a> {
                 function.param_count,
             )
         };
-        if arg_count != param_count {
+        if args.len() != param_count {
             return Err(TinyOneError::runtime(format!(
-                "Function {:?} expects {param_count} argument(s), got {arg_count}",
-                self.function_name(function_index)
+                "Function {:?} expects {} argument(s), got {}",
+                self.function_name(function_index),
+                param_count,
+                args.len()
             )));
         }
         if self.call_depth >= MAX_CALL_DEPTH {
@@ -341,7 +411,6 @@ impl<'a> JitVm<'a> {
                 "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
             )));
         }
-        let args = pop_args(caller_stack, arg_count)?;
         let mut memory = TinyMemory::new(slot_count);
         for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;

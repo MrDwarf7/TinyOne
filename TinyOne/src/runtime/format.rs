@@ -33,10 +33,10 @@ fn runtime_format_inner(
         Value::Zst(_) => Ok("zst".to_string()),
         Value::Unsafe => Ok("unsafe".to_string()),
         Value::Pointer(pointer) => {
-            let suffix = if pointer.cast.is_empty() {
+            let suffix = if pointer.cast == crate::runtime::value::CastKind::None {
                 String::new()
             } else {
-                format!(":{}", pointer.cast)
+                format!(":{}", pointer.cast.as_str())
             };
             Ok(match pointer.kind.as_str() {
                 "null" if pointer.address == 0 => "null".to_string(),
@@ -47,14 +47,27 @@ fn runtime_format_inner(
             })
         }
         Value::Heap(reference) => {
-            let object = context.heap().get(value)?.clone();
             if seen.contains(&reference.address) {
                 return Ok(format!("&{}<cycle>", reference.address));
             }
             seen.insert(reference.address);
-            let rendered = match object.data {
-                HeapData::String(text) => Ok(text),
+
+            // `HeapData` isn't `Clone` (its `String`/`Buffer`/`CharBuffer`
+            // variants own a real, capacity-bounded `RallocBytes` that can
+            // only be duplicated via a fallible allocation — see
+            // `runtime/heap.rs`). So instead of cloning the whole object up
+            // front, each arm below either renders its result directly while
+            // the heap lock is still held (leaf kinds), or clones just the
+            // cheap `Value`-based payload it needs and drops the lock before
+            // recursing (container kinds) — recursing while still holding
+            // the heap's mutex would deadlock.
+            let heap = context.heap();
+            let object = heap.get(value)?;
+            let rendered = match &object.data {
+                HeapData::String(text) => Ok(crate::runtime::heap::heap_str(text)?.to_owned()),
                 HeapData::Array(values) => {
+                    let values = crate::runtime::heap::decode_array_values(values);
+                    drop(heap);
                     let parts = values
                         .iter()
                         .map(|item| runtime_format_inner(context, item, seen))
@@ -63,12 +76,16 @@ fn runtime_format_inner(
                 }
                 HeapData::Buffer(data) => Ok(format!(
                     "buffer[{}]",
-                    data.iter()
+                    data.as_slice()
+                        .iter()
                         .map(|byte| format!("{byte:02x}"))
                         .collect::<Vec<_>>()
                         .join(" ")
                 )),
-                HeapData::Struct(fields) => {
+                HeapData::Struct(record) => {
+                    let fields = record.fields();
+                    let type_name = object.type_name.clone();
+                    drop(heap);
                     let parts = fields
                         .iter()
                         .map(|(name, value)| {
@@ -76,14 +93,22 @@ fn runtime_format_inner(
                                 .map(|rendered| format!("{name}: {rendered}"))
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(format!("{}{{{}}}", object.type_name, parts.join(", ")))
+                    Ok(format!("{}{{{}}}", type_name, parts.join(", ")))
                 }
-                HeapData::Cell(value) => Ok(format!(
-                    "&{}({})",
-                    reference.address,
-                    runtime_format_inner(context, &value, seen)?
-                )),
+                HeapData::Cell(bytes) => {
+                    let value = crate::runtime::value_codec::decode_value(
+                        bytes.as_slice().try_into().unwrap(),
+                    );
+                    drop(heap);
+                    Ok(format!(
+                        "&{}({})",
+                        reference.address,
+                        runtime_format_inner(context, &value, seen)?
+                    ))
+                }
                 HeapData::Map(entries) => {
+                    let entries = crate::runtime::heap::decode_map_entries(entries);
+                    drop(heap);
                     let parts = entries
                         .iter()
                         .map(|(key, value)| {
@@ -102,20 +127,26 @@ fn runtime_format_inner(
                 HeapData::Thread(_) => Ok(format!("thread@{}", reference.address)),
                 HeapData::Char(scalar) => Ok(format!(
                     "{}",
-                    char::from_u32(scalar).unwrap_or(char::REPLACEMENT_CHARACTER)
+                    char::from_u32(*scalar).unwrap_or(char::REPLACEMENT_CHARACTER)
                 )),
-                HeapData::CharBuffer(chars) => Ok(chars
-                    .iter()
-                    .map(|&c| char::from_u32(c).unwrap_or(char::REPLACEMENT_CHARACTER))
-                    .collect::<String>()),
+                HeapData::CharBuffer(chars) => {
+                    Ok(crate::runtime::heap::unpack_char_buffer(chars.as_slice())
+                        .into_iter()
+                        .map(|c| char::from_u32(c).unwrap_or(char::REPLACEMENT_CHARACTER))
+                        .collect::<String>())
+                }
                 HeapData::Vec(values) => {
+                    let values = crate::runtime::heap::decode_array_values(values);
+                    drop(heap);
                     let parts = values
                         .iter()
                         .map(|item| runtime_format_inner(context, item, seen))
                         .collect::<Result<Vec<_>>>()?;
                     Ok(format!("[{}]", parts.join(", ")))
                 }
-                HeapData::Record(fields) => {
+                HeapData::Record(record) => {
+                    let fields = record.fields();
+                    drop(heap);
                     let parts = fields
                         .iter()
                         .map(|(name, value)| {
@@ -126,6 +157,8 @@ fn runtime_format_inner(
                     Ok(format!("{{{}}}", parts.join(", ")))
                 }
                 HeapData::Dictionary(entries) => {
+                    let entries = crate::runtime::heap::decode_map_entries(entries);
+                    drop(heap);
                     let parts = entries
                         .iter()
                         .map(|(key, value)| {
@@ -136,27 +169,43 @@ fn runtime_format_inner(
                         .collect::<Result<Vec<_>>>()?;
                     Ok(format!("dict{{{}}}", parts.join(", ")))
                 }
-                HeapData::Box(inner) => Ok(format!(
-                    "box({})",
-                    runtime_format_inner(context, &*inner, seen)?
-                )),
+                HeapData::Box(inner) => {
+                    let inner = crate::runtime::heap::decode_value_slot(inner);
+                    drop(heap);
+                    Ok(format!(
+                        "box({})",
+                        runtime_format_inner(context, &inner, seen)?
+                    ))
+                }
                 HeapData::Alloc { data, .. } => Ok(format!("alloc[{}b]", data.len())),
-                HeapData::Closure { function_id, captures } => Ok(format!(
+                HeapData::Closure {
+                    function_id,
+                    captures,
+                } => Ok(format!(
                     "closure(fn#{}, {} captures)",
                     function_id,
                     captures.len()
                 )),
                 HeapData::Sum { tag, payload } => {
+                    let tag = *tag;
+                    let payload = payload
+                        .as_ref()
+                        .map(crate::runtime::heap::decode_value_slot);
+                    drop(heap);
                     let payload_str = if let Some(p) = payload {
-                        runtime_format_inner(context, &*p, seen)?
+                        runtime_format_inner(context, &p, seen)?
                     } else {
                         "()".to_string()
                     };
                     Ok(format!("sum({tag}, {payload_str})"))
                 }
-                HeapData::Enum { variant, fields, .. } => {
+                HeapData::Enum(record) => {
+                    let variant = record.variant().to_owned();
+                    let fields = record.fields();
+                    let type_name = object.type_name.clone();
+                    drop(heap);
                     if fields.is_empty() {
-                        Ok(format!("{}.{}", object.type_name, variant))
+                        Ok(format!("{}.{}", type_name, variant))
                     } else {
                         let parts = fields
                             .iter()
@@ -165,32 +214,54 @@ fn runtime_format_inner(
                                     .map(|rendered| format!("{name}: {rendered}"))
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Ok(format!("{}.{}{{{}}}", object.type_name, variant, parts.join(", ")))
+                        Ok(format!("{}.{}{{{}}}", type_name, variant, parts.join(", ")))
                     }
                 }
-                HeapData::TaggedUnion { tag, payload } => Ok(format!(
-                    "union({tag}, {})",
-                    runtime_format_inner(context, &*payload, seen)?
-                )),
+                HeapData::TaggedUnion { tag, payload } => {
+                    let tag = *tag;
+                    let payload = crate::runtime::heap::decode_value_slot(payload);
+                    drop(heap);
+                    Ok(format!(
+                        "union({tag}, {})",
+                        runtime_format_inner(context, &payload, seen)?
+                    ))
+                }
                 HeapData::Result { is_ok, value } => {
-                    let inner = runtime_format_inner(context, &*value, seen)?;
+                    let is_ok = *is_ok;
+                    let value = crate::runtime::heap::decode_value_slot(value);
+                    drop(heap);
+                    let inner = runtime_format_inner(context, &value, seen)?;
                     if is_ok {
                         Ok(format!("Ok({inner})"))
                     } else {
                         Ok(format!("Err({inner})"))
                     }
                 }
-                HeapData::Option { value } => match value {
-                    Some(inner) => Ok(format!(
-                        "Some({})",
-                        runtime_format_inner(context, &*inner, seen)?
-                    )),
-                    None => Ok("None".to_string()),
-                },
-                HeapData::Dyn { type_id, vtable_id, value } => Ok(format!(
-                    "dyn(type={type_id}, vtable={vtable_id}, {})",
-                    runtime_format_inner(context, &*value, seen)?
-                )),
+                HeapData::Option { value } => {
+                    let value = value.as_ref().map(crate::runtime::heap::decode_value_slot);
+                    drop(heap);
+                    match value {
+                        Some(inner) => Ok(format!(
+                            "Some({})",
+                            runtime_format_inner(context, &inner, seen)?
+                        )),
+                        None => Ok("None".to_string()),
+                    }
+                }
+                HeapData::Dyn {
+                    type_id,
+                    vtable_id,
+                    value,
+                } => {
+                    let type_id = *type_id;
+                    let vtable_id = *vtable_id;
+                    let value = crate::runtime::heap::decode_value_slot(value);
+                    drop(heap);
+                    Ok(format!(
+                        "dyn(type={type_id}, vtable={vtable_id}, {})",
+                        runtime_format_inner(context, &value, seen)?
+                    ))
+                }
                 HeapData::FileDescriptor(fd) => Ok(format!("fd({fd})")),
             };
             seen.remove(&reference.address);

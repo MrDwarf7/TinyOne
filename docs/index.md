@@ -32,6 +32,7 @@ Working on the TinyOne runtime implementation:
 - [Memory Model](memory-model.md) — heap slab, generation tags, ownership rules, resource limits
 - [Contributing Guide](contributing.md) — build, test, adding features, builtins, and stdlib modules
 - [v1 Roadmap](v1-roadmap.md) — work required before the stable ABI release
+- [v2 Roadmap](v2-roadmap.md) — current language-generation commitments and implementation tracks
 
 ---
 

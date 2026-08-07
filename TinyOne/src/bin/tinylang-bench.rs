@@ -578,8 +578,8 @@ fn build_benchmarks() -> Vec<Benchmark> {
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_control_interrupts", 2_000, {
-            let mut program =
-                JitProgram::compile(&*interrupts.program).expect("benchmark program should compile");
+            let mut program = JitProgram::compile(&*interrupts.program)
+                .expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_heap_structs", 1_000, {

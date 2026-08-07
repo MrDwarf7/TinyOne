@@ -21,21 +21,26 @@ pub(crate) fn runtime_index(
     index: Value,
 ) -> Result<Value> {
     let index = expect_int(&index, "Index")?;
-    let object = context.heap().get(&container)?.clone();
-    match object.data {
+    let heap = context.heap();
+    let object = heap.get(&container)?;
+    match &object.data {
         HeapData::Array(values) => {
             let index = checked_collection_index(index, values.len(), "Array")?;
             values
                 .get(index)
-                .cloned()
+                .map(|bytes| crate::runtime::value_codec::decode_value(bytes.try_into().unwrap()))
                 .ok_or_else(|| TinyOneError::runtime("Array index out of bounds"))
         }
         HeapData::String(text) => {
+            let text = crate::runtime::heap::heap_str(text)?;
             let index = checked_collection_index(index, text.chars().count(), "String")?;
             let ch = text
                 .chars()
                 .nth(index)
                 .ok_or_else(|| TinyOneError::runtime("String index out of bounds"))?;
+            // Drop the heap lock before allocating the result — `text`'s
+            // borrow ends here, so nothing still references `heap`.
+            drop(heap);
             Ok(Value::Heap(context.heap().alloc_string(ch.to_string())?))
         }
         _ => Err(TinyOneError::runtime(format!(
@@ -61,10 +66,11 @@ pub(crate) fn runtime_set_index(
         )));
     };
     let index = checked_collection_index(index, values.len(), "Array")?;
+    let encoded = crate::runtime::value_codec::encode_value(&value)?;
     let target = values
         .get_mut(index)
         .ok_or_else(|| TinyOneError::runtime("Array index out of bounds"))?;
-    *target = value;
+    target.copy_from_slice(&encoded);
     Ok(())
 }
 
@@ -99,9 +105,12 @@ pub(crate) fn runtime_make_enum(
     values: Vec<Value>,
 ) -> Result<Value> {
     let fields = field_names.iter().cloned().zip(values).collect();
-    Ok(Value::Heap(
-        context.heap().alloc_enum(enum_name, variant_name, tag, fields)?,
-    ))
+    Ok(Value::Heap(context.heap().alloc_enum(
+        enum_name,
+        variant_name,
+        tag,
+        fields,
+    )?))
 }
 
 pub(crate) fn runtime_get_field(
@@ -112,30 +121,23 @@ pub(crate) fn runtime_get_field(
     let heap = context.heap();
     let object = heap.get(&target)?;
     match &object.data {
-        HeapData::Struct(fields) => fields
-            .iter()
-            .find(|(name, _)| name == field)
-            .map(|(_, value)| value.clone())
-            .ok_or_else(|| {
-                TinyOneError::runtime(format!(
-                    "Unknown field {field:?} on struct {:?}",
-                    object.type_name
-                ))
-            }),
-        HeapData::Enum { variant, tag, fields } => {
+        HeapData::Struct(record) => record.get(field).ok_or_else(|| {
+            TinyOneError::runtime(format!(
+                "Unknown field {field:?} on struct {:?}",
+                object.type_name
+            ))
+        }),
+        HeapData::Enum(record) => {
             if field == "tag" {
-                return Ok(Value::I64(*tag as i64));
+                return Ok(Value::I64(record.tag() as i64));
             }
-            fields
-                .iter()
-                .find(|(name, _)| name == field)
-                .map(|(_, value)| value.clone())
-                .ok_or_else(|| {
-                    TinyOneError::runtime(format!(
-                        "Unknown field {field:?} on enum variant {:?}.{variant}",
-                        object.type_name
-                    ))
-                })
+            record.get(field).ok_or_else(|| {
+                TinyOneError::runtime(format!(
+                    "Unknown field {field:?} on enum variant {:?}.{}",
+                    object.type_name,
+                    record.variant()
+                ))
+            })
         }
         _ => Err(TinyOneError::runtime(format!(
             "Cannot read field {field:?} from {}",
@@ -155,9 +157,8 @@ pub(crate) fn runtime_set_field(
     let type_name = object.type_name.clone();
     let kind = object.kind();
     match &mut object.data {
-        HeapData::Struct(fields) => {
-            if let Some((_, field_value)) = fields.iter_mut().find(|(name, _)| name == field) {
-                *field_value = value;
+        HeapData::Struct(record) => {
+            if record.set(field, &value)? {
                 Ok(())
             } else {
                 Err(TinyOneError::runtime(format!(
@@ -165,14 +166,14 @@ pub(crate) fn runtime_set_field(
                 )))
             }
         }
-        HeapData::Enum { variant, fields, .. } => {
+        HeapData::Enum(record) => {
             if field == "tag" {
                 return Err(TinyOneError::runtime(
                     "Cannot assign to reserved field \"tag\"",
                 ));
             }
-            if let Some((_, field_value)) = fields.iter_mut().find(|(name, _)| name == field) {
-                *field_value = value;
+            let variant = record.variant().to_owned();
+            if record.set(field, &value)? {
                 Ok(())
             } else {
                 Err(TinyOneError::runtime(format!(
@@ -194,7 +195,7 @@ pub(crate) fn expect_string(
     let heap = context.heap();
     let object = heap.get(value)?;
     match &object.data {
-        HeapData::String(text) => Ok(text.clone()),
+        HeapData::String(text) => crate::runtime::heap::heap_str(text).map(|s| s.to_owned()),
         _ => Err(TinyOneError::runtime(format!(
             "{operation} expects a string"
         ))),

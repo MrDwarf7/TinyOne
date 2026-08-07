@@ -3,12 +3,12 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::{
-    BytecodeVerifier, Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory,
-    TinyOneError, TinyRuntimeContext, TypeKind, Value, checked_div, checked_non_negative_usize,
-    pop_args,
-    runtime_add, runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index,
-    runtime_is_false, runtime_make_array, runtime_make_enum, runtime_make_struct, runtime_mul,
-    runtime_neg, runtime_null, runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
+    BytecodeVerifier, HeapData, Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats,
+    TinyMemory, TinyOneError, TinyRuntimeContext, TypeKind, Value, checked_div,
+    checked_non_negative_usize, pop_args, runtime_add, runtime_call_builtin, runtime_compare,
+    runtime_get_field, runtime_index, runtime_is_false, runtime_make_array, runtime_make_enum,
+    runtime_make_struct, runtime_mul, runtime_neg, runtime_null, runtime_print, runtime_set_field,
+    runtime_set_index, runtime_sub,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,7 +70,12 @@ impl VM {
         memory: TinyMemory,
         context: TinyRuntimeContext,
     ) -> Self {
-        Self { program, memory, context, call_depth: 0 }
+        Self {
+            program,
+            memory,
+            context,
+            call_depth: 0,
+        }
     }
 
     pub fn set_sys_args(&mut self, args: Vec<String>) {
@@ -143,6 +148,15 @@ impl VM {
                     kind: TypeKind::Fp64,
                     bits: f64::from_bits(instr.arg as u64),
                 }),
+                Op::PushFunction => {
+                    let function_index = checked_non_negative_usize(instr.arg, "function index")?;
+                    if function_index >= self.program.functions.len() {
+                        return Err(TinyOneError::runtime(format!(
+                            "Invalid function index {function_index}"
+                        )));
+                    }
+                    stack.push(Value::Function(function_index as u32));
+                }
                 Op::Pop => {
                     vm_pop(&mut stack)?;
                 }
@@ -211,6 +225,48 @@ impl VM {
                         self.call_function(function_index, &mut stack, arg_count, stdout, globals)?;
                     stack.push(result);
                 }
+                Op::CallValue => {
+                    let arg_count = checked_non_negative_usize(instr.arg, "call arity")?;
+                    let args = pop_args(&mut stack, arg_count)?;
+                    let callable = vm_pop(&mut stack)?;
+                    let (function_index, call_args) = match callable {
+                        Value::Function(index) => (index as usize, args),
+                        Value::Heap(reference) => {
+                            let captures = {
+                                let heap = self.context.heap();
+                                let object = heap.get(&Value::Heap(reference))?;
+                                let HeapData::Closure {
+                                    function_id,
+                                    captures,
+                                } = &object.data
+                                else {
+                                    return Err(TinyOneError::runtime(
+                                        "CallValue expects a function or Closure",
+                                    ));
+                                };
+                                (
+                                    *function_id as usize,
+                                    crate::runtime::heap::decode_array_values(captures),
+                                )
+                            };
+                            let (function_index, mut captures) = captures;
+                            captures.extend(args);
+                            (function_index, captures)
+                        }
+                        _ => {
+                            return Err(TinyOneError::runtime(
+                                "CallValue expects a function or Closure",
+                            ));
+                        }
+                    };
+                    let globals = global_memory.unwrap_or(&*memory);
+                    stack.push(self.call_function_with_args(
+                        function_index,
+                        call_args,
+                        stdout,
+                        globals,
+                    )?);
+                }
                 Op::MakeArray => {
                     let count = checked_non_negative_usize(instr.arg, "array arity")?;
                     let values = pop_args(&mut stack, count)?;
@@ -257,9 +313,12 @@ impl VM {
                     let field_count = checked_non_negative_usize(instr.arg2, "enum variant arity")?;
                     let values = pop_args(&mut stack, field_count)?;
                     let variant_id = checked_non_negative_usize(instr.arg, "enum variant index")?;
-                    let variant_def = self.program.enum_variants.get(variant_id).ok_or_else(|| {
-                        TinyOneError::runtime(format!("Invalid enum variant index {variant_id}"))
-                    })?;
+                    let variant_def =
+                        self.program.enum_variants.get(variant_id).ok_or_else(|| {
+                            TinyOneError::runtime(format!(
+                                "Invalid enum variant index {variant_id}"
+                            ))
+                        })?;
                     stack.push(runtime_make_enum(
                         &mut self.context,
                         &variant_def.enum_name,
@@ -282,8 +341,9 @@ impl VM {
                 Op::Return => return Ok(Some(vm_pop(&mut stack)?)),
                 Op::Print => {
                     if !self.context.queued_stdout.is_empty() {
-                        stdout.write_all(&self.context.queued_stdout)
-                            .map_err(|e| TinyOneError::runtime(format!("stdout flush error: {e}")))?;
+                        stdout.write_all(&self.context.queued_stdout).map_err(|e| {
+                            TinyOneError::runtime(format!("stdout flush error: {e}"))
+                        })?;
                         self.context.queued_stdout.clear();
                     }
                     let value = vm_pop(&mut stack)?;
@@ -291,8 +351,9 @@ impl VM {
                 }
                 Op::Halt => {
                     if !self.context.queued_stdout.is_empty() {
-                        stdout.write_all(&self.context.queued_stdout)
-                            .map_err(|e| TinyOneError::runtime(format!("stdout flush error: {e}")))?;
+                        stdout.write_all(&self.context.queued_stdout).map_err(|e| {
+                            TinyOneError::runtime(format!("stdout flush error: {e}"))
+                        })?;
                         self.context.queued_stdout.clear();
                     }
                     if !stack.is_empty() {
@@ -314,6 +375,17 @@ impl VM {
         stdout: &mut dyn Write,
         global_memory: &TinyMemory,
     ) -> Result<Value> {
+        let args = pop_args(caller_stack, arg_count)?;
+        self.call_function_with_args(function_index, args, stdout, global_memory)
+    }
+
+    fn call_function_with_args(
+        &mut self,
+        function_index: usize,
+        args: Vec<Value>,
+        stdout: &mut dyn Write,
+        global_memory: &TinyMemory,
+    ) -> Result<Value> {
         let (fn_name, fn_slot_count, fn_code, fn_param_count) = {
             let function = self.program.functions.get(function_index).ok_or_else(|| {
                 TinyOneError::runtime(format!("Invalid function index {function_index}"))
@@ -325,10 +397,12 @@ impl VM {
                 function.param_count,
             )
         };
-        if arg_count != fn_param_count {
+        if args.len() != fn_param_count {
             return Err(TinyOneError::runtime(format!(
-                "Function {:?} expects {} argument(s), got {arg_count}",
-                fn_name, fn_param_count
+                "Function {:?} expects {} argument(s), got {}",
+                fn_name,
+                fn_param_count,
+                args.len()
             )));
         }
         if self.call_depth >= MAX_CALL_DEPTH {
@@ -336,19 +410,12 @@ impl VM {
                 "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
             )));
         }
-        let args = pop_args(caller_stack, arg_count)?;
         let mut memory = TinyMemory::new(fn_slot_count);
         for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;
         }
         self.call_depth += 1;
-        let result = self.run_chunk(
-            &fn_code,
-            &mut memory,
-            stdout,
-            &fn_name,
-            Some(global_memory),
-        );
+        let result = self.run_chunk(&fn_code, &mut memory, stdout, &fn_name, Some(global_memory));
         self.call_depth -= 1;
         result?.ok_or_else(|| {
             TinyOneError::runtime(format!("Function {:?} returned no value", fn_name))

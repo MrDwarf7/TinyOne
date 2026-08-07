@@ -198,6 +198,11 @@ impl BytecodeVerifier {
                     "Verifier: invalid string index {arg} at instruction {pc} in {chunk_name}"
                 )));
             }
+            if op == Op::PushFunction && checked_index(arg, context.functions.len()).is_err() {
+                return Err(TinyOneError::compile(format!(
+                    "Verifier: invalid function index {arg} at instruction {pc} in {chunk_name}"
+                )));
+            }
             if matches!(op, Op::GetField | Op::SetField)
                 && checked_index(arg, context.fields.len()).is_err()
             {
@@ -244,6 +249,31 @@ impl BytecodeVerifier {
                         code,
                         next_pc(pc)?,
                         next_depth_after_popping_to_one(pc, depth, arg2, chunk_name)?,
+                        pc,
+                        chunk_name,
+                    )?;
+                }
+                Op::CallValue => {
+                    let arg_count = usize::try_from(arg).map_err(|_| {
+                        TinyOneError::compile(format!(
+                            "Verifier: invalid call arity {arg} at instruction {pc} in {chunk_name}"
+                        ))
+                    })?;
+                    // The callee occupies one stack slot in addition to the
+                    // arguments; the call result replaces the whole group.
+                    visit(
+                        &mut seen,
+                        &mut todo,
+                        code,
+                        next_pc(pc)?,
+                        next_depth_after_popping_to_one(
+                            pc,
+                            depth,
+                            i64::try_from(arg_count + 1).map_err(|_| {
+                                TinyOneError::compile("Verifier: call arity overflow")
+                            })?,
+                            chunk_name,
+                        )?,
                         pc,
                         chunk_name,
                     )?;
@@ -404,6 +434,16 @@ impl BytecodeVerifier {
         if op == Op::PushString && checked_index(arg, context.strings.len()).is_err() {
             return Err(TinyOneError::compile(format!(
                 "Verifier: invalid string index {arg} at instruction {pc} in {chunk_name}"
+            )));
+        }
+        if op == Op::PushFunction && checked_index(arg, context.functions.len()).is_err() {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: invalid function index {arg} at instruction {pc} in {chunk_name}"
+            )));
+        }
+        if op == Op::CallValue && arg < 0 {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: negative call arity {arg} at instruction {pc} in {chunk_name}"
             )));
         }
         if matches!(op, Op::GetField | Op::SetField)
@@ -592,8 +632,14 @@ fn verify_string_list(name: &str, values: &[String], max_count: usize) -> Result
 
 fn stack_effect(op: Op) -> Option<i64> {
     Some(match op {
-        Op::PushInt | Op::PushString | Op::PushNull | Op::PushBool | Op::PushFloat | Op::Load
+        Op::PushInt
+        | Op::PushString
+        | Op::PushNull
+        | Op::PushBool
+        | Op::PushFloat
+        | Op::Load
         | Op::LoadGlobal => 1,
+        Op::PushFunction => 1,
         Op::Store | Op::Pop => -1,
         Op::Add
         | Op::Sub

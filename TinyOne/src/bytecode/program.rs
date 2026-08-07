@@ -5,6 +5,10 @@ use crate::Instr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     pub name: String,
+    /// Generic parameters are erased at runtime. They are retained in the
+    /// program metadata so v2 tooling and artifact consumers can inspect the
+    /// declared parametric API.
+    pub generic_params: Vec<String>,
     pub param_count: usize,
     pub code: Vec<Instr>,
     pub slot_count: usize,
@@ -70,6 +74,7 @@ impl Program {
         hasher.update((self.functions.len() as u64).to_le_bytes());
         for function in &self.functions {
             hash_string_u32(&mut hasher, &function.name);
+            hash_string_list(&mut hasher, function.generic_params.iter());
             hasher.update((function.param_count as u64).to_le_bytes());
             hasher.update((function.slot_count as u64).to_le_bytes());
             self.hash_code(&mut hasher, &function.code);

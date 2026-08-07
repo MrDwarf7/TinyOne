@@ -5,18 +5,15 @@
 //! `vm_address`. The generation field mirrors `TinyHeap::generations` so that
 //! stale [`HeapRef`]s are rejected without consulting the heap itself.
 //!
-//! Phase 2 will replace [`VmAllocHandle`] with the real Ralloc handle type and
-//! wire the table's `insert`/`remove` calls to actual allocator operations.
+//! The table stores a small opaque id while the move-only Ralloc allocation
+//! handle lives in `TinyAllocator`'s side table.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 // ── Handle ────────────────────────────────────────────────────────────────────
 
-/// Opaque placeholder for a Ralloc native allocation handle.
-///
-/// Will be replaced with the actual Ralloc type in Phase 2. The inner `u64`
-/// is treated as an opaque token; callers must not construct or interpret it.
+/// Opaque id for a move-only Ralloc native allocation held by `TinyAllocator`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VmAllocHandle(pub u64);
 
@@ -90,7 +87,8 @@ pub struct AllocRecord {
     pub vm_address: usize,
     /// Generation counter at the time of allocation (`HeapRef::generation`).
     pub vm_generation: u64,
-    /// Native allocator handle, or `None` if not yet backed by Ralloc.
+    /// Ralloc allocation id, or `None` when the heap object owns its Ralloc
+    /// bytes directly (for example, strings and buffers).
     pub native_handle: Option<VmAllocHandle>,
     /// The kind of heap object stored in this slot.
     pub kind: AllocKind,
@@ -150,7 +148,10 @@ impl std::fmt::Display for AllocTableError {
                 "alloc table: generation mismatch (expected {expected}, actual {actual})"
             ),
             AllocTableError::AlreadyExists => {
-                write!(f, "alloc table: a live record already exists for vm_address")
+                write!(
+                    f,
+                    "alloc table: a live record already exists for vm_address"
+                )
             }
             AllocTableError::AlreadyDead => {
                 write!(f, "alloc table: record is already marked dead")
@@ -282,11 +283,7 @@ impl AllocTable {
     /// - No record exists ([`AllocTableError::NotFound`])
     /// - The generation does not match ([`AllocTableError::GenerationMismatch`])
     /// - The record is already dead ([`AllocTableError::AlreadyDead`])
-    pub fn mark_dead(
-        &self,
-        vm_address: usize,
-        vm_generation: u64,
-    ) -> Result<(), AllocTableError> {
+    pub fn mark_dead(&self, vm_address: usize, vm_generation: u64) -> Result<(), AllocTableError> {
         let mut guard = self.inner.lock().unwrap();
         let record = guard
             .records
@@ -310,12 +307,7 @@ impl AllocTable {
     /// Order is unspecified.
     pub fn all_live(&self) -> Vec<AllocRecord> {
         let guard = self.inner.lock().unwrap();
-        guard
-            .records
-            .values()
-            .filter(|r| r.live)
-            .cloned()
-            .collect()
+        guard.records.values().filter(|r| r.live).cloned().collect()
     }
 
     /// Returns current aggregate statistics.
@@ -402,9 +394,15 @@ mod tests {
         table.insert(make_record(2, 3, 32)).unwrap();
 
         // generation 4 is stale
-        assert!(table.get(2, 4).is_none(), "stale generation should return None");
+        assert!(
+            table.get(2, 4).is_none(),
+            "stale generation should return None"
+        );
         // generation 2 is also wrong
-        assert!(table.get(2, 2).is_none(), "older generation should return None");
+        assert!(
+            table.get(2, 2).is_none(),
+            "older generation should return None"
+        );
     }
 
     // 3. remove, verify stats update, then get returns None ──────────────────
@@ -506,7 +504,10 @@ mod tests {
         assert!(
             matches!(
                 err,
-                AllocTableError::GenerationMismatch { expected: 4, actual: 5 }
+                AllocTableError::GenerationMismatch {
+                    expected: 4,
+                    actual: 5
+                }
             ),
             "unexpected error: {err}"
         );

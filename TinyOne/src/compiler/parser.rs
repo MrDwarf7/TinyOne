@@ -3,9 +3,8 @@ use std::rc::Rc;
 
 use crate::{
     BUILTINS, EnumVariantDef, Function, Instr, Lexer, ModuleDef, ModuleImportDef, ModuleInfo, Op,
-    Program, Resolver, Result, SharedState, SourceMap, StructDef, SymbolTable, TinyOneError,
-    Token, TokenKind, builtin_index, default_import_alias, module_name_from_import,
-    unique_module_name,
+    Program, Resolver, Result, SharedState, SourceMap, StructDef, SymbolTable, TinyOneError, Token,
+    TokenKind, builtin_index, default_import_alias, module_name_from_import, unique_module_name,
 };
 
 #[derive(Debug)]
@@ -284,7 +283,7 @@ impl Compiler {
     /// Consumes and discards an optional type annotation introduced by
     /// `marker` (`Colon` for `let`/parameter annotations, `Arrow` for
     /// function return-type annotations). TinyLang has no static type
-    /// checker (dynamically typed by design — see `docs/v1-roadmap.md`);
+    /// checker (dynamically typed by design — see `docs/v2-roadmap.md`);
     /// annotations are syntax-only documentation with no effect on compiled
     /// bytecode.
     fn skip_optional_type_annotation(&mut self, marker: TokenKind) -> Result<()> {
@@ -653,10 +652,7 @@ impl Compiler {
                             }
                             if !seen_fields.insert(field_token.text.clone()) {
                                 return Err(self.error(
-                                    format!(
-                                        "Duplicate enum variant field {:?}",
-                                        field_token.text
-                                    ),
+                                    format!("Duplicate enum variant field {:?}", field_token.text),
                                     field_token,
                                 ));
                             }
@@ -719,6 +715,7 @@ impl Compiler {
             ));
         }
         let full_name = self.qualified_declaration_name(&name);
+        let generic_params = self.generic_parameter_list()?;
         let function_index = {
             let mut state = self.shared.borrow_mut();
             if state.function_indexes.contains_key(&full_name) {
@@ -782,6 +779,7 @@ impl Compiler {
             self.emit(Op::Return, 0, 0);
             Ok(Function {
                 name: full_name,
+                generic_params,
                 param_count,
                 code: self.code.clone(),
                 slot_count: self.symbols.slot_count(),
@@ -796,6 +794,34 @@ impl Compiler {
         let function = result?;
         self.shared.borrow_mut().functions.push(function);
         Ok(())
+    }
+
+    /// Parses the v2 declaration form `fn identity<T>(value: T) -> T`.
+    /// TinyOne is dynamically typed, so generic parameters are erased from
+    /// execution; the names remain in `Function` metadata for tooling and
+    /// artifact consumers.
+    fn generic_parameter_list(&mut self) -> Result<Vec<String>> {
+        if self.current().kind != TokenKind::Lt {
+            return Ok(Vec::new());
+        }
+        self.eat(TokenKind::Lt)?;
+        let mut params = Vec::new();
+        loop {
+            let token = self.eat(TokenKind::Ident)?;
+            if params.contains(&token.text) {
+                return Err(self.error(
+                    format!("Duplicate generic parameter {:?}", token.text),
+                    token,
+                ));
+            }
+            params.push(token.text);
+            if self.current().kind != TokenKind::Comma {
+                break;
+            }
+            self.eat(TokenKind::Comma)?;
+        }
+        self.eat(TokenKind::Gt)?;
+        Ok(params)
     }
 
     fn qualified_declaration_name(&self, name: &str) -> String {
@@ -982,6 +1008,12 @@ impl Compiler {
                     let name = self.eat(TokenKind::Ident)?;
                     if self.current().kind == TokenKind::LParen {
                         self.call_expression(&name)?;
+                    } else if self.local_function_indexes.contains_key(&name.text) {
+                        self.emit(
+                            Op::PushFunction,
+                            self.local_function_indexes[&name.text] as i64,
+                            0,
+                        );
                     } else {
                         self.emit_load_name(&name)?;
                     }
@@ -1051,6 +1083,13 @@ impl Compiler {
         }
         if let Some(builtin_index) = builtin_index(&name.text) {
             return self.builtin_call(&name.text, builtin_index, name.pos);
+        }
+        if self.symbols.get(&name.text).is_some() {
+            self.emit_load_name(name)?;
+            self.eat(TokenKind::LParen)?;
+            let arg_count = self.argument_list()?;
+            self.emit(Op::CallValue, arg_count as i64, 0);
+            return Ok(());
         }
         let function_index = self
             .local_function_indexes
@@ -1135,14 +1174,13 @@ impl Compiler {
         }
         .ok_or_else(|| {
             self.error_at(
-                format!(
-                    "Enum {:?} has no variant {:?}",
-                    namespace.text, member.text
-                ),
+                format!("Enum {:?} has no variant {:?}", namespace.text, member.text),
                 member.pos,
             )
         })?;
-        let field_count = self.shared.borrow().enum_variants[variant_index].fields.len();
+        let field_count = self.shared.borrow().enum_variants[variant_index]
+            .fields
+            .len();
         self.eat(TokenKind::LParen)?;
         let arg_count = self.argument_list()?;
         if arg_count != field_count {
