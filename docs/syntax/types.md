@@ -38,13 +38,16 @@ Heap-allocated, immutable, UTF-8 byte sequence.
 **Created by:** string literals (`"hello"`), `str_concat(a, b)`,
 `str_slice(s, start, end)`, `str_from_buffer(buf)`, `read_str()`.
 
-**Read:** `len(s)` returns byte length; `s[i]` returns the byte at index
-`i`; `str_char_at(s, i)` returns a single-character string.
+**Read:** `len(s)` returns byte length; `s[i]` returns the Unicode scalar at
+index `i` as a one-character string; `str_byte_at(s, i)` returns a byte value;
+and `str_char_at(s, i)` is the explicit Unicode-scalar form.
 
 **Mutated:** strings are immutable. To build a new string, use
 `str_concat` or `str_slice`.
 
-**Runtime errors:** out-of-bounds index access; `str_char_at` out of range.
+**Runtime errors:** negative or out-of-bounds indexes, indexes too large for
+the host index type, and invalid string slice bounds. Bounds are checked at
+runtime; the compiler does not prove string or array indexes safe.
 
 **Ownership:** copying a string variable aliases the same heap object.
 Strings are not freed by user code (no `unsafe free` on strings —

@@ -2,16 +2,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::{
     EnumVariantDef, HOT_BACK_EDGE_THRESHOLD, JitChunk, JitFunction, JitStats, JitVm, Program,
-    Result, StructDef, TinyMemory, TinyOneError, TinyRunReport,
+    Result, StructDef, TinyMemory, TinyOneError, TinyRunReport, VerifiedProgram,
 };
 
 #[derive(Debug, Clone)]
 pub struct JitProgram {
-    pub(crate) source_program: Arc<Program>,
+    pub(crate) verified_program: VerifiedProgram,
     pub(crate) fingerprint: String,
     pub(crate) chunks: Vec<JitChunk>,
     pub(crate) functions: Vec<JitFunction>,
@@ -24,11 +23,16 @@ pub struct JitProgram {
 
 impl JitProgram {
     pub fn compile(program: &Program) -> crate::Result<Self> {
-        crate::BytecodeVerifier::verify(program)?;
-        Self::compile_with_fingerprint(program, program.fingerprint())
+        let verified = VerifiedProgram::verify(program.clone())?;
+        let fingerprint = verified.program().fingerprint();
+        Self::compile_with_fingerprint(&verified, fingerprint)
     }
 
-    pub(crate) fn compile_with_fingerprint(program: &Program, fingerprint: String) -> Result<Self> {
+    pub(crate) fn compile_with_fingerprint(
+        verified: &VerifiedProgram,
+        fingerprint: String,
+    ) -> Result<Self> {
+        let program = verified.program();
         let mut chunks = vec![JitChunk::compile(
             "main",
             program.slot_count,
@@ -52,7 +56,7 @@ impl JitProgram {
         let compiled_ops = chunks.iter().map(|chunk| chunk.ops.len()).sum();
         let compiled_chunks = chunks.len();
         Ok(Self {
-            source_program: Arc::new(program.clone()),
+            verified_program: verified.clone(),
             fingerprint,
             chunks,
             functions,

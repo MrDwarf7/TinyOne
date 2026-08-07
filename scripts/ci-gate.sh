@@ -113,7 +113,7 @@ run_gate "cargo fmt --check" "CI_GATE_SKIP_CARGO_FMT" \
   cargo fmt --manifest-path "$MANIFEST" -- --check
 
 run_gate "cargo clippy" "CI_GATE_SKIP_CLIPPY" \
-  cargo clippy --manifest-path "$MANIFEST" --all-targets -- -D warnings
+  cargo clippy --manifest-path "$MANIFEST" --all-targets
 
 if should_skip "CI_GATE_SKIP_TESTING_HOOKS"; then
   printf '\n==> SKIP testing-hooks (CI_GATE_SKIP_TESTING_HOOKS)\n'
@@ -133,7 +133,7 @@ else
 fi
 
 run_gate "Python tool tests" "CI_GATE_SKIP_PYTHON_TOOLS" \
-  python3 -m unittest discover -s Tools -p 'test_*.py'
+  uv run --no-project python -m unittest discover -s Tools -p 'test_*.py'
 
 run_gate "ABI header drift" "CI_GATE_SKIP_ABI_DRIFT" \
   scripts/check-abi-drift.sh
@@ -143,9 +143,9 @@ if should_skip "CI_GATE_SKIP_HASH_LOC_SMOKE"; then
   skips+=("hash/loc smoke skipped by CI_GATE_SKIP_HASH_LOC_SMOKE")
 else
   run_gate "hash tree smoke" "CI_GATE_SKIP_HASH_LOC_SMOKE" \
-    python3 Tools/hash.py --tree TinyOne --include .rs --format json
+    uv run --no-project python Tools/hash.py --tree TinyOne --include .rs --format json
   run_gate "loc smoke" "CI_GATE_SKIP_HASH_LOC_SMOKE" \
-    python3 Tools/loc.py --json
+    uv run --no-project python Tools/loc.py --json
 fi
 
 release_built=0

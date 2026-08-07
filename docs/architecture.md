@@ -264,5 +264,5 @@ no allocation. All JSON responses follow `{"ok": true/false, "kind": "…",
    both carry a generation counter. A freed-then-reallocated slot has a
    different generation, so stale references are caught at the next access.
 
-5. **ABI is UNSTABLE.** The `extern "C"` entry points, their JSON schemas, and
-   the `tinyone.h` header are subject to change until v1 is tagged.
+5. **ABI version 1 is stable.** The `extern "C"` entry points, their JSON
+   schemas, and the `tinylang.h` header are frozen by the ABI contract.

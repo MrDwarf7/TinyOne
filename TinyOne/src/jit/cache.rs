@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
-    BytecodeVerifier, JitProgram, Program, Result, TinyMemory, TinyRunReport, compile_source,
+    JitProgram, Program, Result, TinyMemory, TinyRunReport, VerifiedProgram, compile_source,
 };
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -43,14 +43,15 @@ impl JitCache {
     }
 
     pub fn compile(&mut self, program: &Program) -> crate::Result<&JitProgram> {
-        BytecodeVerifier::verify(program)?;
-        Ok(&*self.compile_mut(program)?)
+        let verified = VerifiedProgram::verify(program.clone())?;
+        Ok(&*self.compile_mut(&verified)?)
     }
 
-    fn compile_mut(&mut self, program: &Program) -> Result<&mut JitProgram> {
+    fn compile_mut(&mut self, verified: &VerifiedProgram) -> Result<&mut JitProgram> {
+        let program = verified.program();
         let key = program.fingerprint();
         if !self.cache.contains_key(&key) {
-            let compiled = JitProgram::compile_with_fingerprint(program, key.clone())?;
+            let compiled = JitProgram::compile_with_fingerprint(verified, key.clone())?;
             self.cache.insert(key.clone(), compiled);
         }
         self.cache
@@ -79,8 +80,8 @@ impl JitCache {
         stdout: &mut dyn Write,
         inputs: Vec<String>,
     ) -> Result<TinyMemory> {
-        BytecodeVerifier::verify(program)?;
-        self.run_program_unchecked(program, stdout, inputs)
+        let verified = VerifiedProgram::verify(program.clone())?;
+        self.run_program_unchecked(&verified, stdout, inputs)
     }
 
     pub fn run_program_with_env(
@@ -91,8 +92,8 @@ impl JitCache {
         sys_args: Vec<String>,
         sys_env: HashMap<String, String>,
     ) -> Result<TinyMemory> {
-        BytecodeVerifier::verify(program)?;
-        self.run_program_with_env_unchecked(program, stdout, inputs, sys_args, sys_env)
+        let verified = VerifiedProgram::verify(program.clone())?;
+        self.run_program_with_env_unchecked(&verified, stdout, inputs, sys_args, sys_env)
     }
 
     pub fn run_program_report(
@@ -101,41 +102,40 @@ impl JitCache {
         stdout: &mut dyn Write,
         inputs: Vec<String>,
     ) -> Result<TinyRunReport> {
-        BytecodeVerifier::verify(program)?;
-        self.run_program_report_unchecked(program, stdout, inputs)
+        let verified = VerifiedProgram::verify(program.clone())?;
+        self.run_program_report_unchecked(&verified, stdout, inputs)
     }
 
-    /// Run without re-verifying. Only call when the caller has already run
-    /// `BytecodeVerifier::verify` on the same program.
+    /// Run without re-verifying from a verification token.
     pub(crate) fn run_program_unchecked(
         &mut self,
-        program: &Program,
+        verified: &VerifiedProgram,
         stdout: &mut dyn Write,
         inputs: Vec<String>,
     ) -> Result<TinyMemory> {
-        let compiled = self.compile_mut(program)?;
+        let compiled = self.compile_mut(verified)?;
         compiled.run(stdout, inputs)
     }
 
     pub(crate) fn run_program_with_env_unchecked(
         &mut self,
-        program: &Program,
+        verified: &VerifiedProgram,
         stdout: &mut dyn Write,
         inputs: Vec<String>,
         sys_args: Vec<String>,
         sys_env: HashMap<String, String>,
     ) -> Result<TinyMemory> {
-        let compiled = self.compile_mut(program)?;
+        let compiled = self.compile_mut(verified)?;
         compiled.run_with_env(stdout, inputs, sys_args, sys_env)
     }
 
     pub(crate) fn run_program_report_unchecked(
         &mut self,
-        program: &Program,
+        verified: &VerifiedProgram,
         stdout: &mut dyn Write,
         inputs: Vec<String>,
     ) -> Result<TinyRunReport> {
-        let compiled = self.compile_mut(program)?;
+        let compiled = self.compile_mut(verified)?;
         compiled.run_report(stdout, inputs)
     }
 

@@ -24,6 +24,7 @@ const MAX_VERIFIER_TOTAL_OPS: usize = 262_144;
 const MAX_BUFFER_BYTES: u64 = 1024 * 1024;
 
 unsafe extern "C" {
+    fn tinyone_abi_version() -> u32;
     fn tinyone_free_string(value: *mut c_char);
     fn tinyone_lex_source_json(source: *const c_char) -> *mut c_char;
     fn tinyone_compile_source_json(source: *const c_char) -> *mut c_char;
@@ -44,6 +45,11 @@ unsafe extern "C" {
         inputs_json: *const c_char,
     ) -> *mut c_char;
     fn tinyone_jit_listing_json(artifact_json: *const c_char) -> *mut c_char;
+}
+
+#[test]
+fn ffi_abi_version_matches_declared_header_contract() {
+    assert_eq!(unsafe { tinyone_abi_version() }, 1);
 }
 
 struct TestDir {
@@ -98,6 +104,145 @@ fn assert_ffi_ok(response: JsonValue) -> JsonValue {
         .expect("successful FFI response must include value")
 }
 
+fn assert_exact_object_keys(value: &JsonValue, expected: &[&str]) {
+    let object = value.as_object().expect("ABI value must be an object");
+    let mut actual: Vec<_> = object.keys().map(String::as_str).collect();
+    actual.sort_unstable();
+    let mut expected = expected.to_vec();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+}
+
+fn assert_runtime_value_schema(value: &JsonValue) {
+    let kind = value
+        .get("type")
+        .and_then(JsonValue::as_str)
+        .expect("runtime value must have a type");
+    match kind {
+        "heap" => assert_exact_object_keys(value, &["type", "address", "generation"]),
+        "pointer" => assert_exact_object_keys(
+            value,
+            &[
+                "type",
+                "address",
+                "kind",
+                "index",
+                "field",
+                "generation",
+                "cast",
+            ],
+        ),
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "fp8" | "fp16" | "fp32"
+        | "fp64" | "bool" => assert_exact_object_keys(value, &["type", "value"]),
+        "unit" | "null" => assert_exact_object_keys(value, &["type"]),
+        "function" => assert_exact_object_keys(value, &["type", "id"]),
+        "reference" => assert_exact_object_keys(value, &["type", "address"]),
+        "phantom" | "unsafe" => assert_exact_object_keys(value, &["type"]),
+        "zst" => assert_exact_object_keys(value, &["type", "marker"]),
+        other => panic!("unknown frozen runtime value type: {other}"),
+    }
+}
+
+#[test]
+fn ffi_success_response_schemas_are_frozen() {
+    let dir = TestDir::new("ffi-schema");
+    let file = dir.path().join("main.to");
+    fs::write(&file, "print 11").expect("write TinyOne source");
+    let source = cstring("let x = 7\nprint x");
+    let mode = cstring("vm");
+    let file_path = cstring(file.to_string_lossy());
+
+    let lex = take_ffi_json(unsafe { tinyone_lex_source_json(source.as_ptr()) });
+    assert_exact_object_keys(&lex, &["ok", "value"]);
+    assert_exact_object_keys(&lex["value"], &["tokens"]);
+
+    let compiled = take_ffi_json(unsafe { tinyone_compile_source_json(source.as_ptr()) });
+    assert_exact_object_keys(&compiled, &["ok", "value"]);
+    assert_exact_object_keys(&compiled["value"], &["artifact", "fingerprint"]);
+    assert_exact_object_keys(
+        &compiled["value"]["artifact"],
+        &[
+            "format",
+            "version",
+            "code",
+            "slot_count",
+            "names",
+            "functions",
+            "strings",
+            "structs",
+            "fields",
+            "modules",
+        ],
+    );
+
+    let compiled_file = take_ffi_json(unsafe { tinyone_compile_file_json(file_path.as_ptr()) });
+    assert_exact_object_keys(&compiled_file, &["ok", "value"]);
+    assert_exact_object_keys(&compiled_file["value"], &["artifact", "fingerprint"]);
+
+    let run = take_ffi_json(unsafe {
+        tinyone_run_source_json(source.as_ptr(), mode.as_ptr(), std::ptr::null())
+    });
+    assert_exact_object_keys(&run, &["ok", "value"]);
+    assert_exact_object_keys(
+        &run["value"],
+        &[
+            "stdout",
+            "memory",
+            "heap_before_shutdown",
+            "heap_after_shutdown",
+        ],
+    );
+    for value in run["value"]["memory"].as_array().expect("memory array") {
+        assert_runtime_value_schema(value);
+    }
+    for field in ["heap_before_shutdown", "heap_after_shutdown"] {
+        assert_exact_object_keys(
+            &run["value"][field],
+            &[
+                "live_objects",
+                "live_bytes",
+                "peak_objects",
+                "peak_bytes",
+                "total_allocations",
+                "total_frees",
+                "shutdown_frees",
+            ],
+        );
+    }
+
+    let artifact = cstring(compiled["value"]["artifact"].to_string());
+    let run_artifact = take_ffi_json(unsafe {
+        tinyone_run_artifact_json(artifact.as_ptr(), mode.as_ptr(), std::ptr::null())
+    });
+    assert_exact_object_keys(&run_artifact, &["ok", "value"]);
+    assert_exact_object_keys(
+        &run_artifact["value"],
+        &[
+            "stdout",
+            "memory",
+            "heap_before_shutdown",
+            "heap_after_shutdown",
+        ],
+    );
+
+    let listing = take_ffi_json(unsafe { tinyone_jit_listing_json(artifact.as_ptr()) });
+    assert_exact_object_keys(&listing, &["ok", "value"]);
+    assert_exact_object_keys(&listing["value"], &["listing"]);
+}
+
+#[test]
+fn committed_ffi_response_schema_is_valid_json() {
+    let schema = include_str!("../../tinyone-response-schema.json");
+    let value: JsonValue =
+        serde_json::from_str(schema).expect("response schema must be valid JSON");
+    assert_eq!(
+        value["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    assert!(value["$defs"].get("success").is_some());
+    assert!(value["$defs"].get("error").is_some());
+}
+
 fn assert_ffi_error(response: JsonValue, kind: &str, needle: &str) {
     assert_eq!(response.get("ok").and_then(JsonValue::as_bool), Some(false));
     assert_eq!(response.get("kind").and_then(JsonValue::as_str), Some(kind));
@@ -123,24 +268,14 @@ fn expect_error_contains<T>(result: tinyone::Result<T>, needle: &str) {
 }
 
 fn minimal_program() -> Program {
-    Program {
-        code: vec![Instr::new(Op::Halt, 0, 0)],
-        slot_count: 0,
-        names: Vec::new(),
-        functions: Vec::new(),
-        strings: Vec::new(),
-        structs: Vec::new(),
-        fields: Vec::new(),
-        modules: Vec::new(),
-        enum_variants: Vec::new(),
-    }
+    Program::new(vec![Instr::new(Op::Halt, 0, 0)], 0)
 }
 
 fn invalid_unverified_program() -> Program {
-    Program {
-        code: vec![Instr::new(Op::Print, 0, 0), Instr::new(Op::Halt, 0, 0)],
-        ..minimal_program()
-    }
+    Program::new(
+        vec![Instr::new(Op::Print, 0, 0), Instr::new(Op::Halt, 0, 0)],
+        0,
+    )
 }
 
 fn minimal_artifact() -> JsonValue {
@@ -360,6 +495,11 @@ static int require_contains(const char *label, const char *text, const char *nee
 }
 
 int main(void) {
+    if (tinyone_abi_version() != TINYONE_ABI_VERSION) {
+        fprintf(stderr, "ABI version mismatch\\n");
+        return 1;
+    }
+
     tinyone_free_string(NULL);
 
     char *ok = tinyone_run_source_json("print 23", "vm", NULL);
@@ -406,6 +546,12 @@ int main(void) {
             "skipping C FFI smoke: cdylib not found at {} — run `cargo build` first",
             dylib.display()
         );
+        return;
+    }
+
+    let compiler_probe = Command::new("cc").arg("--version").output();
+    if compiler_probe.is_err() {
+        eprintln!("skipping C FFI smoke: C compiler `cc` is not installed");
         return;
     }
 
@@ -510,11 +656,8 @@ fn verifier_handles_dense_jump_graph_without_path_explosion() {
     }
     code.push(Instr::new(Op::Halt, 0, 0));
 
-    BytecodeVerifier::verify(&Program {
-        code,
-        ..minimal_program()
-    })
-    .expect("dense diamond graph should verify in bounded work");
+    BytecodeVerifier::verify(&Program::new(code, 0))
+        .expect("dense diamond graph should verify in bounded work");
 }
 
 #[test]
@@ -529,10 +672,7 @@ fn verifier_rejects_oversized_dense_jump_graph_before_stress() {
     code.push(Instr::new(Op::Halt, 0, 0));
 
     expect_error_contains(
-        BytecodeVerifier::verify(&Program {
-            code,
-            ..minimal_program()
-        }),
+        BytecodeVerifier::verify(&Program::new(code, 0)),
         "total instruction count",
     );
 }
@@ -542,10 +682,7 @@ fn verifier_rejects_stack_depth_bomb() {
     let mut code = vec![Instr::new(Op::PushInt, 0, 0); 65_537];
     code.push(Instr::new(Op::Halt, 0, 0));
     expect_error_contains(
-        BytecodeVerifier::verify(&Program {
-            code,
-            ..minimal_program()
-        }),
+        BytecodeVerifier::verify(&Program::new(code, 0)),
         "stack depth",
     );
 }
@@ -611,22 +748,27 @@ fn map_pointer_keys_do_not_alias_after_heap_generation_reuse() {
 
 #[test]
 fn map_growth_obeys_heap_byte_budget() {
-    // 40,000 entries * 2 * VALUE_BYTES (16 bytes minimum per Value, current
-    // RuntimeValue is 64) comfortably exceeds MAX_HEAP_BYTES (4 MiB)
-    // regardless of RuntimeValue's exact size — don't shrink this without
-    // re-checking size_of::<RuntimeValue>() against MAX_HEAP_BYTES.
+    // Keep insertion bounded because map_set performs a linear key scan. Fill
+    // the remaining heap with one buffer, then assert the next map growth is
+    // rejected by the same byte budget.
     let source = r#"
     let m = map_new()
     let i = 0
-    while i < 40000 {
+    while i < 1000 {
       let ignored = map_set(m, i, i)
       i = i + 1
     }
+    let b1 = buffer(1000000)
+    let b2 = buffer(1000000)
+    let b3 = buffer(1000000)
+    let b4 = buffer(1000000)
+    let b5 = buffer(66304)
+    let ignored = map_set(m, 1001, 1001)
     print map_len(m)
     "#;
     for mode in ["vm", "jit"] {
         expect_error_contains(
-            run_source(source, mode, &mut Vec::new(), Vec::new()),
+            run_source(&source, mode, &mut Vec::new(), Vec::new()),
             "Heap byte limit",
         );
     }
@@ -658,14 +800,14 @@ fn vec_clear_releases_heap_byte_budget_before_free() {
 
 #[test]
 fn verifier_rejects_unreachable_invalid_operands() {
-    let invalid = Program {
-        code: vec![
+    let invalid = Program::new(
+        vec![
             Instr::new(Op::Jump, 2, 0),
             Instr::new(Op::Load, -1, 0),
             Instr::new(Op::Halt, 0, 0),
         ],
-        ..minimal_program()
-    };
+        0,
+    );
 
     expect_error_contains(BytecodeVerifier::verify(&invalid), "invalid slot");
     expect_error_contains(
@@ -741,7 +883,7 @@ fn public_safe_rust_paths_verify_untrusted_programs() {
     expect_error_contains(
         VM::new(
             Arc::new(invalid.clone()),
-            TinyMemory::new(invalid.slot_count),
+            TinyMemory::new(invalid.slot_count()),
             Vec::new(),
         ),
         "Verifier",
@@ -770,10 +912,7 @@ fn public_safe_rust_paths_verify_untrusted_programs() {
 
 #[test]
 fn public_safe_rust_paths_reject_oversized_raw_program_before_execution_allocation() {
-    let oversized = Program {
-        slot_count: MAX_ARTIFACT_SLOT_COUNT + 1,
-        ..minimal_program()
-    };
+    let oversized = minimal_program().with_slot_count(MAX_ARTIFACT_SLOT_COUNT + 1);
 
     expect_error_contains(BytecodeVerifier::verify(&oversized), "slot_count");
     expect_error_contains(VerifiedProgram::verify(oversized.clone()), "slot_count");
@@ -860,11 +999,8 @@ fn adversarial_verifier_tight_loop_terminates_cleanly() {
         Instr::new(Op::Jump, 0, 0),       // pc=2: back-edge
         Instr::new(Op::Halt, 0, 0),       // pc=3
     ];
-    BytecodeVerifier::verify(&Program {
-        code,
-        ..minimal_program()
-    })
-    .expect("tight loop should verify without timeout");
+    BytecodeVerifier::verify(&Program::new(code, 0))
+        .expect("tight loop should verify without timeout");
 }
 
 #[test]
@@ -886,6 +1022,17 @@ fn adversarial_ffi_artifact_at_max_minus_one_bytes_returns_clean_error() {
         response.get("kind").and_then(JsonValue::as_str).is_some(),
         "error response must include kind field"
     );
+}
+
+#[test]
+fn ffi_artifact_at_exact_byte_limit_reaches_json_parser() {
+    let exact_limit =
+        CString::new(vec![b' '; MAX_ARTIFACT_BYTES as usize]).expect("spaces contain no NUL");
+    let mode = cstring("vm");
+    let response = take_ffi_json(unsafe {
+        tinyone_run_artifact_json(exact_limit.as_ptr(), mode.as_ptr(), std::ptr::null())
+    });
+    assert_ffi_error(response, "compile", "valid JSON");
 }
 
 #[test]

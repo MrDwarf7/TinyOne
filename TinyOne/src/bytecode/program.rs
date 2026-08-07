@@ -4,21 +4,21 @@ use crate::Instr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
-    pub name: String,
+    pub(crate) name: String,
     /// Generic parameters are erased at runtime. They are retained in the
     /// program metadata so v2 tooling and artifact consumers can inspect the
     /// declared parametric API.
-    pub generic_params: Vec<String>,
-    pub param_count: usize,
-    pub code: Vec<Instr>,
-    pub slot_count: usize,
-    pub names: Vec<String>,
+    pub(crate) generic_params: Vec<String>,
+    pub(crate) param_count: usize,
+    pub(crate) code: Vec<Instr>,
+    pub(crate) slot_count: usize,
+    pub(crate) names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
-    pub name: String,
-    pub fields: Vec<String>,
+    pub(crate) name: String,
+    pub(crate) fields: Vec<String>,
 }
 
 /// One flattened, program-global entry per enum variant. `tag` is the
@@ -43,27 +43,79 @@ pub struct ModuleImportDef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleDef {
-    pub name: String,
-    pub path: String,
-    pub imports: Vec<ModuleImportDef>,
-    pub exported_functions: Vec<String>,
-    pub exported_structs: Vec<String>,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) imports: Vec<ModuleImportDef>,
+    pub(crate) exported_functions: Vec<String>,
+    pub(crate) exported_structs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    pub code: Vec<Instr>,
-    pub slot_count: usize,
-    pub names: Vec<String>,
-    pub functions: Vec<Function>,
-    pub strings: Vec<String>,
-    pub structs: Vec<StructDef>,
-    pub fields: Vec<String>,
-    pub modules: Vec<ModuleDef>,
-    pub enum_variants: Vec<EnumVariantDef>,
+    pub(crate) code: Vec<Instr>,
+    pub(crate) slot_count: usize,
+    pub(crate) names: Vec<String>,
+    pub(crate) functions: Vec<Function>,
+    pub(crate) strings: Vec<String>,
+    pub(crate) structs: Vec<StructDef>,
+    pub(crate) fields: Vec<String>,
+    pub(crate) modules: Vec<ModuleDef>,
+    pub(crate) enum_variants: Vec<EnumVariantDef>,
 }
 
 impl Program {
+    /// Create a program with empty metadata. The resulting program is still
+    /// unverified and must pass through `VerifiedProgram` before execution.
+    pub fn new(code: Vec<Instr>, slot_count: usize) -> Self {
+        Self {
+            code,
+            slot_count,
+            names: Vec::new(),
+            functions: Vec::new(),
+            strings: Vec::new(),
+            structs: Vec::new(),
+            fields: Vec::new(),
+            modules: Vec::new(),
+            enum_variants: Vec::new(),
+        }
+    }
+
+    pub fn code(&self) -> &[Instr] {
+        &self.code
+    }
+    pub fn slot_count(&self) -> usize {
+        self.slot_count
+    }
+    pub fn functions(&self) -> &[Function] {
+        &self.functions
+    }
+    pub fn structs(&self) -> &[StructDef] {
+        &self.structs
+    }
+    pub fn modules(&self) -> &[ModuleDef] {
+        &self.modules
+    }
+
+    pub fn with_functions(mut self, functions: Vec<Function>) -> Self {
+        self.functions = functions;
+        self
+    }
+
+    pub fn with_slot_count(mut self, slot_count: usize) -> Self {
+        self.slot_count = slot_count;
+        self
+    }
+
+    pub fn with_names(mut self, names: Vec<String>) -> Self {
+        self.names = names;
+        self
+    }
+
+    pub fn with_structs(mut self, structs: Vec<StructDef>) -> Self {
+        self.structs = structs;
+        self
+    }
+
     pub fn fingerprint(&self) -> String {
         let mut hasher = Blake2b512::new();
         self.hash_code(&mut hasher, &self.code);
@@ -118,6 +170,65 @@ impl Program {
     }
 }
 
+impl Function {
+    pub fn new(
+        name: impl Into<String>,
+        param_count: usize,
+        code: Vec<Instr>,
+        slot_count: usize,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            generic_params: Vec::new(),
+            param_count,
+            code,
+            slot_count,
+            names: Vec::new(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn generic_params(&self) -> &[String] {
+        &self.generic_params
+    }
+    pub fn code(&self) -> &[Instr] {
+        &self.code
+    }
+}
+
+impl StructDef {
+    pub fn new(name: impl Into<String>, fields: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            fields,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn fields(&self) -> &[String] {
+        &self.fields
+    }
+}
+
+impl ModuleDef {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    pub fn exported_functions(&self) -> &[String] {
+        &self.exported_functions
+    }
+    pub fn exported_structs(&self) -> &[String] {
+        &self.exported_structs
+    }
+}
+
 fn hash_string_u32(hasher: &mut Blake2b512, value: &str) {
     let bytes = value.as_bytes();
     hasher.update((bytes.len() as u32).to_le_bytes());
@@ -147,11 +258,16 @@ where
 /// `&Program` (with internal re-verification) — this type is provided for
 /// callers that want to verify once and reuse.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedProgram(Program);
+pub struct VerifiedProgram(std::sync::Arc<Program>);
 
 impl VerifiedProgram {
     /// Verify `program` and wrap it. Returns `Err` if verification fails.
     pub fn verify(program: Program) -> crate::Result<Self> {
+        crate::BytecodeVerifier::verify(&program)?;
+        Ok(Self(std::sync::Arc::new(program)))
+    }
+
+    pub(crate) fn verify_arc(program: std::sync::Arc<Program>) -> crate::Result<Self> {
         crate::BytecodeVerifier::verify(&program)?;
         Ok(Self(program))
     }
@@ -161,9 +277,7 @@ impl VerifiedProgram {
         &self.0
     }
 
-    /// Consume and return the inner program. The caller is responsible
-    /// for not passing the result to APIs that require a `VerifiedProgram`.
-    pub fn into_program(self) -> Program {
-        self.0
+    pub(crate) fn program_arc(&self) -> std::sync::Arc<Program> {
+        std::sync::Arc::clone(&self.0)
     }
 }

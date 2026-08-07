@@ -12,24 +12,36 @@ use crate::{
     compile_file, compile_source, lex_source, run_program_report, run_source_report,
 };
 
+/// The declared, frozen C ABI version.
+pub const TINYONE_ABI_VERSION: u32 = 1;
+
+#[unsafe(no_mangle)]
+/// Return the declared stable TinyOne C ABI version.
+pub extern "C" fn tinyone_abi_version() -> u32 {
+    TINYONE_ABI_VERSION
+}
+
 /// # Safety
 ///
 /// `value` must be null or a pointer returned by a TinyOne C-ABI function
 /// that has not already been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_free_string(value: *mut c_char) {
-    if value.is_null() {
-        return;
-    }
-    unsafe {
-        drop(CString::from_raw(value));
-    }
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if value.is_null() {
+            return;
+        }
+        unsafe {
+            drop(CString::from_raw(value));
+        }
+    }));
 }
 
 /// # Safety
 ///
-/// `source` may be null. If non-null, it must point to a valid
-/// NUL-terminated UTF-8 C string for the duration of the call.
+/// `source` must be non-null and point to a valid NUL-terminated UTF-8 C
+/// string for the duration of the call. A null pointer returns a compile
+/// error response.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_lex_source_json(source: *const c_char) -> *mut c_char {
     respond(|| {
@@ -40,8 +52,9 @@ pub unsafe extern "C" fn tinyone_lex_source_json(source: *const c_char) -> *mut 
 
 /// # Safety
 ///
-/// `source` may be null. If non-null, it must point to a valid
-/// NUL-terminated UTF-8 C string for the duration of the call.
+/// `source` must be non-null and point to a valid NUL-terminated UTF-8 C
+/// string for the duration of the call. A null pointer returns a compile
+/// error response.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_compile_source_json(source: *const c_char) -> *mut c_char {
     respond(|| {
@@ -52,8 +65,9 @@ pub unsafe extern "C" fn tinyone_compile_source_json(source: *const c_char) -> *
 
 /// # Safety
 ///
-/// `path` may be null. If non-null, it must point to a valid NUL-terminated
-/// UTF-8 C string for the duration of the call.
+/// `path` must be non-null and point to a valid NUL-terminated UTF-8 C string
+/// for the duration of the call. A null pointer returns a compile error
+/// response.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_compile_file_json(path: *const c_char) -> *mut c_char {
     respond(|| {
@@ -64,8 +78,10 @@ pub unsafe extern "C" fn tinyone_compile_file_json(path: *const c_char) -> *mut 
 
 /// # Safety
 ///
-/// `source`, `mode`, and `inputs_json` may be null. Any non-null pointer must
-/// point to a valid NUL-terminated UTF-8 C string for the duration of the call.
+/// `source` and `mode` must be non-null and point to valid NUL-terminated
+/// UTF-8 C strings for the duration of the call. `inputs_json` is nullable;
+/// null means an empty input queue. Any non-null pointer must point to a valid
+/// NUL-terminated UTF-8 C string for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_run_source_json(
     source: *const c_char,
@@ -89,8 +105,10 @@ pub unsafe extern "C" fn tinyone_run_source_json(
 
 /// # Safety
 ///
-/// `path`, `mode`, and `inputs_json` may be null. Any non-null pointer must
-/// point to a valid NUL-terminated UTF-8 C string for the duration of the call.
+/// `path` and `mode` must be non-null and point to valid NUL-terminated UTF-8
+/// C strings for the duration of the call. `inputs_json` is nullable; null
+/// means an empty input queue. Any non-null pointer must point to a valid
+/// NUL-terminated UTF-8 C string for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_run_file_json(
     path: *const c_char,
@@ -108,9 +126,11 @@ pub unsafe extern "C" fn tinyone_run_file_json(
 
 /// # Safety
 ///
-/// `artifact_json`, `mode`, and `inputs_json` may be null. Any non-null pointer
-/// must point to a valid NUL-terminated UTF-8 C string for the duration of the
-/// call. `artifact_json` must not exceed the documented artifact byte limit.
+/// `artifact_json` and `mode` must be non-null and point to valid NUL-terminated
+/// UTF-8 C strings for the duration of the call. `inputs_json` is nullable;
+/// null means an empty input queue. Any non-null pointer must point to a valid
+/// NUL-terminated UTF-8 C string for the duration of the call.
+/// `artifact_json` must not exceed the documented artifact byte limit.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_run_artifact_json(
     artifact_json: *const c_char,
@@ -128,9 +148,9 @@ pub unsafe extern "C" fn tinyone_run_artifact_json(
 
 /// # Safety
 ///
-/// `artifact_json` may be null. If non-null, it must point to a valid
-/// NUL-terminated UTF-8 C string for the duration of the call and must not
-/// exceed the documented artifact byte limit.
+/// `artifact_json` must be non-null and point to a valid NUL-terminated UTF-8
+/// C string for the duration of the call. A null pointer returns a compile
+/// error response. It must not exceed the documented artifact byte limit.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_jit_listing_json(artifact_json: *const c_char) -> *mut c_char {
     respond(|| {

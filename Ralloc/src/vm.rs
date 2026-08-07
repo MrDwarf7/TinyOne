@@ -167,7 +167,10 @@ mod tests {
     fn allocate_past_capacity_returns_err_not_panic() {
         let vm = VmAllocator::global();
         let result = vm.allocate(VmAllocator::capacity() * 2);
-        assert!(result.is_err(), "oversized allocation must error, not panic");
+        assert!(
+            result.is_err(),
+            "oversized allocation must error, not panic"
+        );
     }
 
     #[test]

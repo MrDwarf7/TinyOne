@@ -711,17 +711,14 @@ pub fn b_thread_spawn(context: &mut TinyRuntimeContext, args: Vec<Value>) -> Res
         )));
     }
 
+    let verified = crate::VerifiedProgram::verify_arc(Arc::clone(&program_arc))?;
     let heap_arc = Arc::clone(&context.heap_arc);
 
     let handle = std::thread::spawn(move || {
-        let slot_count = program_arc.functions[fn_index].slot_count;
+        let slot_count = verified.program().functions[fn_index].slot_count;
         let mut thread_ctx = TinyRuntimeContext::with_heap(heap_arc);
         thread_ctx.program_arc = Some(Arc::clone(&program_arc));
-        let vm = VM::new_unchecked_with_context(
-            Arc::clone(&program_arc),
-            TinyMemory::new(slot_count),
-            thread_ctx,
-        );
+        let vm = VM::new_unchecked_with_context(&verified, TinyMemory::new(slot_count), thread_ctx);
         let mut thread_stdout: Vec<u8> = Vec::new();
         let result = vm.run_function_by_index(fn_index, fn_args, &mut thread_stdout);
         (result, thread_stdout)

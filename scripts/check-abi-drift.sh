@@ -2,4 +2,4 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-exec python3 "$ROOT/Tools/abi_manifest.py" check "$@"
+exec uv run --no-project python "$ROOT/Tools/abi_manifest.py" check "$@"

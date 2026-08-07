@@ -30,7 +30,10 @@ pub(crate) struct JitVm<'a> {
 
 impl<'a> JitVm<'a> {
     pub(crate) fn new(program: &'a mut JitProgram, inputs: Vec<String>) -> Self {
-        let source_program = std::sync::Arc::clone(&program.source_program);
+        // The JIT retains the verification token for its entire lifetime;
+        // obtain the execution metadata from that token rather than from an
+        // independently mutable program handle.
+        let source_program = program.verified_program.program_arc();
         let mut context = TinyRuntimeContext::new(inputs);
         context.program_arc = Some(source_program);
         Self {

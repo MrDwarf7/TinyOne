@@ -60,8 +60,10 @@ a / b       # floor (truncating toward -∞) division; runtime error if b == 0
 Both operands must be integers. Integer literals are `i64`; `u8(value)`,
 `u16(value)`, and `u32(value)` create fixed-width unsigned runtime values.
 Operations preserve a fixed width when the other operand fits that width, and
-overflow traps with `Runtime.Memory_Overflow`. Mixing integers with heap objects
-is a runtime error.
+the result is checked before it is returned. Integer arithmetic never wraps;
+overflow is a runtime error (`Runtime.Memory_Overflow` for explicit-width/range
+failures, or an operation-specific overflow error). Division by zero is also a
+runtime error. Mixing integers with heap objects is a runtime error.
 
 ---
 
@@ -147,11 +149,15 @@ be declared with `struct` before its constructor is called.
 ## Postfix Index
 
 ```tinyone
-arr[i]    # read element i of array arr, or byte i of string arr
+arr[i]    # read element i of array arr, or Unicode scalar i of string arr
 ```
 
-Strings are byte-indexed (returns the integer byte value at position
-`i`). For Unicode-aware access use `str_char_at(s, i)`.
+Array indexes are zero-based and return the element at `i`. String indexes are
+zero-based Unicode-scalar indexes and return a one-character string, so an
+index does not address UTF-8 bytes directly. Negative, too-large, and otherwise
+unrepresentable indexes are runtime errors; there is no compile-time bounds
+check. Use `str_byte_at(s, i)` for a byte value and `str_char_at(s, i)` for
+explicit Unicode-scalar access.
 
 ---
 

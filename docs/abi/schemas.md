@@ -4,8 +4,13 @@ This document specifies the exact JSON schema of the `"value"` object
 returned on success by each entry point. Error response shapes are
 documented in [`contract.md`](contract.md).
 
-Fields marked **UNSTABLE** may gain or lose keys before v1. Fields
-marked **STABLE** are frozen. See [`versioning.md`](versioning.md).
+The machine-readable contract is committed at
+[`tinyone-response-schema.json`](../../tinyone-response-schema.json). Consumers
+may validate complete responses against that schema; the Rust ABI tests also
+assert the exact response keys emitted by every current JSON entry point.
+
+All fields and encodings in this document are frozen for ABI version 1.
+Unknown future fields must be ignored by consumers.
 
 ---
 
@@ -87,24 +92,24 @@ marked **STABLE** are frozen. See [`versioning.md`](versioning.md).
 | Field | Type | Status | Notes |
 | --- | --- | --- | --- |
 | `stdout` | string | STABLE | All text written to stdout during execution, including newlines |
-| `memory` | array | UNSTABLE | Top-level stack frame slots at program exit; encoding may change before v1 |
-| `memory[*].type` | string | UNSTABLE | `"int"`, `"heap"`, or `"pointer"` |
-| `memory[*].value` | integer | UNSTABLE | Present when `type` is `"int"` |
-| `memory[*].address` | integer | UNSTABLE | Heap slot index; present when `type` is `"heap"` or `"pointer"` |
-| `memory[*].generation` | integer | UNSTABLE | Generation counter at allocation time |
-| `memory[*].kind` | string | UNSTABLE | Pointer kind: `"object"`, `"array"`, `"buffer"`, `"struct"`, `"cell"`, or `"null"` |
-| `memory[*].index` | integer | UNSTABLE | Element/byte offset; present for array and buffer pointers |
-| `memory[*].field` | string\|null | UNSTABLE | Field name; present for struct field pointers |
-| `memory[*].cast` | string\|null | UNSTABLE | Cast type tag set by `cast_ptr`; `null` if not set |
-| `heap_before_shutdown` | object | UNSTABLE | Heap stats immediately before runtime cleanup |
-| `heap_after_shutdown` | object | UNSTABLE | Heap stats immediately after runtime cleanup |
-| `heap_*.live_objects` | integer | UNSTABLE | Live heap object count |
-| `heap_*.live_bytes` | integer | UNSTABLE | Live heap payload bytes |
-| `heap_*.peak_objects` | integer | UNSTABLE | Peak live object count during the run |
-| `heap_*.peak_bytes` | integer | UNSTABLE | Peak live bytes during the run |
-| `heap_*.total_allocations` | integer | UNSTABLE | Total allocations over the run |
-| `heap_*.total_frees` | integer | UNSTABLE | Total explicit frees (`unsafe free`) over the run |
-| `heap_*.shutdown_frees` | integer | UNSTABLE | Objects freed during runtime shutdown drain |
+| `memory` | array | STABLE | Top-level stack frame slots at program exit; one object per slot |
+| `memory[*].type` | string | STABLE | Discriminator for the exact runtime-value object shape in the machine-readable schema |
+| `memory[*].value` | number or boolean | STABLE | Numeric JSON value for integer/float variants; boolean for `bool`; integers retain their signedness and width through `type` |
+| `memory[*].address` | integer | STABLE | Address field for `heap`, `pointer`, and `reference` values |
+| `memory[*].generation` | integer | STABLE | Generation counter at allocation time |
+| `memory[*].kind` | string | STABLE | One of `null`, `object`, `array`, `buffer`, or `field` |
+| `memory[*].index` | integer | STABLE | Signed element/byte offset for a pointer |
+| `memory[*].field` | string | STABLE | Field name; empty string unless the pointer refers to a named field |
+| `memory[*].cast` | string | STABLE | Cast type tag; empty string when no cast is present |
+| `heap_before_shutdown` | object | STABLE | Heap stats immediately before runtime cleanup |
+| `heap_after_shutdown` | object | STABLE | Heap stats immediately after runtime cleanup |
+| `heap_*.live_objects` | integer | STABLE | Live heap object count |
+| `heap_*.live_bytes` | integer | STABLE | Live heap payload bytes |
+| `heap_*.peak_objects` | integer | STABLE | Peak live object count during the run |
+| `heap_*.peak_bytes` | integer | STABLE | Peak live bytes during the run |
+| `heap_*.total_allocations` | integer | STABLE | Total allocations over the run |
+| `heap_*.total_frees` | integer | STABLE | Total explicit frees (`unsafe free`) over the run |
+| `heap_*.shutdown_frees` | integer | STABLE | Objects freed during runtime shutdown drain |
 
 ---
 
@@ -118,6 +123,6 @@ marked **STABLE** are frozen. See [`versioning.md`](versioning.md).
 
 | Field | Type | Status | Notes |
 | --- | --- | --- | --- |
-| `listing` | string | UNSTABLE | Human-readable JIT assembly text; format may change |
+| `listing` | string | STABLE | Human-readable JIT assembly text; consumers must treat its contents as opaque text |
 
 ---
