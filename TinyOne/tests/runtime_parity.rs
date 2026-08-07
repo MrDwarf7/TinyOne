@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tinyone::{
     BytecodeVerifier, Function, Instr, JitCache, Op, Program, RuntimeValue, StructDef, TinyMemory,
-    TinyOneError, TypeKind, compile_file, compile_source, load_artifact, run_program, run_program_report,
-    write_artifact, write_jit_listing,
+    TinyOneError, TypeKind, compile_file, compile_source, load_artifact, run_program,
+    run_program_report, write_artifact, write_jit_listing,
 };
 
 fn run_compiled(
@@ -272,6 +272,24 @@ fn function_call_return_dispatch_matches() {
     let program = assert_backends_match(source, "204\n");
     assert_eq!(2, program.functions.len());
     assert!(program.code.iter().any(|instr| instr.op == Op::Call));
+}
+
+#[test]
+fn first_class_functions_closures_and_erased_generics_match() {
+    let source = r#"
+    fn add(a, b) { return a + b }
+    fn identity<T>(value: T) -> T { return value }
+    let f = add
+    print f(2, 3)
+    print identity("generic")
+    let add_ten = closure_new("add", [10])
+    print add_ten(7)
+    "#;
+    let program = assert_backends_match(source, "5\ngeneric\n17\n");
+    assert_eq!(program.functions[1].generic_params, vec!["T"]);
+    let artifact = program.to_artifact();
+    let restored = tinyone::Program::from_artifact(artifact).expect("generic artifact");
+    assert_eq!(restored.functions[1].generic_params, vec!["T"]);
 }
 
 #[test]
@@ -1049,6 +1067,7 @@ fn verifier_rejects_invalid_jump_target() {
 fn verifier_rejects_call_arity_mismatch() {
     let function = Function {
         name: "id".to_string(),
+        generic_params: Vec::new(),
         param_count: 1,
         code: vec![Instr::new(Op::Load, 0, 0), Instr::new(Op::Return, 0, 0)],
         slot_count: 1,
@@ -1094,50 +1113,86 @@ fn verifier_rejects_invalid_slot_and_struct_arity() {
 
 #[test]
 fn all_43_runtime_value_variants_are_representable() {
-    let _unit      = RuntimeValue::Unit;
-    let _bool_t    = RuntimeValue::Bool(true);
-    let _i8        = RuntimeValue::I8(0i8);
-    let _i16       = RuntimeValue::I16(0i16);
-    let _i32       = RuntimeValue::I32(0i32);
-    let _i64       = RuntimeValue::I64(0i64);
-    let _u8        = RuntimeValue::U8(0u8);
-    let _u16       = RuntimeValue::U16(0u16);
-    let _u32       = RuntimeValue::U32(0u32);
-    let _u64       = RuntimeValue::U64(0u64);
-    let _fp8       = RuntimeValue::Float { kind: TypeKind::Fp8, bits: 0.0 };
-    let _fp16      = RuntimeValue::Float { kind: TypeKind::Fp16, bits: 0.0 };
-    let _fp32      = RuntimeValue::Float { kind: TypeKind::Fp32, bits: 0.0 };
-    let _fp64      = RuntimeValue::Float { kind: TypeKind::Fp64, bits: 0.0 };
-    let _null      = RuntimeValue::Null;
-    let _func      = RuntimeValue::Function(0u32);
-    let _phantom   = RuntimeValue::Phantom;
-    let _zst       = RuntimeValue::Zst(TypeKind::Zst);
-    let _unsafe_v  = RuntimeValue::Unsafe;
+    let _unit = RuntimeValue::Unit;
+    let _bool_t = RuntimeValue::Bool(true);
+    let _i8 = RuntimeValue::I8(0i8);
+    let _i16 = RuntimeValue::I16(0i16);
+    let _i32 = RuntimeValue::I32(0i32);
+    let _i64 = RuntimeValue::I64(0i64);
+    let _u8 = RuntimeValue::U8(0u8);
+    let _u16 = RuntimeValue::U16(0u16);
+    let _u32 = RuntimeValue::U32(0u32);
+    let _u64 = RuntimeValue::U64(0u64);
+    let _fp8 = RuntimeValue::Float {
+        kind: TypeKind::Fp8,
+        bits: 0.0,
+    };
+    let _fp16 = RuntimeValue::Float {
+        kind: TypeKind::Fp16,
+        bits: 0.0,
+    };
+    let _fp32 = RuntimeValue::Float {
+        kind: TypeKind::Fp32,
+        bits: 0.0,
+    };
+    let _fp64 = RuntimeValue::Float {
+        kind: TypeKind::Fp64,
+        bits: 0.0,
+    };
+    let _null = RuntimeValue::Null;
+    let _func = RuntimeValue::Function(0u32);
+    let _phantom = RuntimeValue::Phantom;
+    let _zst = RuntimeValue::Zst(TypeKind::Zst);
+    let _unsafe_v = RuntimeValue::Unsafe;
     // Reference/Heap/Pointer require pub(crate) constructors; tested via internal unit tests
 }
 
 #[test]
 fn type_kind_from_runtime_value_round_trips() {
     let cases: &[(RuntimeValue, TypeKind)] = &[
-        (RuntimeValue::Unit,                                    TypeKind::Unit),
-        (RuntimeValue::Bool(true),                              TypeKind::Bool),
-        (RuntimeValue::I8(0),                                   TypeKind::I8),
-        (RuntimeValue::I16(0),                                  TypeKind::I16),
-        (RuntimeValue::I32(0),                                  TypeKind::I32),
-        (RuntimeValue::I64(0),                                  TypeKind::I64),
-        (RuntimeValue::U8(0),                                   TypeKind::U8),
-        (RuntimeValue::U16(0),                                  TypeKind::U16),
-        (RuntimeValue::U32(0),                                  TypeKind::U32),
-        (RuntimeValue::U64(0),                                  TypeKind::U64),
-        (RuntimeValue::Float { kind: TypeKind::Fp8, bits: 0.0 },  TypeKind::Fp8),
-        (RuntimeValue::Float { kind: TypeKind::Fp16, bits: 0.0 }, TypeKind::Fp16),
-        (RuntimeValue::Float { kind: TypeKind::Fp32, bits: 0.0 }, TypeKind::Fp32),
-        (RuntimeValue::Float { kind: TypeKind::Fp64, bits: 0.0 }, TypeKind::Fp64),
-        (RuntimeValue::Null,                                    TypeKind::Null),
-        (RuntimeValue::Function(0),                             TypeKind::Function),
-        (RuntimeValue::Phantom,                                 TypeKind::Phantom),
-        (RuntimeValue::Zst(TypeKind::Zst),                      TypeKind::Zst),
-        (RuntimeValue::Unsafe,                                  TypeKind::Unsafe),
+        (RuntimeValue::Unit, TypeKind::Unit),
+        (RuntimeValue::Bool(true), TypeKind::Bool),
+        (RuntimeValue::I8(0), TypeKind::I8),
+        (RuntimeValue::I16(0), TypeKind::I16),
+        (RuntimeValue::I32(0), TypeKind::I32),
+        (RuntimeValue::I64(0), TypeKind::I64),
+        (RuntimeValue::U8(0), TypeKind::U8),
+        (RuntimeValue::U16(0), TypeKind::U16),
+        (RuntimeValue::U32(0), TypeKind::U32),
+        (RuntimeValue::U64(0), TypeKind::U64),
+        (
+            RuntimeValue::Float {
+                kind: TypeKind::Fp8,
+                bits: 0.0,
+            },
+            TypeKind::Fp8,
+        ),
+        (
+            RuntimeValue::Float {
+                kind: TypeKind::Fp16,
+                bits: 0.0,
+            },
+            TypeKind::Fp16,
+        ),
+        (
+            RuntimeValue::Float {
+                kind: TypeKind::Fp32,
+                bits: 0.0,
+            },
+            TypeKind::Fp32,
+        ),
+        (
+            RuntimeValue::Float {
+                kind: TypeKind::Fp64,
+                bits: 0.0,
+            },
+            TypeKind::Fp64,
+        ),
+        (RuntimeValue::Null, TypeKind::Null),
+        (RuntimeValue::Function(0), TypeKind::Function),
+        (RuntimeValue::Phantom, TypeKind::Phantom),
+        (RuntimeValue::Zst(TypeKind::Zst), TypeKind::Zst),
+        (RuntimeValue::Unsafe, TypeKind::Unsafe),
     ];
 
     for (value, expected_kind) in cases {
@@ -1170,8 +1225,5 @@ fn float_precision_casts_round_and_report_correct_type_of() {
     print type_of(e)
     "#;
 
-    assert_backends_match(
-        source,
-        "3.0\nfp32\n1.125\nfp8\n65504.0\nfp16\n1.5\nfp32\n",
-    );
+    assert_backends_match(source, "3.0\nfp32\n1.125\nfp8\n65504.0\nfp16\n1.5\nfp32\n");
 }

@@ -239,7 +239,11 @@ fn program_payload(program: Arc<Program>) -> Result<JsonValue> {
     }))
 }
 
-fn run_compiled_program(program: Arc<Program>, mode: &str, inputs: Vec<String>) -> Result<JsonValue> {
+fn run_compiled_program(
+    program: Arc<Program>,
+    mode: &str,
+    inputs: Vec<String>,
+) -> Result<JsonValue> {
     let mut stdout = Vec::new();
     let report = run_program_report(program, mode, &mut stdout, inputs)?;
     run_payload(
@@ -272,24 +276,24 @@ fn memory_to_json(memory: &TinyMemory) -> Vec<JsonValue> {
 
 fn value_to_json(value: &RuntimeValue) -> JsonValue {
     match value {
-        RuntimeValue::I8(v)    => json!({"type": "i8",  "value": v}),
-        RuntimeValue::I16(v)   => json!({"type": "i16", "value": v}),
-        RuntimeValue::I32(v)   => json!({"type": "i32", "value": v}),
-        RuntimeValue::I64(v)   => json!({"type": "i64", "value": v}),
-        RuntimeValue::U8(v)    => json!({"type": "u8",  "value": v}),
-        RuntimeValue::U16(v)   => json!({"type": "u16", "value": v}),
-        RuntimeValue::U32(v)   => json!({"type": "u32", "value": v}),
-        RuntimeValue::U64(v)   => json!({"type": "u64", "value": v}),
+        RuntimeValue::I8(v) => json!({"type": "i8",  "value": v}),
+        RuntimeValue::I16(v) => json!({"type": "i16", "value": v}),
+        RuntimeValue::I32(v) => json!({"type": "i32", "value": v}),
+        RuntimeValue::I64(v) => json!({"type": "i64", "value": v}),
+        RuntimeValue::U8(v) => json!({"type": "u8",  "value": v}),
+        RuntimeValue::U16(v) => json!({"type": "u16", "value": v}),
+        RuntimeValue::U32(v) => json!({"type": "u32", "value": v}),
+        RuntimeValue::U64(v) => json!({"type": "u64", "value": v}),
         RuntimeValue::Float { kind, bits } => json!({"type": kind.name(), "value": bits}),
-        RuntimeValue::Bool(b)  => json!({"type": "bool", "value": b}),
-        RuntimeValue::Unit     => json!({"type": "unit"}),
-        RuntimeValue::Null     => json!({"type": "null"}),
+        RuntimeValue::Bool(b) => json!({"type": "bool", "value": b}),
+        RuntimeValue::Unit => json!({"type": "unit"}),
+        RuntimeValue::Null => json!({"type": "null"}),
         RuntimeValue::Function(id) => json!({"type": "function", "id": id}),
         RuntimeValue::Reference(p) => json!({"type": "reference", "address": p.address}),
-        RuntimeValue::Phantom  => json!({"type": "phantom"}),
-        RuntimeValue::Zst(k)   => json!({"type": "zst", "marker": k.name()}),
-        RuntimeValue::Unsafe   => json!({"type": "unsafe"}),
-        RuntimeValue::Heap(r)  => json!({
+        RuntimeValue::Phantom => json!({"type": "phantom"}),
+        RuntimeValue::Zst(k) => json!({"type": "zst", "marker": k.name()}),
+        RuntimeValue::Unsafe => json!({"type": "unsafe"}),
+        RuntimeValue::Heap(r) => json!({
             "type": "heap",
             "address": r.address,
             "generation": r.generation,
@@ -297,11 +301,11 @@ fn value_to_json(value: &RuntimeValue) -> JsonValue {
         RuntimeValue::Pointer(p) => json!({
             "type": "pointer",
             "address": p.address,
-            "kind": p.kind,
+            "kind": p.kind.as_str(),
             "index": p.index,
             "field": p.field,
             "generation": p.generation,
-            "cast": p.cast,
+            "cast": p.cast.as_str(),
         }),
     }
 }

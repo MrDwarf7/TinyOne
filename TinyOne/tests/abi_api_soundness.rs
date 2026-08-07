@@ -611,10 +611,14 @@ fn map_pointer_keys_do_not_alias_after_heap_generation_reuse() {
 
 #[test]
 fn map_growth_obeys_heap_byte_budget() {
+    // 40,000 entries * 2 * VALUE_BYTES (16 bytes minimum per Value, current
+    // RuntimeValue is 64) comfortably exceeds MAX_HEAP_BYTES (4 MiB)
+    // regardless of RuntimeValue's exact size — don't shrink this without
+    // re-checking size_of::<RuntimeValue>() against MAX_HEAP_BYTES.
     let source = r#"
     let m = map_new()
     let i = 0
-    while i < 25000 {
+    while i < 40000 {
       let ignored = map_set(m, i, i)
       i = i + 1
     }
@@ -711,7 +715,12 @@ fn public_safe_rust_paths_verify_untrusted_programs() {
         "Verifier",
     );
     expect_error_contains(
-        run_program(Arc::new(invalid.clone()), "jit", &mut Vec::new(), Vec::new()),
+        run_program(
+            Arc::new(invalid.clone()),
+            "jit",
+            &mut Vec::new(),
+            Vec::new(),
+        ),
         "Verifier",
     );
     expect_error_contains(
@@ -730,7 +739,11 @@ fn public_safe_rust_paths_verify_untrusted_programs() {
         "Verifier",
     );
     expect_error_contains(
-        VM::new(Arc::new(invalid.clone()), TinyMemory::new(invalid.slot_count), Vec::new()),
+        VM::new(
+            Arc::new(invalid.clone()),
+            TinyMemory::new(invalid.slot_count),
+            Vec::new(),
+        ),
         "Verifier",
     );
 
@@ -765,11 +778,21 @@ fn public_safe_rust_paths_reject_oversized_raw_program_before_execution_allocati
     expect_error_contains(BytecodeVerifier::verify(&oversized), "slot_count");
     expect_error_contains(VerifiedProgram::verify(oversized.clone()), "slot_count");
     expect_error_contains(
-        run_program(Arc::new(oversized.clone()), "vm", &mut Vec::new(), Vec::new()),
+        run_program(
+            Arc::new(oversized.clone()),
+            "vm",
+            &mut Vec::new(),
+            Vec::new(),
+        ),
         "slot_count",
     );
     expect_error_contains(
-        run_program(Arc::new(oversized.clone()), "jit", &mut Vec::new(), Vec::new()),
+        run_program(
+            Arc::new(oversized.clone()),
+            "jit",
+            &mut Vec::new(),
+            Vec::new(),
+        ),
         "slot_count",
     );
     expect_error_contains(

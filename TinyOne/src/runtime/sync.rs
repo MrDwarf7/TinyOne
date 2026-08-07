@@ -1,5 +1,5 @@
-use std::sync::{Arc, Condvar, Mutex};
 use std::fmt;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, ThreadId};
 
 use crate::{Result, TinyOneError, Value};
@@ -8,14 +8,14 @@ use crate::{Result, TinyOneError, Value};
 pub(crate) struct TinyMutex {
     // None = unlocked; Some(tid) = locked by thread tid
     state: Mutex<Option<ThreadId>>,
-    cond:  Condvar,
+    cond: Condvar,
 }
 
 impl TinyMutex {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(None),
-            cond:  Condvar::new(),
+            cond: Condvar::new(),
         })
     }
 
@@ -23,12 +23,17 @@ impl TinyMutex {
     /// Returns a runtime error if the calling thread already holds this mutex (deadlock).
     pub(crate) fn lock(&self) -> Result<()> {
         let current = thread::current().id();
-        let mut state = self.state.lock()
+        let mut state = self
+            .state
+            .lock()
             .map_err(|_| TinyOneError::runtime("mutex_lock: mutex poisoned"))?;
         if *state == Some(current) {
-            return Err(TinyOneError::runtime("mutex_lock: deadlock — already locked by this thread"));
+            return Err(TinyOneError::runtime(
+                "mutex_lock: deadlock — already locked by this thread",
+            ));
         }
-        state = self.cond
+        state = self
+            .cond
             .wait_while(state, |s| s.is_some())
             .map_err(|_| TinyOneError::runtime("mutex_lock: condvar wait failed"))?;
         *state = Some(current);
@@ -37,7 +42,9 @@ impl TinyMutex {
 
     /// Release the mutex. Returns a runtime error if not currently locked.
     pub(crate) fn unlock(&self) -> Result<()> {
-        let mut state = self.state.lock()
+        let mut state = self
+            .state
+            .lock()
             .map_err(|_| TinyOneError::runtime("mutex_unlock: mutex poisoned"))?;
         if state.is_none() {
             return Err(TinyOneError::runtime("mutex_unlock: mutex is not locked"));
@@ -48,7 +55,10 @@ impl TinyMutex {
     }
 
     pub(crate) fn is_locked(&self) -> bool {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
     }
 }
 
@@ -63,9 +73,7 @@ impl fmt::Debug for TinyThreadHandle {
 }
 
 impl TinyThreadHandle {
-    pub(crate) fn new(
-        handle: std::thread::JoinHandle<(Result<Value>, Vec<u8>)>,
-    ) -> Arc<Self> {
+    pub(crate) fn new(handle: std::thread::JoinHandle<(Result<Value>, Vec<u8>)>) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Some(handle)),
         })
@@ -74,7 +82,8 @@ impl TinyThreadHandle {
     /// Block until thread finishes. Returns (return_value, stdout_bytes).
     /// Runtime error if called more than once.
     pub(crate) fn join(&self) -> Result<(Value, Vec<u8>)> {
-        let handle = self.inner
+        let handle = self
+            .inner
             .lock()
             .map_err(|_| TinyOneError::runtime("thread_join: handle mutex poisoned"))?
             .take()

@@ -9,11 +9,11 @@ pub(crate) fn expect_int(value: &Value, operation: &str) -> Result<i64> {
 
 pub(crate) fn runtime_integer_kind(value: &Value) -> Option<TypeKind> {
     match value {
-        Value::I8(_)  => Some(TypeKind::I8),
+        Value::I8(_) => Some(TypeKind::I8),
         Value::I16(_) => Some(TypeKind::I16),
         Value::I32(_) => Some(TypeKind::I32),
         Value::I64(_) => Some(TypeKind::I64),
-        Value::U8(_)  => Some(TypeKind::U8),
+        Value::U8(_) => Some(TypeKind::U8),
         Value::U16(_) => Some(TypeKind::U16),
         Value::U32(_) => Some(TypeKind::U32),
         Value::U64(_) => Some(TypeKind::U64),
@@ -23,11 +23,11 @@ pub(crate) fn runtime_integer_kind(value: &Value) -> Option<TypeKind> {
 
 pub(crate) fn runtime_integer_value(value: &Value, operation: &str) -> Result<i128> {
     match value {
-        Value::I8(v)  => Ok(*v as i128),
+        Value::I8(v) => Ok(*v as i128),
         Value::I16(v) => Ok(*v as i128),
         Value::I32(v) => Ok(*v as i128),
         Value::I64(v) => Ok(*v as i128),
-        Value::U8(v)  => Ok(*v as i128),
+        Value::U8(v) => Ok(*v as i128),
         Value::U16(v) => Ok(*v as i128),
         Value::U32(v) => Ok(*v as i128),
         Value::U64(v) => Ok(*v as i128),
@@ -55,18 +55,20 @@ pub(crate) fn integer_value_from_kind(
         ))
     })?;
     Ok(match kind {
-        TypeKind::I8  => Value::I8(checked as i8),
+        TypeKind::I8 => Value::I8(checked as i8),
         TypeKind::I16 => Value::I16(checked as i16),
         TypeKind::I32 => Value::I32(checked as i32),
         TypeKind::I64 => Value::I64(checked as i64),
-        TypeKind::U8  => Value::U8(checked as u8),
+        TypeKind::U8 => Value::U8(checked as u8),
         TypeKind::U16 => Value::U16(checked as u16),
         TypeKind::U32 => Value::U32(checked as u32),
         TypeKind::U64 => Value::U64(checked as u64),
-        _ => return Err(TinyOneError::runtime(format!(
-            "{operation}: {} is not supported as a runtime integer value",
-            kind.name()
-        ))),
+        _ => {
+            return Err(TinyOneError::runtime(format!(
+                "{operation}: {} is not supported as a runtime integer value",
+                kind.name()
+            )));
+        }
     })
 }
 
@@ -197,7 +199,10 @@ pub(crate) fn runtime_add(lhs: Value, rhs: Value) -> Result<Value> {
         let kind = float_arithmetic_kind(&lhs, &rhs);
         let lhs = runtime_numeric_as_f64(&lhs, "Addition")?;
         let rhs = runtime_numeric_as_f64(&rhs, "Addition")?;
-        return Ok(Value::Float { kind, bits: round_to_kind(lhs + rhs, kind) });
+        return Ok(Value::Float {
+            kind,
+            bits: round_to_kind(lhs + rhs, kind),
+        });
     }
     let kind = arithmetic_kind(&lhs, &rhs, "Addition")?;
     let lhs = runtime_integer_value(&lhs, "Addition")?;
@@ -217,7 +222,10 @@ pub(crate) fn runtime_sub(lhs: Value, rhs: Value) -> Result<Value> {
         let kind = float_arithmetic_kind(&lhs, &rhs);
         let lhs = runtime_numeric_as_f64(&lhs, "Subtraction")?;
         let rhs = runtime_numeric_as_f64(&rhs, "Subtraction")?;
-        return Ok(Value::Float { kind, bits: round_to_kind(lhs - rhs, kind) });
+        return Ok(Value::Float {
+            kind,
+            bits: round_to_kind(lhs - rhs, kind),
+        });
     }
     let kind = arithmetic_kind(&lhs, &rhs, "Subtraction")?;
     let lhs = runtime_integer_value(&lhs, "Subtraction")?;
@@ -237,7 +245,10 @@ pub(crate) fn runtime_mul(lhs: Value, rhs: Value) -> Result<Value> {
         let kind = float_arithmetic_kind(&lhs, &rhs);
         let lhs = runtime_numeric_as_f64(&lhs, "Multiplication")?;
         let rhs = runtime_numeric_as_f64(&rhs, "Multiplication")?;
-        return Ok(Value::Float { kind, bits: round_to_kind(lhs * rhs, kind) });
+        return Ok(Value::Float {
+            kind,
+            bits: round_to_kind(lhs * rhs, kind),
+        });
     }
     let kind = arithmetic_kind(&lhs, &rhs, "Multiplication")?;
     let lhs = runtime_integer_value(&lhs, "Multiplication")?;
@@ -260,7 +271,10 @@ pub(crate) fn checked_div(lhs: Value, rhs: Value) -> Result<Value> {
         if rhs_value == 0.0 {
             return Err(TinyOneError::runtime("Division by zero"));
         }
-        return Ok(Value::Float { kind, bits: round_to_kind(lhs_value / rhs_value, kind) });
+        return Ok(Value::Float {
+            kind,
+            bits: round_to_kind(lhs_value / rhs_value, kind),
+        });
     }
     let kind = arithmetic_kind(&lhs, &rhs, "Division")?;
     let lhs_value = runtime_integer_value(&lhs, "Division")?;
@@ -441,11 +455,6 @@ pub(crate) fn runtime_is_false(value: &Value) -> bool {
         Value::Float { bits, .. } => *bits == 0.0,
         _ => false,
     }
-}
-
-pub(crate) fn runtime_is_null(value: &Value) -> bool {
-    matches!(value, Value::Null)
-        || matches!(value, Value::Pointer(p) if p.kind == "null" && p.address == 0)
 }
 
 pub(crate) fn runtime_null() -> Value {

@@ -11,8 +11,8 @@
 //! - Safe to call from allocator callbacks: the `Mutex` used here guards only
 //!   `std`-allocated memory, so it can never re-enter the TinyOne heap.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ── OperationType ─────────────────────────────────────────────────────────────
 
@@ -174,7 +174,12 @@ impl LogInner {
         for _ in 0..capacity {
             buf.push(None);
         }
-        Self { buf, capacity, head: 0, len: 0 }
+        Self {
+            buf,
+            capacity,
+            head: 0,
+            len: 0,
+        }
     }
 
     /// Append one entry, evicting the oldest if the buffer is full.
@@ -430,11 +435,17 @@ mod tests {
             log.log(make_entry(i));
         }
         let snap = log.snapshot();
-        assert_eq!(snap.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        assert_eq!(
+            snap.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
 
         // Overwrite one entry, oldest (0) evicted → [1,2,3,4].
         log.log(make_entry(4));
         let snap = log.snapshot();
-        assert_eq!(snap.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+        assert_eq!(
+            snap.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
     }
 }

@@ -32,7 +32,7 @@ pub(crate) fn runtime_call_builtin(
             let object = heap.get(&args[0])?;
             let len = match &object.data {
                 HeapData::Array(values) => values.len(),
-                HeapData::String(text) => text.chars().count(),
+                HeapData::String(text) => crate::runtime::heap::heap_str(text)?.chars().count(),
                 HeapData::Buffer(data) => data.len(),
                 HeapData::Struct(fields) => fields.len(),
                 HeapData::Map(entries) => entries.len(),
@@ -64,18 +64,21 @@ pub(crate) fn runtime_call_builtin(
         "load" => {
             let heap = context.heap();
             let object = heap.get(&args[0])?;
-            let HeapData::Cell(value) = &object.data else {
+            let HeapData::Cell(bytes) = &object.data else {
                 return Err(TinyOneError::runtime("load() expects a pointer cell"));
             };
-            Ok(value.clone())
+            Ok(crate::runtime::value_codec::decode_value(
+                bytes.as_slice().try_into().unwrap(),
+            ))
         }
         "store" => {
             let mut heap = context.heap();
             let object = heap.get_mut(&args[0])?;
-            let HeapData::Cell(value) = &mut object.data else {
+            let HeapData::Cell(bytes) = &mut object.data else {
                 return Err(TinyOneError::runtime("store() expects a pointer cell"));
             };
-            *value = args[1].clone();
+            let encoded = crate::runtime::value_codec::encode_value(&args[1])?;
+            bytes.as_mut_slice().copy_from_slice(&encoded);
             Ok(args[1].clone())
         }
         "free" => {
@@ -139,7 +142,9 @@ pub(crate) fn runtime_call_builtin(
             }
             let pointer = expect_pointer(&args[0], "is_null")?;
             validate_pointer_base(context, &pointer, "is_null")?;
-            Ok(Value::Bool(pointer.kind == "null" && pointer.address == 0))
+            Ok(Value::Bool(
+                pointer.kind == crate::runtime::value::PointerKind::Null && pointer.address == 0,
+            ))
         }
         "ptr_eq" => runtime_pointer_eq(context, &args[0], &args[1]),
         "ptr_ne" => match runtime_pointer_eq(context, &args[0], &args[1])? {
@@ -240,11 +245,34 @@ pub(crate) fn runtime_call_builtin(
         "u32" => stdlib::b_int_cast(&args[0], crate::TypeKind::U32, "u32"),
         "assert" => stdlib::b_assert(&args[0], args.get(1), context),
         "thread_spawn" => stdlib::b_thread_spawn(context, args),
-        "thread_join"  => stdlib::b_thread_join(context, args),
-        "fp8"  => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp8, "fp8"),
+        "thread_join" => stdlib::b_thread_join(context, args),
+        "fp8" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp8, "fp8"),
         "fp16" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp16, "fp16"),
         "fp32" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp32, "fp32"),
         "fp64" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp64, "fp64"),
+        "closure_new" => stdlib::b_closure_new(context, &args[0], &args[1]),
+        "closure_function" => stdlib::b_closure_function(context, &args[0]),
+        "closure_captures" => stdlib::b_closure_captures(context, &args[0]),
+        "sum_new" => stdlib::b_sum_new(context, &args[0], args.get(1)),
+        "sum_tag" => stdlib::b_sum_tag(context, &args[0]),
+        "sum_has_payload" => stdlib::b_sum_has_payload(context, &args[0]),
+        "sum_unwrap" => stdlib::b_sum_unwrap(context, &args[0]),
+        "tagged_union_new" => stdlib::b_tagged_union_new(context, &args[0], &args[1]),
+        "tagged_union_tag" => stdlib::b_tagged_union_tag(context, &args[0]),
+        "tagged_union_unwrap" => stdlib::b_tagged_union_unwrap(context, &args[0]),
+        "dyn_new" => stdlib::b_dyn_new(context, &args[0], &args[1], &args[2]),
+        "dyn_type_id" => stdlib::b_dyn_metadata(context, &args[0], false),
+        "dyn_vtable_id" => stdlib::b_dyn_metadata(context, &args[0], true),
+        "dyn_unwrap" => stdlib::b_dyn_unwrap(context, &args[0]),
+        "box_new" => stdlib::b_box_new(context, &args[0]),
+        "box_get" => stdlib::b_box_get(context, &args[0]),
+        "box_set" => stdlib::b_box_set(context, &args[0], &args[1]),
+        "char_new" => stdlib::b_char_new(context, &args[0]),
+        "fd_new" => stdlib::b_fd_new(context, &args[0]),
+        "char_buffer_new" => stdlib::b_char_buffer_new(context, &args[0]),
+        "record_new" => stdlib::b_record_new(context, &args[0]),
+        "dictionary_new" => stdlib::b_dictionary_new(context, &args[0]),
+        "alloc_new" => stdlib::b_alloc_new(context, &args[0], &args[1]),
         _ => Err(TinyOneError::runtime(format!(
             "Missing builtin handler {:?}",
             builtin.name

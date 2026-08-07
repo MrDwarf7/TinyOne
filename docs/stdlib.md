@@ -478,13 +478,12 @@ Returns the runtime type name of the provided `value`.
 | **Integers (Unsigned)** | `"u8"`, `"u16"`, `"u32"`, `"u64"` | `Value::U8`, `U16`, `U32`, `U64` |
 | **Floats** | `"fp8"`, `"fp16"`, `"fp32"`, `"fp64"` | `Value::Float{kind}` |
 | **Primitives & Logic** | `"bool"`, `"String"`, `"Null"` | `Value::Bool`, `Value::String`, `Value::Null` |
-| **Collections & Memory** | `"Vec"`, `"Buffer"`, `"Alloc"`, `"Map"` | `HeapData::Array` (Maps to `TypeKind::Vec`), `Buffer`, etc. |
+| **Collections & Memory** | `"Array"`, `"Vec"`, `"Buffer"`, `"Cell"`, `"Alloc"`, `"Map"` | `HeapData::Array`, `HeapData::Vec`, `HeapData::Buffer`, `HeapData::Cell`, `HeapData::Alloc`, etc. |
 | **Structures & Data** | `"Struct"`, `"Enum"`, `"Result"`, `"Option"` | `Value::Struct` (with reserved `type_name`), `HeapData::Enum` |
 | **Execution & Concurrency**| `"Function"`, `"Mutex"`, `"Atomic"`, `"Thread"` | `Value::Function`, `HeapData` variants |
 | **Low-Level / System** | `"Pointer"`, `"Reference"`, `"Phantom"`, `"Zst"`, `"Unsafe"` | `Value::Pointer`, `Value::Reference`, `Phantom`, `Zst`, `Unsafe` |
 
-> [!NOTE]
-> **Current Engine Discrepancy (Phase 1):** Fixed-size arrays (`Array<T, N>`) are currently allocated dynamically on the heap and return `"Vec"` from `type_of()` due to internal `HeapData::Array` mapping to `TypeKind::Vec`. Proper stack-allocated, fixed-size array separation is slated for Phase 2.
+> Array literals report `"Array"`; dynamic vectors created through `vec_new()` report `"Vec"`. Cells created through `alloc()` report `"Cell"`, while raw typed allocations report `"Alloc"`.
 
 #### `type_id(name) → int`
 Returns the integer ID for a type name string.

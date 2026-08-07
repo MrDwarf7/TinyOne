@@ -27,9 +27,116 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::alloc_table::{AllocKind, AllocRecord, AllocTable, AllocTableError, AllocTableStats, VmAllocHandle};
+use crate::alloc_table::{
+    AllocKind, AllocRecord, AllocTable, AllocTableError, AllocTableStats, VmAllocHandle,
+};
 use crate::memory_log::{MemoryLog, MemoryLogEntry, OperationType};
 use crate::vm_hooks::{HookRegistry, MemoryEvent, VmMemoryHook};
+
+// ── RallocBytes ───────────────────────────────────────────────────────────────
+
+/// Owned byte storage for the flat `HeapData` kinds (`String`, `Buffer`,
+/// `CharBuffer`), physically backed by a real [`ralloc::VmAllocation`] rather
+/// than a Rust-allocator `Vec`/`String`.
+///
+/// Allocates directly from `ralloc::VmAllocator::global()`, independent of
+/// whether a [`TinyAllocator`] is wired to the owning heap — `TinyAllocator`
+/// only ever records *bookkeeping* for these allocations (see
+/// [`TinyAllocator::allocate_owned`]); it never owns the memory itself, so a
+/// bare heap with no allocator attached (as some unit tests construct) can
+/// still allocate real, working `RallocBytes`.
+///
+/// Deliberately does not implement `Clone`: `ralloc::VmAllocation` is
+/// move-only by design, and a `Clone::clone` that can fail on arena
+/// exhaustion would have to panic (the trait is infallible), which would
+/// regress this VM's existing "out of memory is a normal `Err`, never a
+/// panic" behavior. Callers that need an independent copy should allocate a
+/// fresh `RallocBytes` explicitly via [`RallocBytes::from_slice`].
+pub(crate) struct RallocBytes(Option<ralloc::VmAllocation>);
+
+impl RallocBytes {
+    /// Allocate `len` zero-initialized bytes.
+    pub(crate) fn zeroed(len: usize) -> Result<Self, TinyAllocatorError> {
+        let mut alloc = ralloc::VmAllocator::global()
+            .allocate(len)
+            .map_err(|_| TinyAllocatorError::NativeAllocFailed)?;
+        alloc.as_mut_slice().fill(0);
+        Ok(Self(Some(alloc)))
+    }
+
+    /// Allocate storage and copy `bytes` into it.
+    pub(crate) fn from_slice(bytes: &[u8]) -> Result<Self, TinyAllocatorError> {
+        let mut alloc = ralloc::VmAllocator::global()
+            .allocate(bytes.len())
+            .map_err(|_| TinyAllocatorError::NativeAllocFailed)?;
+        alloc.as_mut_slice().copy_from_slice(bytes);
+        Ok(Self(Some(alloc)))
+    }
+
+    /// Returns the allocation as an immutable byte slice.
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        self.0
+            .as_ref()
+            .expect("RallocBytes accessed after drop")
+            .as_slice()
+    }
+
+    /// Returns the allocation as a mutable byte slice.
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.0
+            .as_mut()
+            .expect("RallocBytes accessed after drop")
+            .as_mut_slice()
+    }
+
+    /// Returns the number of bytes in the allocation.
+    pub(crate) fn len(&self) -> usize {
+        self.0
+            .as_ref()
+            .expect("RallocBytes accessed after drop")
+            .len()
+    }
+
+    /// Resizes the allocation to `new_len` bytes, preserving the first
+    /// `min(old_len, new_len)` bytes. On failure the original allocation is
+    /// left completely untouched.
+    ///
+    /// Bytes beyond the old length are **not** zero-initialized (matching
+    /// `ralloc::VmAllocator::reallocate`'s own semantics) — callers that
+    /// grow into this new capacity before writing to it (e.g.
+    /// [`crate::runtime::ralloc_vec::RallocVec`], which tracks a logical
+    /// length separately from physical capacity and never reads past it)
+    /// must not treat unwritten bytes as meaningful.
+    pub(crate) fn realloc(&mut self, new_len: usize) -> Result<(), TinyAllocatorError> {
+        let alloc = self.0.take().expect("RallocBytes accessed after drop");
+        match ralloc::VmAllocator::global().reallocate(alloc, new_len) {
+            Ok(new_alloc) => {
+                self.0 = Some(new_alloc);
+                Ok(())
+            }
+            Err((original, _error)) => {
+                self.0 = Some(original);
+                Err(TinyAllocatorError::NativeAllocFailed)
+            }
+        }
+    }
+}
+
+impl Drop for RallocBytes {
+    fn drop(&mut self) {
+        if let Some(alloc) = self.0.take() {
+            ralloc::VmAllocator::global().deallocate(alloc);
+        }
+    }
+}
+
+impl std::fmt::Debug for RallocBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("RallocBytes")
+            .field(&format_args!("<{} bytes>", self.len()))
+            .finish()
+    }
+}
 
 // ── AllocKind helpers ─────────────────────────────────────────────────────────
 
@@ -39,29 +146,29 @@ impl AllocKind {
     /// Used internally when building [`MemoryEvent::Allocated`] payloads.
     fn type_name(self) -> &'static str {
         match self {
-            AllocKind::String        => "String",
-            AllocKind::Array         => "Array",
-            AllocKind::Buffer        => "Buffer",
-            AllocKind::Struct        => "Struct",
-            AllocKind::Cell          => "Cell",
-            AllocKind::Map           => "Map",
-            AllocKind::Mutex         => "Mutex",
-            AllocKind::Atomic        => "Atomic",
-            AllocKind::Thread        => "Thread",
-            AllocKind::Char          => "Char",
-            AllocKind::CharBuffer    => "CharBuffer",
-            AllocKind::Vec           => "Vec",
-            AllocKind::Record        => "Record",
-            AllocKind::Dictionary    => "Dictionary",
-            AllocKind::Box           => "Box",
-            AllocKind::Raw           => "Raw",
-            AllocKind::Closure       => "Closure",
-            AllocKind::Sum           => "Sum",
-            AllocKind::Enum          => "Enum",
-            AllocKind::TaggedUnion   => "TaggedUnion",
-            AllocKind::Result        => "Result",
-            AllocKind::Option        => "Option",
-            AllocKind::Dyn           => "Dyn",
+            AllocKind::String => "String",
+            AllocKind::Array => "Array",
+            AllocKind::Buffer => "Buffer",
+            AllocKind::Struct => "Struct",
+            AllocKind::Cell => "Cell",
+            AllocKind::Map => "Map",
+            AllocKind::Mutex => "Mutex",
+            AllocKind::Atomic => "Atomic",
+            AllocKind::Thread => "Thread",
+            AllocKind::Char => "Char",
+            AllocKind::CharBuffer => "CharBuffer",
+            AllocKind::Vec => "Vec",
+            AllocKind::Record => "Record",
+            AllocKind::Dictionary => "Dictionary",
+            AllocKind::Box => "Box",
+            AllocKind::Raw => "Raw",
+            AllocKind::Closure => "Closure",
+            AllocKind::Sum => "Sum",
+            AllocKind::Enum => "Enum",
+            AllocKind::TaggedUnion => "TaggedUnion",
+            AllocKind::Result => "Result",
+            AllocKind::Option => "Option",
+            AllocKind::Dyn => "Dyn",
             AllocKind::FileDescriptor => "FileDescriptor",
         }
     }
@@ -144,7 +251,11 @@ impl TinyAllocatorError {
 impl std::fmt::Display for TinyAllocatorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TinyAllocatorError::OutOfMemory { requested, live, limit } => write!(
+            TinyAllocatorError::OutOfMemory {
+                requested,
+                live,
+                limit,
+            } => write!(
                 f,
                 "out of memory: requested {requested} bytes (live={live}, limit={limit})"
             ),
@@ -160,7 +271,11 @@ impl std::fmt::Display for TinyAllocatorError {
             TinyAllocatorError::NotFound { vm_address } => {
                 write!(f, "no live allocation found at vm_address {vm_address:#x}")
             }
-            TinyAllocatorError::GenerationMismatch { vm_address, expected_gen, actual_gen } => {
+            TinyAllocatorError::GenerationMismatch {
+                vm_address,
+                expected_gen,
+                actual_gen,
+            } => {
                 write!(
                     f,
                     "generation mismatch at vm_address {vm_address:#x}: \
@@ -250,9 +365,9 @@ pub struct ShutdownReport {
 
 /// The boundary layer between TinyOne's VM heap and native (Ralloc) memory.
 ///
-/// `TinyAllocator` is the Phase 2 stub; it records, logs, and hooks every
-/// allocation operation but delegates all native memory management to
-/// placeholder logic.  Phase 3 will replace those stubs with real Ralloc calls.
+/// `TinyAllocator` records, logs, and hooks every allocation operation while
+/// using Ralloc for native backing. Heap payloads that already own a
+/// `RallocBytes` use `allocate_owned` to avoid double-booking the arena.
 ///
 /// All methods take `&self` (shared reference); interior mutability is provided
 /// by the locks inside each sub-component.
@@ -268,17 +383,17 @@ pub struct ShutdownReport {
 /// [`free`]: TinyAllocator::free
 /// [`reallocate`]: TinyAllocator::reallocate
 pub struct TinyAllocator {
-    table:    AllocTable,
-    log:      MemoryLog,
-    hooks:    HookRegistry,
+    table: AllocTable,
+    log: MemoryLog,
+    hooks: HookRegistry,
     /// Real Ralloc-backed allocations, keyed by the same id stored in each
     /// live record's `native_handle`. Lives beside `table` rather than
     /// inside it because `VmAllocation` is `!Clone` and `AllocTable::get`
     /// returns cloned records.
-    native:   Mutex<HashMap<u64, ralloc::VmAllocation>>,
+    native: Mutex<HashMap<u64, ralloc::VmAllocation>>,
     /// Monotonic sequence counter; used as both log `seq` and as the native
     /// allocation id (the key into `native`).
-    seq:      AtomicU64,
+    seq: AtomicU64,
     /// Set to `true` by [`shutdown_drain`] to block further allocations.
     ///
     /// [`shutdown_drain`]: TinyAllocator::shutdown_drain
@@ -295,11 +410,11 @@ impl TinyAllocator {
             log.disable();
         }
         Self {
-            table:    AllocTable::new(),
+            table: AllocTable::new(),
             log,
-            hooks:    HookRegistry::new(),
-            native:   Mutex::new(HashMap::new()),
-            seq:      AtomicU64::new(1),
+            hooks: HookRegistry::new(),
+            native: Mutex::new(HashMap::new()),
+            seq: AtomicU64::new(1),
             shutdown: AtomicBool::new(false),
         }
     }
@@ -320,9 +435,9 @@ impl TinyAllocator {
 
     /// Allocate `size` bytes for the VM heap slot at `vm_address` / `vm_generation`.
     ///
-    /// Steps (Phase 2):
+    /// Steps:
     /// 1. Reject if the shutdown flag is set.
-    /// 2. Reject zero-size allocations (Phase 3 may relax this for ZSTs).
+    /// 2. Reject zero-size allocations.
     /// 3. Insert an [`AllocRecord`] into the [`AllocTable`].
     /// 4. Log a success entry.
     /// 5. Dispatch [`MemoryEvent::Allocated`].
@@ -340,23 +455,15 @@ impl TinyAllocator {
         size: usize,
         thread_id: u64,
     ) -> Result<AllocationResult, TinyAllocatorError> {
-        // 1. Shutdown guard.
-        if self.shutdown.load(Ordering::Acquire) {
-            return Err(TinyAllocatorError::ShutdownInProgress);
-        }
+        self.guard_allocation(size)?;
 
-        // 2. Size validation.
-        if size == 0 {
-            return Err(TinyAllocatorError::InvalidSize { size });
-        }
-
-        // 3. Claim the next sequence number; this doubles as the native
-        //    allocation id (the key into `native`).
+        // Claim the next sequence number; this doubles as the native
+        // allocation id (the key into `native`).
         let seq = self.next_seq();
         let native_id: u64 = seq;
 
-        // 4. Make the real native allocation before touching the table, so a
-        //    native OOM never leaves a record behind with nothing backing it.
+        // Make the real native allocation before touching the table, so a
+        // native OOM never leaves a record behind with nothing backing it.
         let native_alloc = match ralloc::VmAllocator::global().allocate(size) {
             Ok(alloc) => alloc,
             Err(_) => {
@@ -377,19 +484,15 @@ impl TinyAllocator {
             }
         };
 
-        // 5. Record in the allocation table.
-        let record = AllocRecord {
+        match self.finish_allocate(
             vm_address,
             vm_generation,
-            native_handle: Some(VmAllocHandle(native_id)),
             kind,
-            byte_len: size,
-            capacity: size,
-            arena_id: 0,
-            log_seq: seq,
-            live: true,
-        };
-        match self.table.insert(record) {
+            size,
+            thread_id,
+            seq,
+            Some(VmAllocHandle(native_id)),
+        ) {
             Ok(()) => {
                 self.native.lock().unwrap().insert(native_id, native_alloc);
             }
@@ -397,15 +500,90 @@ impl TinyAllocator {
                 // The table rejected the record; release the native
                 // allocation we already made so it doesn't leak.
                 ralloc::VmAllocator::global().deallocate(native_alloc);
-                return Err(match e {
-                    AllocTableError::AlreadyExists => TinyAllocatorError::AllocationTableFull,
-                    // Other errors cannot occur on insert.
-                    _ => TinyAllocatorError::AllocationTableFull,
-                });
+                return Err(e);
             }
         }
 
-        // 6. Log success.
+        Ok(AllocationResult {
+            vm_address,
+            vm_generation,
+            native_id,
+            effective_size: size,
+        })
+    }
+
+    /// Record bookkeeping for an allocation whose real memory the *caller*
+    /// already owns (currently: `HeapData::String`/`Buffer`/`CharBuffer`,
+    /// which own a [`crate::tiny_allocator::RallocBytes`] directly).
+    ///
+    /// Unlike [`allocate`][Self::allocate], this does not make a second real
+    /// `ralloc::VmAllocation` — Ralloc's fixed-size arena is sized assuming
+    /// exactly one live allocation per live heap byte, so double-booking
+    /// these kinds would burn through that headroom for no reason. The
+    /// resulting [`AllocRecord`] has `native_handle: None`, which
+    /// [`free`][Self::free] and [`shutdown_drain`][Self::shutdown_drain]
+    /// already treat as "nothing to release here" — the real memory is
+    /// released when the owning `RallocBytes` is dropped instead.
+    pub fn allocate_owned(
+        &self,
+        vm_address: usize,
+        vm_generation: u64,
+        kind: AllocKind,
+        size: usize,
+        thread_id: u64,
+    ) -> Result<AllocationResult, TinyAllocatorError> {
+        self.guard_allocation(size)?;
+        let seq = self.next_seq();
+        self.finish_allocate(vm_address, vm_generation, kind, size, thread_id, seq, None)?;
+        Ok(AllocationResult {
+            vm_address,
+            vm_generation,
+            native_id: seq,
+            effective_size: size,
+        })
+    }
+
+    /// Shared shutdown/size validation for [`allocate`][Self::allocate] and
+    /// [`allocate_owned`][Self::allocate_owned].
+    fn guard_allocation(&self, size: usize) -> Result<(), TinyAllocatorError> {
+        if self.shutdown.load(Ordering::Acquire) {
+            return Err(TinyAllocatorError::ShutdownInProgress);
+        }
+        if size == 0 {
+            return Err(TinyAllocatorError::InvalidSize { size });
+        }
+        Ok(())
+    }
+
+    /// Shared record-insert/log/hook-dispatch tail for
+    /// [`allocate`][Self::allocate] and [`allocate_owned`][Self::allocate_owned].
+    fn finish_allocate(
+        &self,
+        vm_address: usize,
+        vm_generation: u64,
+        kind: AllocKind,
+        size: usize,
+        thread_id: u64,
+        seq: u64,
+        native_handle: Option<VmAllocHandle>,
+    ) -> Result<(), TinyAllocatorError> {
+        let record = AllocRecord {
+            vm_address,
+            vm_generation,
+            native_handle,
+            kind,
+            byte_len: size,
+            capacity: size,
+            arena_id: 0,
+            log_seq: seq,
+            live: true,
+        };
+        self.table.insert(record).map_err(|_e| {
+            // AlreadyExists is the only error `insert` can return; other
+            // variants cannot occur here.
+            TinyAllocatorError::AllocationTableFull
+        })?;
+
         self.log.log(MemoryLogEntry::success(
             seq,
             thread_id,
@@ -415,7 +593,6 @@ impl TinyAllocator {
             size,
         ));
 
-        // 7. Dispatch hook event.
         self.hooks.dispatch(MemoryEvent::Allocated {
             vm_address,
             vm_generation,
@@ -423,12 +600,7 @@ impl TinyAllocator {
             type_name: kind.type_name(),
         });
 
-        Ok(AllocationResult {
-            vm_address,
-            vm_generation,
-            native_id,
-            effective_size: size,
-        })
+        Ok(())
     }
 
     /// Free the allocation at `vm_address` with `vm_generation`.
@@ -593,9 +765,10 @@ impl TinyAllocator {
         // Update the table's bookkeeping now that the native reallocation
         // has already succeeded. We already hold a `get` snapshot so remove
         // cannot fail with a different error.
-        let removed = self.table.remove(vm_address, vm_generation).map_err(|_| {
-            TinyAllocatorError::NotFound { vm_address }
-        })?;
+        let removed = self
+            .table
+            .remove(vm_address, vm_generation)
+            .map_err(|_| TinyAllocatorError::NotFound { vm_address })?;
 
         let updated = AllocRecord {
             byte_len: new_size,
@@ -603,7 +776,9 @@ impl TinyAllocator {
             log_seq: seq,
             ..removed
         };
-        self.table.insert(updated).map_err(|_| TinyAllocatorError::AllocationTableFull)?;
+        self.table
+            .insert(updated)
+            .map_err(|_| TinyAllocatorError::AllocationTableFull)?;
 
         self.log.log(MemoryLogEntry::success(
             seq,
@@ -750,7 +925,11 @@ impl TinyAllocator {
 
         let live_records = self.table.drain_for_shutdown();
         let live_count = live_records.iter().filter(|r| r.live).count();
-        let live_bytes: usize = live_records.iter().filter(|r| r.live).map(|r| r.byte_len).sum();
+        let live_bytes: usize = live_records
+            .iter()
+            .filter(|r| r.live)
+            .map(|r| r.byte_len)
+            .sum();
 
         // Release every remaining native allocation. `native` only ever holds
         // entries for records `allocate()` has inserted and `free()`/
@@ -879,13 +1058,21 @@ mod tests {
             ),
             "expected GenerationMismatch, got {err:?}"
         );
-        assert!(err.is_safety_violation(), "GenerationMismatch must be a safety violation");
+        assert!(
+            err.is_safety_violation(),
+            "GenerationMismatch must be a safety violation"
+        );
 
         // Hook should have received a StalePointer event.
-        assert!(pusher.has_errors(), "expected at least one error event in pusher");
+        assert!(
+            pusher.has_errors(),
+            "expected at least one error event in pusher"
+        );
         let events = pusher.drain_errors();
         assert!(
-            events.iter().any(|e| matches!(e, MemoryEvent::StalePointer { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, MemoryEvent::StalePointer { .. })),
             "expected StalePointer event; got {events:?}"
         );
     }
@@ -903,7 +1090,10 @@ mod tests {
             matches!(err, TinyAllocatorError::DoubleFree { vm_address: 3 }),
             "expected DoubleFree, got {err:?}"
         );
-        assert!(err.is_safety_violation(), "DoubleFree must be a safety violation");
+        assert!(
+            err.is_safety_violation(),
+            "DoubleFree must be a safety violation"
+        );
     }
 
     // 4. shutdown_drain_empties_table ──────────────────────────────────────────
@@ -959,7 +1149,10 @@ mod tests {
         a.allocate(6, 1, AllocKind::Closure, 16, 0).unwrap();
         let _ = a.free(6, 999, 0); // wrong generation
 
-        assert!(pusher.has_errors(), "a StalePointer event should have been pushed");
+        assert!(
+            pusher.has_errors(),
+            "a StalePointer event should have been pushed"
+        );
     }
 
     // 7. log_captures_operations ───────────────────────────────────────────────
@@ -979,8 +1172,8 @@ mod tests {
         );
 
         let has_alloc = snap.iter().any(|e| e.op_type == OperationType::Allocate);
-        let has_free  = snap.iter().any(|e| e.op_type == OperationType::Free);
+        let has_free = snap.iter().any(|e| e.op_type == OperationType::Free);
         assert!(has_alloc, "log must contain an Allocate entry");
-        assert!(has_free,  "log must contain a Free entry");
+        assert!(has_free, "log must contain a Free entry");
     }
 }

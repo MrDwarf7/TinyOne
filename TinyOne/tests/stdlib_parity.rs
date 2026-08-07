@@ -8,20 +8,8 @@ fn run_modes(source: &str) -> (String, String) {
     let mut vm = Vec::new();
     let mut jit = Vec::new();
     let program = compile_source(source).expect("compile");
-    run_program(
-        Arc::clone(&program),
-        "vm",
-        &mut vm,
-        Vec::new(),
-    )
-    .expect("vm run");
-    run_program(
-        Arc::clone(&program),
-        "jit",
-        &mut jit,
-        Vec::new(),
-    )
-    .expect("jit run");
+    run_program(Arc::clone(&program), "vm", &mut vm, Vec::new()).expect("vm run");
+    run_program(Arc::clone(&program), "jit", &mut jit, Vec::new()).expect("jit run");
     (
         String::from_utf8(vm).unwrap(),
         String::from_utf8(jit).unwrap(),
@@ -245,6 +233,7 @@ fn type_of_recognizes_runtime_shapes() {
     print type_of(0)
     print type_of("abc")
     print type_of([1, 2])
+    print type_of(alloc(1))
     print type_of(buffer(2))
     print type_of(map_new())
     print type_of(result_ok(1))
@@ -255,7 +244,54 @@ fn type_of_recognizes_runtime_shapes() {
     "#;
     assert_parity(
         source,
-        "i64\nString\nVec\nBuffer\nMap\nResult\nOption\nMutex\nAtomic\nNull\n",
+        "i64\nString\nArray\nCell\nBuffer\nMap\nResult\nOption\nMutex\nAtomic\nNull\n",
+    );
+}
+
+#[test]
+fn scaffold_types_are_constructible_and_round_trip() {
+    let source = r#"
+    fn add(a, b) { return a + b }
+    let closure = closure_new("add", [10, 20])
+    print type_of(closure)
+    print closure_function(closure)
+    print len(closure_captures(closure))
+
+    let bare = sum_new(3)
+    print type_of(bare)
+    print sum_tag(bare)
+    print sum_has_payload(bare)
+    let carried = sum_new(4, 99)
+    print sum_unwrap(carried)
+
+    let union = tagged_union_new(7, "payload")
+    print tagged_union_tag(union)
+    print tagged_union_unwrap(union)
+
+    let dyn_value = dyn_new(12, 34, 55)
+    print dyn_type_id(dyn_value)
+    print dyn_vtable_id(dyn_value)
+    print dyn_unwrap(dyn_value)
+
+    let boxed = box_new(8)
+    print box_get(boxed)
+    print box_set(boxed, 9)
+    print box_get(boxed)
+    print type_of(char_new(65))
+    print type_of(unsafe fd_new(3))
+    print type_of(char_buffer_new([65, 66]))
+    struct Pair { left, right }
+    let pair = Pair(1, 2)
+    print type_of(record_new(pair))
+    let map = map_new()
+    let ignored = map_set(map, "key", 4)
+    print type_of(dictionary_new(map))
+    let raw = unsafe alloc_new("i32", buffer(4))
+    print type_of(raw)
+    "#;
+    assert_parity(
+        source,
+        "Closure\n0\n2\nSum\n3\n0\n99\n7\npayload\n12\n34\n55\n8\n9\n9\nChar\nFileDescriptor\nCharBuffer\nRecord\nDictionary\nAlloc\n",
     );
 }
 

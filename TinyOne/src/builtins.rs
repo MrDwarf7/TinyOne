@@ -704,8 +704,8 @@ pub(crate) const BUILTINS: &[BuiltinDef] = &[
     // Step 4 (continued): thread_spawn / thread_join
     BuiltinDef {
         name: "thread_spawn",
-        min_args: 1,    // fn_name string required; additional args forwarded to the fn
-        max_args: 64,   // up to 63 arguments forwarded
+        min_args: 1,  // fn_name string required; additional args forwarded to the fn
+        max_args: 64, // up to 63 arguments forwarded
         requires_unsafe: false,
     },
     BuiltinDef {
@@ -740,6 +740,146 @@ pub(crate) const BUILTINS: &[BuiltinDef] = &[
         min_args: 1,
         max_args: 1,
         requires_unsafe: false,
+    },
+    // Runtime algebraic/callable values. These are intentionally appended:
+    // builtin indexes are part of the bytecode artifact format.
+    BuiltinDef {
+        name: "closure_new",
+        min_args: 2,
+        max_args: 2,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "closure_function",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "closure_captures",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "sum_new",
+        min_args: 1,
+        max_args: 2,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "sum_tag",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "sum_has_payload",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "sum_unwrap",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "tagged_union_new",
+        min_args: 2,
+        max_args: 2,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "tagged_union_tag",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "tagged_union_unwrap",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "dyn_new",
+        min_args: 3,
+        max_args: 3,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "dyn_type_id",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "dyn_vtable_id",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "dyn_unwrap",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "box_new",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "box_get",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "box_set",
+        min_args: 2,
+        max_args: 2,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "char_new",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "fd_new",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: true,
+    },
+    BuiltinDef {
+        name: "char_buffer_new",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "record_new",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "dictionary_new",
+        min_args: 1,
+        max_args: 1,
+        requires_unsafe: false,
+    },
+    BuiltinDef {
+        name: "alloc_new",
+        min_args: 2,
+        max_args: 2,
+        requires_unsafe: true,
     },
 ];
 

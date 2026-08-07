@@ -33,6 +33,7 @@ impl Program {
             "names": self.names,
             "functions": self.functions.iter().map(|function| json!({
                 "name": function.name,
+                "generic_params": function.generic_params,
                 "param_count": function.param_count,
                 "code": encode_code(&function.code),
                 "slot_count": function.slot_count,
@@ -96,6 +97,13 @@ impl Program {
                 let func_names = expect_string_list_limited(obj.get("names"), "names", MAX_NAMES)?;
                 Ok(Function {
                     name: expect_str(obj.get("name"), "function name")?,
+                    generic_params: obj
+                        .get("generic_params")
+                        .map(|value| {
+                            expect_string_list_limited(Some(value), "generic_params", MAX_NAMES)
+                        })
+                        .transpose()?
+                        .unwrap_or_default(),
                     param_count,
                     code: func_code,
                     slot_count: func_slot_count,

@@ -1,56 +1,104 @@
 use std::sync::{Arc, atomic::AtomicI64};
 
+use crate::runtime::ralloc_record::RallocRecord;
+use crate::runtime::ralloc_vec::RallocVec;
+use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
+use crate::runtime::value_codec::{self, ENCODED_VALUE_BYTES};
+use crate::tiny_allocator::RallocBytes;
 use crate::{
     HeapRef, MAX_ARRAY_LENGTH, MAX_HEAP_BYTES, MAX_HEAP_OBJECTS, Result, TinyOneError, TypeKind,
     VALUE_BYTES, Value,
 };
-use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
 
-#[derive(Debug, Clone)]
+// `HeapData` deliberately does not derive/implement `Clone`: `String`,
+// `Buffer`, and `CharBuffer` own a `RallocBytes`, which wraps a real,
+// capacity-bounded `ralloc::VmAllocation` that can only be duplicated via a
+// fallible allocation — and `Clone::clone` is infallible, so a derived clone
+// would have to panic on arena exhaustion. Callers that need to read out of a
+// heap object without holding the heap lock across a recursive call (see
+// `runtime/format.rs`, `runtime/aggregate.rs`, `runtime/stdlib.rs`) extract
+// just the owned pieces they need instead of cloning the whole object.
+#[derive(Debug)]
 pub(crate) enum HeapData {
-    String(String),
-    Array(Vec<Value>),
-    Buffer(Vec<u8>),
-    Struct(Vec<(String, Value)>),
-    Cell(Value),
-    Map(Vec<(Value, Value)>),
+    String(RallocBytes),
+    /// A dynamic array of `Value`s, physically a `RallocVec` of
+    /// `value_codec::ENCODED_VALUE_BYTES`-wide encoded slots.
+    Array(RallocVec),
+    Buffer(RallocBytes),
+    /// A named-field struct, physically a `RallocRecord` (fixed field count
+    /// and names set once at construction; field *values* are mutable).
+    Struct(RallocRecord),
+    /// A single mutable `Value` slot, physically a fixed
+    /// `value_codec::ENCODED_VALUE_BYTES`-wide `RallocBytes` — never
+    /// resized, since a cell always holds exactly one value.
+    Cell(RallocBytes),
+    /// A key-value map, physically a `RallocVec` of `2 *
+    /// value_codec::ENCODED_VALUE_BYTES`-wide slots (encoded key then
+    /// encoded value, contiguous per entry). Iteration order is insertion
+    /// order, matching the spec.
+    Map(RallocVec),
     Mutex(Arc<TinyMutex>),
     Atomic(Arc<AtomicI64>),
     Thread(Arc<TinyThreadHandle>),
 
     // Text
     Char(u32),
-    CharBuffer(Vec<u32>),
+    CharBuffer(RallocBytes),
 
     // Sequences
-    Vec(Vec<Value>),
-    Record(Vec<(String, Value)>),
+    Vec(RallocVec),
+    Record(RallocRecord),
 
     // Associative
-    Dictionary(Vec<(Value, Value)>),
+    Dictionary(RallocVec),
 
     // Ownership
-    Box(Box<Value>),
-    Alloc { kind: TypeKind, data: ::std::vec::Vec<u8> },
+    /// A single owned `Value` slot — same physical shape as `Cell`, just
+    /// with by-value (not by-reference) semantics at the language level.
+    Box(RallocBytes),
+    Alloc {
+        kind: TypeKind,
+        data: RallocBytes,
+    },
 
     // Callable
-    Closure { function_id: u32, captures: ::std::vec::Vec<Value> },
+    Closure {
+        function_id: u32,
+        captures: RallocVec,
+    },
 
     // Algebraic
-    Sum         { tag: u32, payload: Option<Box<Value>> },
-    Enum        { variant: String, tag: u32, fields: Vec<(String, Value)> },
-    TaggedUnion { tag: u32, payload: Box<Value> },
+    Sum {
+        tag: u32,
+        payload: Option<RallocBytes>,
+    },
+    /// Physically a `RallocRecord` — `variant()`/`tag()` are the record's
+    /// header, `fields` live in its value slots.
+    Enum(RallocRecord),
+    TaggedUnion {
+        tag: u32,
+        payload: RallocBytes,
+    },
 
     // Higher-level
-    Result  { is_ok: bool, value: Box<Value> },
-    Option  { value: Option<Box<Value>> },
-    Dyn     { type_id: u16, vtable_id: u32, value: Box<Value> },
+    Result {
+        is_ok: bool,
+        value: RallocBytes,
+    },
+    Option {
+        value: Option<RallocBytes>,
+    },
+    Dyn {
+        type_id: u16,
+        vtable_id: u32,
+        value: RallocBytes,
+    },
 
     // System
     FileDescriptor(i32),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct HeapObject {
     pub(crate) data: HeapData,
     pub(crate) type_name: String,
@@ -59,60 +107,60 @@ pub(crate) struct HeapObject {
 impl HeapObject {
     pub(crate) fn kind(&self) -> &'static str {
         match self.data {
-            HeapData::String(_)          => "string",
-            HeapData::Array(_)           => "array",
-            HeapData::Buffer(_)          => "buffer",
-            HeapData::Struct(_)          => "struct",
-            HeapData::Cell(_)            => "cell",
-            HeapData::Map(_)             => "map",
-            HeapData::Mutex(_)           => "mutex",
-            HeapData::Atomic(_)          => "atomic",
-            HeapData::Thread(_)          => "thread",
-            HeapData::Char(_)            => "char",
-            HeapData::CharBuffer(_)      => "char_buffer",
-            HeapData::Vec(_)             => "vec",
-            HeapData::Record(_)          => "record",
-            HeapData::Dictionary(_)      => "dictionary",
-            HeapData::Box(_)             => "box",
-            HeapData::Alloc { .. }       => "alloc",
-            HeapData::Closure { .. }     => "closure",
-            HeapData::Sum { .. }         => "sum",
-            HeapData::Enum { .. }        => "enum",
+            HeapData::String(_) => "string",
+            HeapData::Array(_) => "array",
+            HeapData::Buffer(_) => "buffer",
+            HeapData::Struct(_) => "struct",
+            HeapData::Cell(_) => "cell",
+            HeapData::Map(_) => "map",
+            HeapData::Mutex(_) => "mutex",
+            HeapData::Atomic(_) => "atomic",
+            HeapData::Thread(_) => "thread",
+            HeapData::Char(_) => "char",
+            HeapData::CharBuffer(_) => "char_buffer",
+            HeapData::Vec(_) => "vec",
+            HeapData::Record(_) => "record",
+            HeapData::Dictionary(_) => "dictionary",
+            HeapData::Box(_) => "box",
+            HeapData::Alloc { .. } => "alloc",
+            HeapData::Closure { .. } => "closure",
+            HeapData::Sum { .. } => "sum",
+            HeapData::Enum(_) => "enum",
             HeapData::TaggedUnion { .. } => "tagged_union",
-            HeapData::Result { .. }      => "result",
-            HeapData::Option { .. }      => "option",
-            HeapData::Dyn { .. }         => "dyn",
-            HeapData::FileDescriptor(_)  => "file_descriptor",
+            HeapData::Result { .. } => "result",
+            HeapData::Option { .. } => "option",
+            HeapData::Dyn { .. } => "dyn",
+            HeapData::FileDescriptor(_) => "file_descriptor",
         }
     }
 
     pub(crate) fn type_kind(&self) -> crate::TypeKind {
         use crate::TypeKind;
         match self.data {
-            HeapData::String(_)          => TypeKind::String,
-            HeapData::Array(_)           => TypeKind::Array,
-            HeapData::Buffer(_)          => TypeKind::Buffer,
-            HeapData::Struct(_)          => TypeKind::Struct,
-            HeapData::Cell(_)            => TypeKind::Box,
-            HeapData::Map(_)             => TypeKind::Map,
-            HeapData::Mutex(_)           => TypeKind::Mutex,
-            HeapData::Atomic(_)          => TypeKind::Atomic,
-            HeapData::Thread(_)          => unimplemented!("Phase 2: HeapData::Thread has no TypeKind entry (v2 scope)"),
-            HeapData::Char(_)            => TypeKind::Char,
-            HeapData::CharBuffer(_)      => TypeKind::CharBuffer,
-            HeapData::Vec(_)             => TypeKind::Vec,
-            HeapData::Record(_)          => TypeKind::Record,
-            HeapData::Dictionary(_)      => TypeKind::Dictionary,
-            HeapData::Box(_)             => TypeKind::Box,
-            HeapData::Alloc { .. }       => TypeKind::Alloc,
-            HeapData::Closure { .. }     => TypeKind::Closure,
-            HeapData::Sum { .. }         => TypeKind::Sum,
-            HeapData::Enum { .. }        => TypeKind::Enum,
+            HeapData::String(_) => TypeKind::String,
+            HeapData::Array(_) => TypeKind::Array,
+            HeapData::Buffer(_) => TypeKind::Buffer,
+            HeapData::Struct(_) => TypeKind::Struct,
+            HeapData::Cell(_) => TypeKind::Cell,
+            HeapData::Map(_) => TypeKind::Map,
+            HeapData::Mutex(_) => TypeKind::Mutex,
+            HeapData::Atomic(_) => TypeKind::Atomic,
+            HeapData::Thread(_) => TypeKind::Thread,
+            HeapData::Char(_) => TypeKind::Char,
+            HeapData::CharBuffer(_) => TypeKind::CharBuffer,
+            HeapData::Vec(_) => TypeKind::Vec,
+            HeapData::Record(_) => TypeKind::Record,
+            HeapData::Dictionary(_) => TypeKind::Dictionary,
+            HeapData::Box(_) => TypeKind::Box,
+            HeapData::Alloc { .. } => TypeKind::Alloc,
+            HeapData::Closure { .. } => TypeKind::Closure,
+            HeapData::Sum { .. } => TypeKind::Sum,
+            HeapData::Enum(_) => TypeKind::Enum,
             HeapData::TaggedUnion { .. } => TypeKind::TaggedUnion,
-            HeapData::Result { .. }      => TypeKind::Result,
-            HeapData::Option { .. }      => TypeKind::Option,
-            HeapData::Dyn { .. }         => TypeKind::Dyn,
-            HeapData::FileDescriptor(_)  => TypeKind::FileDescriptor,
+            HeapData::Result { .. } => TypeKind::Result,
+            HeapData::Option { .. } => TypeKind::Option,
+            HeapData::Dyn { .. } => TypeKind::Dyn,
+            HeapData::FileDescriptor(_) => TypeKind::FileDescriptor,
         }
     }
 }
@@ -145,7 +193,10 @@ impl std::fmt::Debug for TinyHeap {
             .field("generations", &self.generations)
             .field("stats", &self.stats)
             .field("shutdown", &self.shutdown)
-            .field("allocator", &self.allocator.as_ref().map(|_| "<TinyAllocator>"))
+            .field(
+                "allocator",
+                &self.allocator.as_ref().map(|_| "<TinyAllocator>"),
+            )
             .finish()
     }
 }
@@ -183,6 +234,16 @@ impl TinyHeap {
         self.allocator = Some(allocator);
     }
 
+    /// Returns the same [`TinyAllocator`][crate::tiny_allocator::TinyAllocator]
+    /// handle wired into this heap via [`set_allocator`][Self::set_allocator],
+    /// if any. Thread-spawned [`TinyRuntimeContext`][crate::TinyRuntimeContext]s
+    /// (see `context::with_heap`) use this to observe the same bookkeeping as
+    /// the main-thread context, instead of constructing a disconnected
+    /// standalone allocator.
+    pub(crate) fn allocator_handle(&self) -> Option<Arc<crate::tiny_allocator::TinyAllocator>> {
+        self.allocator.clone()
+    }
+
     pub(crate) fn alloc(&mut self, object: HeapObject) -> Result<HeapRef> {
         if self.shutdown {
             return Err(TinyOneError::runtime("Heap is already shut down"));
@@ -204,7 +265,12 @@ impl TinyHeap {
             *target = Some(object);
             self.record_alloc(bytes)?;
             if let Some(ref alloc) = self.allocator {
-                if let Err(e) = alloc.allocate(address, generation, alloc_kind, bytes, 0) {
+                let result = if ralloc_owns_bytes(alloc_kind) {
+                    alloc.allocate_owned(address, generation, alloc_kind, bytes, 0)
+                } else {
+                    alloc.allocate(address, generation, alloc_kind, bytes, 0)
+                };
+                if let Err(e) = result {
                     eprintln!("TinyAllocator tracking error: {:?}", e);
                 }
             }
@@ -224,7 +290,12 @@ impl TinyHeap {
             let generation = 1u64;
             self.record_alloc(bytes)?;
             if let Some(ref alloc) = self.allocator {
-                if let Err(e) = alloc.allocate(address, generation, alloc_kind, bytes, 0) {
+                let result = if ralloc_owns_bytes(alloc_kind) {
+                    alloc.allocate_owned(address, generation, alloc_kind, bytes, 0)
+                } else {
+                    alloc.allocate(address, generation, alloc_kind, bytes, 0)
+                };
+                if let Err(e) = result {
                     eprintln!("TinyAllocator tracking error: {:?}", e);
                 }
             }
@@ -303,6 +374,7 @@ impl TinyHeap {
             )));
         }
         self.ensure_can_allocate_delta(VALUE_BYTES)?;
+        let encoded = value_codec::encode_value(&value)?;
         let len = {
             let object = self.get_address_mut(reference.address, reference.generation)?;
             let HeapData::Array(values) = &mut object.data else {
@@ -310,7 +382,7 @@ impl TinyHeap {
                     "push() target stopped being an array",
                 ));
             };
-            values.push(value);
+            values.push(&encoded)?;
             values.len()
         };
         self.record_growth(VALUE_BYTES)?;
@@ -327,7 +399,7 @@ impl TinyHeap {
                 object.kind()
             )));
         };
-        let value = {
+        let encoded = {
             let object = self.get_address_mut(reference.address, reference.generation)?;
             let HeapData::Array(values) = &mut object.data else {
                 return Err(TinyOneError::runtime("pop() target stopped being an array"));
@@ -337,7 +409,9 @@ impl TinyHeap {
                 .ok_or_else(|| TinyOneError::runtime("pop() cannot pop from an empty array"))?
         };
         self.record_shrink(VALUE_BYTES)?;
-        Ok(value)
+        Ok(value_codec::decode_value(
+            encoded.as_slice().try_into().unwrap(),
+        ))
     }
 
     pub(crate) fn ensure_can_allocate_delta(&self, bytes: usize) -> Result<()> {
@@ -378,23 +452,32 @@ impl TinyHeap {
     }
 
     pub(crate) fn alloc_string(&mut self, text: impl Into<String>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::String(text.into()))
+        let text = text.into();
+        let bytes = RallocBytes::from_slice(text.as_bytes())
+            .map_err(|e| TinyOneError::runtime(format!("Failed to allocate string: {e}")))?;
+        self.alloc_data(HeapData::String(bytes))
     }
 
     pub(crate) fn alloc_array(&mut self, values: Vec<Value>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Array(values))
+        let vec = encode_into_ralloc_vec(ENCODED_VALUE_BYTES, &values)?;
+        self.alloc_data(HeapData::Array(vec))
     }
 
     pub(crate) fn alloc_buffer(&mut self, size: usize) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Buffer(vec![0; size]))
+        let bytes = RallocBytes::zeroed(size)
+            .map_err(|e| TinyOneError::runtime(format!("Failed to allocate buffer: {e}")))?;
+        self.alloc_data(HeapData::Buffer(bytes))
     }
 
     pub(crate) fn alloc_buffer_with(&mut self, data: Vec<u8>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Buffer(data))
+        let bytes = RallocBytes::from_slice(&data)
+            .map_err(|e| TinyOneError::runtime(format!("Failed to allocate buffer: {e}")))?;
+        self.alloc_data(HeapData::Buffer(bytes))
     }
 
     pub(crate) fn alloc_map(&mut self, entries: Vec<(Value, Value)>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Map(entries))
+        let vec = encode_into_ralloc_map_vec(&entries)?;
+        self.alloc_data(HeapData::Map(vec))
     }
 
     pub(crate) fn alloc_struct(
@@ -402,14 +485,18 @@ impl TinyHeap {
         type_name: impl Into<String>,
         fields: Vec<(String, Value)>,
     ) -> Result<HeapRef> {
+        let record = RallocRecord::new(0, "", &fields)?;
         self.alloc(HeapObject {
-            data: HeapData::Struct(fields),
+            data: HeapData::Struct(record),
             type_name: type_name.into(),
         })
     }
 
     pub(crate) fn alloc_cell(&mut self, value: Value) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Cell(value))
+        let encoded = value_codec::encode_value(&value)?;
+        let bytes = RallocBytes::from_slice(&encoded)
+            .map_err(|e| TinyOneError::runtime(format!("Failed to allocate cell: {e}")))?;
+        self.alloc_data(HeapData::Cell(bytes))
     }
 
     pub(crate) fn alloc_mutex(&mut self, m: Arc<TinyMutex>) -> Result<HeapRef> {
@@ -429,35 +516,51 @@ impl TinyHeap {
     }
 
     pub(crate) fn alloc_char_buffer(&mut self, chars: Vec<u32>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::CharBuffer(chars))
+        let bytes = RallocBytes::from_slice(&pack_char_buffer(&chars))
+            .map_err(|e| TinyOneError::runtime(format!("Failed to allocate char buffer: {e}")))?;
+        self.alloc_data(HeapData::CharBuffer(bytes))
     }
 
     pub(crate) fn alloc_vec(&mut self, values: Vec<Value>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Vec(values))
+        let vec = encode_into_ralloc_vec(ENCODED_VALUE_BYTES, &values)?;
+        self.alloc_data(HeapData::Vec(vec))
     }
 
     pub(crate) fn alloc_record(&mut self, fields: Vec<(String, Value)>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Record(fields))
+        let record = RallocRecord::new(0, "", &fields)?;
+        self.alloc_data(HeapData::Record(record))
     }
 
     pub(crate) fn alloc_dictionary(&mut self, entries: Vec<(Value, Value)>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Dictionary(entries))
+        let vec = encode_into_ralloc_map_vec(&entries)?;
+        self.alloc_data(HeapData::Dictionary(vec))
     }
 
     pub(crate) fn alloc_box(&mut self, value: Value) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Box(Box::new(value)))
+        self.alloc_data(HeapData::Box(alloc_value_slot(&value)?))
     }
 
     pub(crate) fn alloc_raw(&mut self, kind: TypeKind, data: Vec<u8>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Alloc { kind, data })
+        let bytes = RallocBytes::from_slice(&data)
+            .map_err(|e| TinyOneError::runtime(format!("Failed to allocate raw alloc: {e}")))?;
+        self.alloc_data(HeapData::Alloc { kind, data: bytes })
     }
 
-    pub(crate) fn alloc_closure(&mut self, function_id: u32, captures: Vec<Value>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Closure { function_id, captures })
+    pub(crate) fn alloc_closure(
+        &mut self,
+        function_id: u32,
+        captures: Vec<Value>,
+    ) -> Result<HeapRef> {
+        let captures = encode_into_ralloc_vec(ENCODED_VALUE_BYTES, &captures)?;
+        self.alloc_data(HeapData::Closure {
+            function_id,
+            captures,
+        })
     }
 
     pub(crate) fn alloc_sum(&mut self, tag: u32, payload: Option<Value>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Sum { tag, payload: payload.map(Box::new) })
+        let payload = payload.as_ref().map(alloc_value_slot).transpose()?;
+        self.alloc_data(HeapData::Sum { tag, payload })
     }
 
     pub(crate) fn alloc_enum(
@@ -467,26 +570,40 @@ impl TinyHeap {
         tag: u32,
         fields: Vec<(String, Value)>,
     ) -> Result<HeapRef> {
+        let record = RallocRecord::new(tag, &variant.into(), &fields)?;
         self.alloc(HeapObject {
-            data: HeapData::Enum { variant: variant.into(), tag, fields },
+            data: HeapData::Enum(record),
             type_name: type_name.into(),
         })
     }
 
     pub(crate) fn alloc_tagged_union(&mut self, tag: u32, payload: Value) -> Result<HeapRef> {
-        self.alloc_data(HeapData::TaggedUnion { tag, payload: Box::new(payload) })
+        let payload = alloc_value_slot(&payload)?;
+        self.alloc_data(HeapData::TaggedUnion { tag, payload })
     }
 
     pub(crate) fn alloc_result(&mut self, is_ok: bool, value: Value) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Result { is_ok, value: Box::new(value) })
+        let value = alloc_value_slot(&value)?;
+        self.alloc_data(HeapData::Result { is_ok, value })
     }
 
     pub(crate) fn alloc_option(&mut self, value: Option<Value>) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Option { value: value.map(Box::new) })
+        let value = value.as_ref().map(alloc_value_slot).transpose()?;
+        self.alloc_data(HeapData::Option { value })
     }
 
-    pub(crate) fn alloc_dyn(&mut self, type_id: u16, vtable_id: u32, value: Value) -> Result<HeapRef> {
-        self.alloc_data(HeapData::Dyn { type_id, vtable_id, value: Box::new(value) })
+    pub(crate) fn alloc_dyn(
+        &mut self,
+        type_id: u16,
+        vtable_id: u32,
+        value: Value,
+    ) -> Result<HeapRef> {
+        let value = alloc_value_slot(&value)?;
+        self.alloc_data(HeapData::Dyn {
+            type_id,
+            vtable_id,
+            value,
+        })
     }
 
     pub(crate) fn alloc_file_descriptor(&mut self, fd: i32) -> Result<HeapRef> {
@@ -616,72 +733,190 @@ pub(crate) fn heap_object_bytes(object: &HeapObject) -> usize {
         HeapData::String(text) => text.len(),
         HeapData::Array(values) => values.len().saturating_mul(VALUE_BYTES),
         HeapData::Buffer(data) => data.len(),
-        HeapData::Struct(fields) => {
-            object.type_name.len()
-                + fields
-                    .iter()
-                    .map(|(name, _)| name.len() + VALUE_BYTES)
-                    .sum::<usize>()
-        }
-        HeapData::Cell(_)    => VALUE_BYTES,
+        HeapData::Struct(record) => object.type_name.len() + record.byte_len(),
+        HeapData::Cell(bytes) => bytes.len(),
         HeapData::Map(entries) => entries.len().saturating_mul(VALUE_BYTES * 2),
-        HeapData::Mutex(_)   => std::mem::size_of::<TinyMutex>() + 2 * std::mem::size_of::<usize>(),
-        HeapData::Atomic(_)  => std::mem::size_of::<AtomicI64>() + 2 * std::mem::size_of::<usize>(),
-        HeapData::Thread(_)  => THREAD_HEAP_WEIGHT,
-        HeapData::Char(_)                => std::mem::size_of::<u32>(),
-        HeapData::CharBuffer(chars)      => chars.len() * std::mem::size_of::<u32>(),
-        HeapData::Vec(values)            => values.len() * VALUE_BYTES,
-        HeapData::Record(fields)         => fields.iter().map(|(n, _)| n.len() + VALUE_BYTES).sum::<usize>(),
-        HeapData::Dictionary(entries)    => entries.len() * VALUE_BYTES * 2,
-        HeapData::Box(_)                 => VALUE_BYTES,
-        HeapData::Alloc { data, .. }     => data.len(),
+        HeapData::Mutex(_) => std::mem::size_of::<TinyMutex>() + 2 * std::mem::size_of::<usize>(),
+        HeapData::Atomic(_) => std::mem::size_of::<AtomicI64>() + 2 * std::mem::size_of::<usize>(),
+        HeapData::Thread(_) => THREAD_HEAP_WEIGHT,
+        HeapData::Char(_) => std::mem::size_of::<u32>(),
+        HeapData::CharBuffer(bytes) => bytes.len(),
+        HeapData::Vec(values) => values.len() * VALUE_BYTES,
+        HeapData::Record(record) => record.byte_len(),
+        HeapData::Dictionary(entries) => entries.len() * VALUE_BYTES * 2,
+        HeapData::Box(bytes) => bytes.len(),
+        HeapData::Alloc { data, .. } => data.len(),
         HeapData::Closure { captures, .. } => captures.len() * VALUE_BYTES,
-        HeapData::Sum { .. }             => VALUE_BYTES * 2,
-        HeapData::Enum { variant, fields, .. } => {
-            object.type_name.len()
-                + variant.len()
-                + std::mem::size_of::<u32>()
-                + fields
-                    .iter()
-                    .map(|(name, _)| name.len() + VALUE_BYTES)
-                    .sum::<usize>()
+        HeapData::Sum { .. } => VALUE_BYTES * 2,
+        HeapData::Enum(record) => object.type_name.len() + record.byte_len(),
+        HeapData::TaggedUnion { .. } => VALUE_BYTES + std::mem::size_of::<u32>(),
+        HeapData::Result { .. } => VALUE_BYTES + 1,
+        HeapData::Option { value, .. } => {
+            if value.is_some() {
+                VALUE_BYTES
+            } else {
+                1
+            }
         }
-        HeapData::TaggedUnion { .. }     => VALUE_BYTES + std::mem::size_of::<u32>(),
-        HeapData::Result { .. }          => VALUE_BYTES + 1,
-        HeapData::Option { value, .. }   => if value.is_some() { VALUE_BYTES } else { 1 },
-        HeapData::Dyn { .. }             => VALUE_BYTES + std::mem::size_of::<u16>() + std::mem::size_of::<u32>(),
-        HeapData::FileDescriptor(_)      => std::mem::size_of::<i32>(),
+        HeapData::Dyn { .. } => {
+            VALUE_BYTES + std::mem::size_of::<u16>() + std::mem::size_of::<u32>()
+        }
+        HeapData::FileDescriptor(_) => std::mem::size_of::<i32>(),
     }
 }
 
 fn heap_data_alloc_kind(data: &HeapData) -> crate::alloc_table::AllocKind {
     use crate::alloc_table::AllocKind;
     match data {
-        HeapData::String(_)          => AllocKind::String,
-        HeapData::Array(_)           => AllocKind::Array,
-        HeapData::Buffer(_)          => AllocKind::Buffer,
-        HeapData::Struct(_)          => AllocKind::Struct,
-        HeapData::Cell(_)            => AllocKind::Cell,
-        HeapData::Map(_)             => AllocKind::Map,
-        HeapData::Mutex(_)           => AllocKind::Mutex,
-        HeapData::Atomic(_)          => AllocKind::Atomic,
-        HeapData::Thread(_)          => AllocKind::Thread,
-        HeapData::Char(_)            => AllocKind::Char,
-        HeapData::CharBuffer(_)      => AllocKind::CharBuffer,
-        HeapData::Vec(_)             => AllocKind::Vec,
-        HeapData::Record(_)          => AllocKind::Record,
-        HeapData::Dictionary(_)      => AllocKind::Dictionary,
-        HeapData::Box(_)             => AllocKind::Box,
-        HeapData::Alloc { .. }       => AllocKind::Raw,
-        HeapData::Closure { .. }     => AllocKind::Closure,
-        HeapData::Sum { .. }         => AllocKind::Sum,
-        HeapData::Enum { .. }        => AllocKind::Enum,
+        HeapData::String(_) => AllocKind::String,
+        HeapData::Array(_) => AllocKind::Array,
+        HeapData::Buffer(_) => AllocKind::Buffer,
+        HeapData::Struct(_) => AllocKind::Struct,
+        HeapData::Cell(_) => AllocKind::Cell,
+        HeapData::Map(_) => AllocKind::Map,
+        HeapData::Mutex(_) => AllocKind::Mutex,
+        HeapData::Atomic(_) => AllocKind::Atomic,
+        HeapData::Thread(_) => AllocKind::Thread,
+        HeapData::Char(_) => AllocKind::Char,
+        HeapData::CharBuffer(_) => AllocKind::CharBuffer,
+        HeapData::Vec(_) => AllocKind::Vec,
+        HeapData::Record(_) => AllocKind::Record,
+        HeapData::Dictionary(_) => AllocKind::Dictionary,
+        HeapData::Box(_) => AllocKind::Box,
+        HeapData::Alloc { .. } => AllocKind::Raw,
+        HeapData::Closure { .. } => AllocKind::Closure,
+        HeapData::Sum { .. } => AllocKind::Sum,
+        HeapData::Enum(_) => AllocKind::Enum,
         HeapData::TaggedUnion { .. } => AllocKind::TaggedUnion,
-        HeapData::Result { .. }      => AllocKind::Result,
-        HeapData::Option { .. }      => AllocKind::Option,
-        HeapData::Dyn { .. }         => AllocKind::Dyn,
-        HeapData::FileDescriptor(_)  => AllocKind::FileDescriptor,
+        HeapData::Result { .. } => AllocKind::Result,
+        HeapData::Option { .. } => AllocKind::Option,
+        HeapData::Dyn { .. } => AllocKind::Dyn,
+        HeapData::FileDescriptor(_) => AllocKind::FileDescriptor,
     }
+}
+
+/// Whether `kind`'s `HeapData` payload already owns a real
+/// `ralloc::VmAllocation` directly (via [`crate::tiny_allocator::RallocBytes`]),
+/// as opposed to living in an ordinary Rust `Vec`/`String` that
+/// `TinyAllocator` shadow-tracks with its own separate allocation.
+///
+/// Kinds where this is `true` must be recorded via
+/// [`crate::tiny_allocator::TinyAllocator::allocate_owned`] rather than
+/// [`crate::tiny_allocator::TinyAllocator::allocate`], or the real memory
+/// would be booked against Ralloc's arena twice.
+fn ralloc_owns_bytes(kind: crate::alloc_table::AllocKind) -> bool {
+    use crate::alloc_table::AllocKind;
+    matches!(
+        kind,
+        AllocKind::String
+            | AllocKind::Buffer
+            | AllocKind::CharBuffer
+            | AllocKind::Cell
+            | AllocKind::Array
+            | AllocKind::Struct
+            | AllocKind::Enum
+            | AllocKind::Map
+            | AllocKind::Raw
+    )
+}
+
+/// Packs `chars` into little-endian bytes for storage in a `CharBuffer`'s
+/// `RallocBytes`. Manual byte packing (rather than an unsafe transmute) keeps
+/// `CharBuffer` free of alignment assumptions about the underlying arena
+/// allocation, matching how `runtime::pointers::runtime_read_uint`/
+/// `runtime_write_uint` already pack/unpack multi-byte integers by hand.
+pub(crate) fn pack_char_buffer(chars: &[u32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(chars.len() * std::mem::size_of::<u32>());
+    for ch in chars {
+        bytes.extend_from_slice(&ch.to_le_bytes());
+    }
+    bytes
+}
+
+/// Inverse of [`pack_char_buffer`]. `bytes.len()` is always a multiple of 4
+/// since it only ever comes from `pack_char_buffer`.
+pub(crate) fn unpack_char_buffer(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect()
+}
+
+/// Interprets a `HeapData::String`'s bytes as UTF-8.
+///
+/// Always succeeds in practice — a `String` heap object's `RallocBytes` is
+/// only ever constructed from a valid Rust `String` (`alloc_string`) and
+/// never mutated in place afterward — but returns a `Result` since the bytes
+/// themselves are opaque to the type system.
+pub(crate) fn heap_str(bytes: &RallocBytes) -> Result<&str> {
+    std::str::from_utf8(bytes.as_slice())
+        .map_err(|_| TinyOneError::runtime("String heap object contained invalid UTF-8"))
+}
+
+/// Allocates a single `value_codec::ENCODED_VALUE_BYTES`-wide `RallocBytes`
+/// slot holding `value` — the shared shape behind `HeapData::Cell`, `Box`,
+/// `Sum`/`TaggedUnion`/`Result`/`Option`/`Dyn`'s payloads.
+fn alloc_value_slot(value: &Value) -> Result<RallocBytes> {
+    let encoded = value_codec::encode_value(value)?;
+    RallocBytes::from_slice(&encoded)
+        .map_err(|e| TinyOneError::runtime(format!("Failed to allocate value: {e}")))
+}
+
+/// Builds a `RallocVec` of `stride`-wide encoded `Value` slots from `values`
+/// — shared by `HeapData::Array`/`Vec`/`Closure`'s captures.
+fn encode_into_ralloc_vec(stride: usize, values: &[Value]) -> Result<RallocVec> {
+    let mut vec = RallocVec::with_capacity(stride, values.len())?;
+    for value in values {
+        vec.push(&value_codec::encode_value(value)?)?;
+    }
+    Ok(vec)
+}
+
+/// Builds a `RallocVec` of `2 * ENCODED_VALUE_BYTES`-wide `(key, value)`
+/// slots from `entries` — shared by `HeapData::Map`/`Dictionary`.
+fn encode_into_ralloc_map_vec(entries: &[(Value, Value)]) -> Result<RallocVec> {
+    let mut vec = RallocVec::with_capacity(2 * ENCODED_VALUE_BYTES, entries.len())?;
+    for (key, value) in entries {
+        let mut pair = [0u8; 2 * ENCODED_VALUE_BYTES];
+        pair[..ENCODED_VALUE_BYTES].copy_from_slice(&value_codec::encode_value(key)?);
+        pair[ENCODED_VALUE_BYTES..].copy_from_slice(&value_codec::encode_value(value)?);
+        vec.push(&pair)?;
+    }
+    Ok(vec)
+}
+
+/// Decodes a single `value_codec::ENCODED_VALUE_BYTES`-wide `RallocBytes`
+/// slot back into a `Value` — the inverse of [`alloc_value_slot`].
+pub(crate) fn decode_value_slot(bytes: &RallocBytes) -> Value {
+    value_codec::decode_value(bytes.as_slice().try_into().unwrap())
+}
+
+/// Decodes every element of a `HeapData::Array`/`Vec`-backed `RallocVec`
+/// into an owned `Vec<Value>` snapshot. Used by call sites that need to
+/// recurse or iterate without holding the heap lock (e.g. `Display`
+/// formatting) — replaces the whole-object `.clone()` pattern that's no
+/// longer possible now that these containers own real Ralloc memory.
+pub(crate) fn decode_array_values(vec: &RallocVec) -> Vec<Value> {
+    (0..vec.len())
+        .map(|i| {
+            let bytes = vec.get(i).expect("index within bounds");
+            value_codec::decode_value(bytes.try_into().unwrap())
+        })
+        .collect()
+}
+
+/// Decodes every `(key, value)` pair of a `HeapData::Map`/`Dictionary`-backed
+/// `RallocVec` (`stride = 2 * ENCODED_VALUE_BYTES`, key then value per
+/// entry) into an owned `Vec<(Value, Value)>` snapshot, in insertion order.
+pub(crate) fn decode_map_entries(vec: &RallocVec) -> Vec<(Value, Value)> {
+    (0..vec.len())
+        .map(|i| {
+            let pair = vec.get(i).expect("index within bounds");
+            let key = value_codec::decode_value(pair[..ENCODED_VALUE_BYTES].try_into().unwrap());
+            let value = value_codec::decode_value(pair[ENCODED_VALUE_BYTES..].try_into().unwrap());
+            (key, value)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -696,49 +931,96 @@ mod tests {
         let mut heap = TinyHeap::new();
 
         let r = heap.alloc_char(65u32).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "char");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "char"
+        );
 
         let r = heap.alloc_char_buffer(vec![65u32, 66u32]).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "char_buffer");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "char_buffer"
+        );
 
         let r = heap.alloc_vec(vec![]).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "vec");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "vec"
+        );
 
-        let r = heap.alloc_record(vec![("x".to_string(), Value::I64(1))]).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "record");
+        let r = heap
+            .alloc_record(vec![("x".to_string(), Value::I64(1))])
+            .unwrap();
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "record"
+        );
 
         let r = heap.alloc_dictionary(vec![]).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "dictionary");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "dictionary"
+        );
 
         let r = heap.alloc_box(Value::I64(42)).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "box");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "box"
+        );
 
         let r = heap.alloc_raw(TypeKind::I32, vec![0u8; 4]).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "alloc");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "alloc"
+        );
 
         let r = heap.alloc_closure(0u32, vec![]).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "closure");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "closure"
+        );
 
         let r = heap.alloc_sum(0u32, None).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "sum");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "sum"
+        );
 
         let r = heap.alloc_enum("Test", "Variant", 0u32, vec![]).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "enum");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "enum"
+        );
 
         let r = heap.alloc_tagged_union(0u32, Value::Unit).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "tagged_union");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "tagged_union"
+        );
 
         let r = heap.alloc_result(true, Value::Unit).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "result");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "result"
+        );
 
         let r = heap.alloc_option(None).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "option");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "option"
+        );
 
         let r = heap.alloc_dyn(0u16, 0u32, Value::Unit).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "dyn");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "dyn"
+        );
 
         let r = heap.alloc_file_descriptor(1i32).unwrap();
-        assert_eq!(heap.get_address(r.address, r.generation).unwrap().kind(), "file_descriptor");
+        assert_eq!(
+            heap.get_address(r.address, r.generation).unwrap().kind(),
+            "file_descriptor"
+        );
     }
 
     #[test]

@@ -36,6 +36,8 @@ pub enum Op {
     MakeEnum,
     PushBool,
     PushFloat,
+    PushFunction,
+    CallValue,
 }
 
 impl Op {
@@ -75,6 +77,8 @@ impl Op {
             Op::MakeEnum => "MAKE_ENUM",
             Op::PushBool => "PUSH_BOOL",
             Op::PushFloat => "PUSH_FLOAT",
+            Op::PushFunction => "PUSH_FUNCTION",
+            Op::CallValue => "CALL_VALUE",
         }
     }
 
@@ -114,6 +118,8 @@ impl Op {
             "MAKE_ENUM" => Op::MakeEnum,
             "PUSH_BOOL" => Op::PushBool,
             "PUSH_FLOAT" => Op::PushFloat,
+            "PUSH_FUNCTION" => Op::PushFunction,
+            "CALL_VALUE" => Op::CallValue,
             _ => return Err(TinyOneError::compile(format!("Unknown opcode {name:?}"))),
         })
     }
@@ -154,6 +160,8 @@ impl Op {
             Op::MakeEnum => 32,
             Op::PushBool => 33,
             Op::PushFloat => 34,
+            Op::PushFunction => 35,
+            Op::CallValue => 36,
         }
     }
 }

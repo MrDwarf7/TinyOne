@@ -1,8 +1,5 @@
-Project is on a temp hiatus
-============================
-
 TinyLang
-=======
+========
 
 TinyOne is the first major generation of TinyLang, a portable systems
 programming language designed around a compact VM, bounded runtime
@@ -210,10 +207,9 @@ The runtime includes:
 * shutdown heap draining through report APIs
 
 TinyLang does not use a tracing garbage collector. The current runtime uses a
-VM-owned heap with generation validation and explicit unsafe deallocation. The
-longer-term design documents describe deterministic cleanup, indexed reference
-counting, global allocation-table authority, region-based lifetime batching,
-and Ralloc-backed allocation work.
+VM-owned heap with generation validation and explicit unsafe deallocation. Heap
+payloads, VM locals/globals, and allocator-side backing are Ralloc-owned;
+allocation-table bookkeeping and shutdown remain deterministic.
 
 VM and JIT
 ----------
@@ -354,8 +350,10 @@ Language and runtime gaps
 * Type annotations, float literals, and boolean literal syntax appear in newer
   fixture names, but the current lexer/parser do not implement ``:``, ``->``,
   floats, or ``true``/``false`` language syntax as first-class tokens.
-* Some 43-type runtime variants are representable but not fully behavior-wired.
-  Several newer heap/type paths still use explicit ``unimplemented!`` stubs.
+* The runtime type registry contains internal/staged variants beyond the
+  source-level types. Heap ``type_of`` mappings are wired for all current
+  ``HeapData`` variants; resolving a bare ``HeapRef`` still requires heap
+  context rather than ``RuntimeValue::from_runtime_value`` alone.
 * The static/hybrid type-system direction is documented, but a full static type
   checker is not implemented yet.
 * The peephole optimizer is conservative. It folds branch-free constant
@@ -366,17 +364,17 @@ Language and runtime gaps
 * Mutex unlock currently checks locked/unlocked state but does not prove the
   unlocking thread is the owner.
 
-Allocator gaps
-^^^^^^^^^^^^^^
+Allocator boundary
+^^^^^^^^^^^^^^^^^^
 
-* ``TinyAllocator`` is currently a tracking and hook scaffold. It does not yet
-  back TinyLang heap allocations with real Ralloc native allocations.
-* The in-repository ``Ralloc/`` tree is an embedded allocator workspace, but it
-  is not wired as a dependency of the TinyLang crate.
-* The Phase 2 allocator documents call out required future work: real Ralloc
-  backing, allocator sidecar storage, atomic table update during reallocate,
-  larger/dynamic arena capacity, real thread ownership, and global allocation
-  table state expansion.
+* ``Ralloc/`` is a path dependency of ``TinyOne`` and is the backend for heap
+  payloads, VM locals/globals, and native allocator sidecar entries.
+* Transient VM/JIT operand stacks and compiler/JIT metadata still use Rust
+  collections. They are control-plane data, not addressable TinyOne memory;
+  moving them to Ralloc requires a separate variable-width value
+  representation.
+* The Ralloc arena remains capacity-bounded, so allocation failures are
+  surfaced as runtime errors where the API is fallible.
 
 Tests and Benchmarks
 --------------------

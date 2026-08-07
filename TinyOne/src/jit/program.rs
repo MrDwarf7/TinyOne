@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::{
     EnumVariantDef, HOT_BACK_EDGE_THRESHOLD, JitChunk, JitFunction, JitStats, JitVm, Program,
@@ -10,6 +11,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct JitProgram {
+    pub(crate) source_program: Arc<Program>,
     pub(crate) fingerprint: String,
     pub(crate) chunks: Vec<JitChunk>,
     pub(crate) functions: Vec<JitFunction>,
@@ -50,6 +52,7 @@ impl JitProgram {
         let compiled_ops = chunks.iter().map(|chunk| chunk.ops.len()).sum();
         let compiled_chunks = chunks.len();
         Ok(Self {
+            source_program: Arc::new(program.clone()),
             fingerprint,
             chunks,
             functions,

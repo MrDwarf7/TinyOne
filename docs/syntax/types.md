@@ -3,6 +3,9 @@
 TinyLang is dynamically typed. Every value at runtime has one of the
 following types. Use `type_of(value)` to inspect the type at runtime.
 
+Runtime algebraic and ownership types are constructible through the stdlib
+bridge builtins below and are dynamically checked at runtime.
+
 ---
 
 ## `int`
@@ -68,6 +71,41 @@ appends; `pop(arr)` removes and returns the last element.
 **Ownership:** copying an array variable aliases the same heap array.
 Free with `unsafe free(arr)` when done. Freeing is shallow — elements
 that are themselves heap objects are not freed.
+
+---
+
+## Runtime algebraic and ownership types
+
+| Type | Construction and access |
+| --- | --- |
+| `Closure` | `closure_new(function_name, captures)`, `closure_function`, `closure_captures` |
+| `Sum` | `sum_new(tag[, payload])`, `sum_tag`, `sum_has_payload`, `sum_unwrap` |
+| `TaggedUnion` | `tagged_union_new(tag, payload)`, `tagged_union_tag`, `tagged_union_unwrap` |
+| `Dyn` | `dyn_new(type_id, vtable_id, value)`, `dyn_type_id`, `dyn_vtable_id`, `dyn_unwrap` |
+| `Box` | `box_new`, `box_get`, `box_set` |
+| `Char` / `CharBuffer` | `char_new`, `char_buffer_new` |
+| `Record` / `Dictionary` | `record_new(struct_value)`, `dictionary_new(map_value)` |
+| `Alloc` / `FileDescriptor` | `unsafe alloc_new(type_name, buffer)`, `unsafe fd_new(fd)` |
+
+`Closure` currently stores a function identity and captures. Invoking a
+closure uses normal call syntax (`let f = closure_new("add", [10])`, then
+`f(7)`). Captures are prepended to the explicit call arguments.
+
+---
+
+## Generic functions
+
+V2 accepts generic function declarations such as:
+
+```tinyone
+fn identity<T>(value: T) -> T { return value }
+print identity(42)
+print identity("text")
+```
+
+Generic parameters are currently erased because TinyLang has dynamic runtime
+values. The compiler records the declared parameters in function metadata and
+artifacts, while one runtime body serves all instantiations.
 
 ---
 

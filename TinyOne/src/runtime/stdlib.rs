@@ -11,20 +11,20 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
-use crate::runtime::typing::{
-    TypeKind, integer_range, promote_integer, smallest_fit_literal,
-};
+use crate::runtime::typing::{TypeKind, integer_range, promote_integer, smallest_fit_literal};
 use crate::{
-    HeapData, Result, TinyMemory, TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, expect_int,
-    expect_string, integer_value_from_kind, round_to_kind, runtime_cast_int, runtime_integer_kind,
-    runtime_integer_value, validate_pointer_base, VM,
+    HeapData, Result, TinyMemory, TinyOneError, TinyRuntimeContext, VALUE_BYTES, VM, Value,
+    expect_int, expect_string, integer_value_from_kind, round_to_kind, runtime_cast_int,
+    runtime_integer_kind, runtime_integer_value, validate_pointer_base,
 };
 
 const MAX_FS_LIST_DIR_ENTRIES: usize = 65_536;
 
 fn expect_kind(value: &Value, kind: &str, operation: &str) -> Result<i64> {
-    let v = expect_int(value, operation)?;
-    Ok(v)
+    if runtime_integer_kind(value).is_none() {
+        return Err(TinyOneError::runtime(format!("{operation} expects {kind}")));
+    }
+    expect_int(value, operation)
 }
 
 fn parse_type_name(text: &str, operation: &str) -> Result<TypeKind> {
@@ -49,7 +49,10 @@ pub fn b_float_cast(value: &Value, kind: TypeKind, operation: &str) -> Result<Va
         Value::Float { bits, .. } => *bits,
         _ => runtime_integer_value(value, operation)? as f64,
     };
-    Ok(Value::Float { kind, bits: round_to_kind(bits, kind) })
+    Ok(Value::Float {
+        kind,
+        bits: round_to_kind(bits, kind),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -98,14 +101,14 @@ pub fn b_map_set(
     key: Value,
     value: Value,
 ) -> Result<Value> {
-    // Clone entries out so we can call map_key_equal without holding the guard.
+    // Decode entries out so we can call map_key_equal without holding the guard.
     let entries_clone: Vec<(Value, Value)> = {
         let heap = context.heap();
         let object = heap.get(target)?;
         let HeapData::Map(entries) = &object.data else {
             return Err(TinyOneError::runtime("map_set expects a map"));
         };
-        entries.clone()
+        crate::runtime::heap::decode_map_entries(entries)
     };
 
     let mut existing: Option<usize> = None;
@@ -121,6 +124,8 @@ pub fn b_map_set(
             .heap()
             .ensure_can_allocate_delta(VALUE_BYTES.saturating_mul(2))?;
     }
+    let encoded_key = crate::runtime::value_codec::encode_value(&key)?;
+    let encoded_value = crate::runtime::value_codec::encode_value(&value)?;
     let mut inserted = false;
     {
         let mut heap = context.heap();
@@ -129,30 +134,37 @@ pub fn b_map_set(
             return Err(TinyOneError::runtime("map_set expects a map"));
         };
         if let Some(idx) = existing {
-            let Some((_, existing_value)) = entries.get_mut(idx) else {
-                return Err(TinyOneError::runtime("map_set: internal index error"));
-            };
-            *existing_value = value.clone();
+            let slot = entries
+                .get_mut(idx)
+                .ok_or_else(|| TinyOneError::runtime("map_set: internal index error"))?;
+            slot[crate::runtime::value_codec::ENCODED_VALUE_BYTES..]
+                .copy_from_slice(&encoded_value);
         } else {
-            entries.push((key, value.clone()));
+            let mut pair = [0u8; 2 * crate::runtime::value_codec::ENCODED_VALUE_BYTES];
+            let width = crate::runtime::value_codec::ENCODED_VALUE_BYTES;
+            pair[..width].copy_from_slice(&encoded_key);
+            pair[width..].copy_from_slice(&encoded_value);
+            entries.push(&pair)?;
             inserted = true;
         }
     }
     if inserted {
-        context.heap().record_growth(VALUE_BYTES.saturating_mul(2))?;
+        context
+            .heap()
+            .record_growth(VALUE_BYTES.saturating_mul(2))?;
     }
     Ok(value)
 }
 
 pub fn b_map_get(context: &mut TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
-    // Clone entries out so we can call map_key_equal without holding the guard.
+    // Decode entries out so we can call map_key_equal without holding the guard.
     let entries_clone: Vec<(Value, Value)> = {
         let heap = context.heap();
         let object = heap.get(target)?;
         let HeapData::Map(entries) = &object.data else {
             return Err(TinyOneError::runtime("map_get expects a map"));
         };
-        entries.clone()
+        crate::runtime::heap::decode_map_entries(entries)
     };
     for (k, v) in &entries_clone {
         if map_key_equal(context, k, key)? {
@@ -163,14 +175,14 @@ pub fn b_map_get(context: &mut TinyRuntimeContext, target: &Value, key: &Value) 
 }
 
 pub fn b_map_has(context: &TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
-    // Clone entries so map_key_equal can acquire the guard independently.
+    // Decode entries so map_key_equal can acquire the guard independently.
     let entries_clone: Vec<(Value, Value)> = {
         let heap = context.heap();
         let object = heap.get(target)?;
         let HeapData::Map(entries) = &object.data else {
             return Err(TinyOneError::runtime("map_has expects a map"));
         };
-        entries.clone()
+        crate::runtime::heap::decode_map_entries(entries)
     };
     for (k, _) in &entries_clone {
         if map_key_equal(context, k, key)? {
@@ -181,14 +193,14 @@ pub fn b_map_has(context: &TinyRuntimeContext, target: &Value, key: &Value) -> R
 }
 
 pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
-    // Clone entries so map_key_equal can acquire the guard independently.
+    // Decode entries so map_key_equal can acquire the guard independently.
     let entries_clone: Vec<(Value, Value)> = {
         let heap = context.heap();
         let object = heap.get(target)?;
         let HeapData::Map(entries) = &object.data else {
             return Err(TinyOneError::runtime("map_del expects a map"));
         };
-        entries.clone()
+        crate::runtime::heap::decode_map_entries(entries)
     };
 
     let to_remove: Option<usize> = {
@@ -213,7 +225,9 @@ pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) 
         false
     };
     if removed {
-        context.heap().record_shrink(VALUE_BYTES.saturating_mul(2))?;
+        context
+            .heap()
+            .record_shrink(VALUE_BYTES.saturating_mul(2))?;
         Ok(Value::I64(1))
     } else {
         Ok(Value::I64(0))
@@ -236,7 +250,10 @@ pub fn b_map_keys(context: &mut TinyRuntimeContext, target: &Value) -> Result<Va
         let HeapData::Map(entries) = &object.data else {
             return Err(TinyOneError::runtime("map_keys expects a map"));
         };
-        entries.iter().map(|(k, _)| k.clone()).collect()
+        crate::runtime::heap::decode_map_entries(entries)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect()
     };
     Ok(Value::Heap(context.heap().alloc_array(keys)?))
 }
@@ -248,7 +265,10 @@ pub fn b_map_values(context: &mut TinyRuntimeContext, target: &Value) -> Result<
         let HeapData::Map(entries) = &object.data else {
             return Err(TinyOneError::runtime("map_values expects a map"));
         };
-        entries.iter().map(|(_, v)| v.clone()).collect()
+        crate::runtime::heap::decode_map_entries(entries)
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect()
     };
     Ok(Value::Heap(context.heap().alloc_array(values)?))
 }
@@ -271,23 +291,43 @@ fn map_key_equal(context: &TinyRuntimeContext, lhs: &Value, rhs: &Value) -> Resu
         (Value::Heap(_), Value::Heap(_)) => {
             // Strings are interned by content for map equality; this matches
             // typing_system.md's "keys must support stable equality" rule.
-            // Acquire each guard independently to avoid double-lock.
-            let lhs_data = context.heap().get(lhs).ok().map(|o| o.data.clone());
-            let rhs_data = context.heap().get(rhs).ok().map(|o| o.data.clone());
-            match (lhs_data, rhs_data) {
-                (Some(HeapData::String(left)), Some(HeapData::String(right))) => {
-                    Ok(left == right)
-                }
-                (Some(_), Some(_)) => match (lhs, rhs) {
+            // Acquire each guard independently (and only for as long as
+            // needed to extract an owned `String`) to avoid double-locking
+            // the heap and to avoid needing `HeapData` to be `Clone` — its
+            // `String`/`Buffer`/`CharBuffer` variants own a real,
+            // capacity-bounded Ralloc allocation that can't be cheaply
+            // duplicated.
+            match (lookup_map_key(context, lhs)?, lookup_map_key(context, rhs)?) {
+                (MapKeyLookup::NotFound, _) | (_, MapKeyLookup::NotFound) => Ok(false),
+                (MapKeyLookup::Str(left), MapKeyLookup::Str(right)) => Ok(left == right),
+                _ => match (lhs, rhs) {
                     (Value::Heap(la), Value::Heap(rb)) => {
                         Ok(la.address == rb.address && la.generation == rb.generation)
                     }
                     _ => Ok(false),
                 },
-                _ => Ok(false),
             }
         }
         _ => Ok(false),
+    }
+}
+
+enum MapKeyLookup {
+    NotFound,
+    NonString,
+    Str(String),
+}
+
+fn lookup_map_key(context: &TinyRuntimeContext, value: &Value) -> Result<MapKeyLookup> {
+    let heap = context.heap();
+    let Ok(object) = heap.get(value) else {
+        return Ok(MapKeyLookup::NotFound);
+    };
+    match &object.data {
+        HeapData::String(text) => Ok(MapKeyLookup::Str(
+            crate::runtime::heap::heap_str(text)?.to_owned(),
+        )),
+        _ => Ok(MapKeyLookup::NonString),
     }
 }
 
@@ -510,7 +550,9 @@ pub fn b_str_is_utf8(context: &mut TinyRuntimeContext, target: &Value) -> Result
             "str_is_utf8 expects a String or Buffer",
         ));
     };
-    Ok(Value::I64(std::str::from_utf8(bytes).is_ok() as i64))
+    Ok(Value::I64(
+        std::str::from_utf8(bytes.as_slice()).is_ok() as i64
+    ))
 }
 
 pub fn b_str_from_buffer(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -520,7 +562,7 @@ pub fn b_str_from_buffer(context: &mut TinyRuntimeContext, target: &Value) -> Re
         let HeapData::Buffer(bytes) = &object.data else {
             return Err(TinyOneError::runtime("str_from_buffer expects a Buffer"));
         };
-        bytes.clone()
+        bytes.as_slice().to_vec()
     };
     let text = std::str::from_utf8(&bytes)
         .map_err(|_| TinyOneError::runtime("str_from_buffer: invalid UTF-8"))?
@@ -607,11 +649,7 @@ pub fn b_atomic_store(
     Ok(Value::I64(new_val))
 }
 
-pub fn b_atomic_add(
-    context: &TinyRuntimeContext,
-    target: &Value,
-    delta: &Value,
-) -> Result<Value> {
+pub fn b_atomic_add(context: &TinyRuntimeContext, target: &Value, delta: &Value) -> Result<Value> {
     let delta_val = expect_int(delta, "atomic_add")?;
     let atomic_arc = {
         let heap = context.heap();
@@ -624,9 +662,13 @@ pub fn b_atomic_add(
     // CAS loop: check for overflow before mutating, retry on concurrent contention.
     loop {
         let current = atomic_arc.load(Ordering::SeqCst);
-        let next = current.checked_add(delta_val)
+        let next = current
+            .checked_add(delta_val)
             .ok_or_else(|| TinyOneError::runtime("Runtime.Memory_Overflow: atomic_add overflow"))?;
-        if atomic_arc.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if atomic_arc
+            .compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             return Ok(Value::I64(next));
         }
     }
@@ -641,7 +683,7 @@ pub fn b_thread_spawn(context: &mut TinyRuntimeContext, args: Vec<Value>) -> Res
                 "thread_spawn: first argument must be a function name string",
             ));
         };
-        s.clone()
+        crate::runtime::heap::heap_str(s)?.to_owned()
     };
 
     let program_arc = context
@@ -752,15 +794,13 @@ fn variant_field(
             object.type_name
         )));
     }
-    let HeapData::Struct(fields) = &object.data else {
+    let HeapData::Struct(record) = &object.data else {
         return Err(TinyOneError::runtime(format!(
             "{operation}: corrupt {type_name}"
         )));
     };
-    fields
-        .iter()
-        .find(|(name, _)| name == field)
-        .map(|(_, value)| value.clone())
+    record
+        .get(field)
         .ok_or_else(|| TinyOneError::runtime(format!("{operation}: missing {field}")))
 }
 
@@ -868,6 +908,304 @@ pub fn b_option_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<V
         return Err(TinyOneError::runtime("option_unwrap: called on None"));
     }
     variant_payload(context, target, "tinyone.option.Option", "option_unwrap")
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scaffold types with language-visible representations.
+//
+// These values are deliberately exposed through small constructors and
+// accessors rather than through Rust-only heap allocation.  The accessors
+// preserve the representation's invariants and make every operation useful
+// from TinyLang without requiring a static type checker first.
+// ---------------------------------------------------------------------------
+
+fn unsigned_u32(value: &Value, operation: &str) -> Result<u32> {
+    let value = expect_int(value, operation)?;
+    u32::try_from(value)
+        .map_err(|_| TinyOneError::runtime(format!("{operation}: expected a non-negative u32")))
+}
+
+pub fn b_closure_new(
+    context: &mut TinyRuntimeContext,
+    function_name: &Value,
+    captures: &Value,
+) -> Result<Value> {
+    let name = expect_string(context, function_name, "closure_new")?;
+    let captured_values = {
+        let heap = context.heap();
+        let object = heap.get(captures)?;
+        let HeapData::Array(values) = &object.data else {
+            return Err(TinyOneError::runtime(
+                "closure_new expects an array of captures",
+            ));
+        };
+        crate::runtime::heap::decode_array_values(values)
+    };
+    let program = context
+        .program_arc
+        .as_ref()
+        .ok_or_else(|| TinyOneError::runtime("closure_new: runtime has no compiled program"))?;
+    let function_id = program
+        .functions
+        .iter()
+        .position(|function| function.name == name)
+        .ok_or_else(|| {
+            TinyOneError::runtime(format!("closure_new: function {name:?} not found"))
+        })?;
+    Ok(Value::Heap(
+        context
+            .heap()
+            .alloc_closure(function_id as u32, captured_values)?,
+    ))
+}
+
+pub fn b_closure_function(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::Closure { function_id, .. } = &object.data else {
+        return Err(TinyOneError::runtime("closure_function expects a Closure"));
+    };
+    Ok(Value::I64(*function_id as i64))
+}
+
+pub fn b_closure_captures(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let values = {
+        let heap = context.heap();
+        let object = heap.get(target)?;
+        let HeapData::Closure { captures, .. } = &object.data else {
+            return Err(TinyOneError::runtime("closure_captures expects a Closure"));
+        };
+        crate::runtime::heap::decode_array_values(captures)
+    };
+    Ok(Value::Heap(context.heap().alloc_array(values)?))
+}
+
+pub fn b_sum_new(
+    context: &mut TinyRuntimeContext,
+    tag: &Value,
+    payload: Option<&Value>,
+) -> Result<Value> {
+    let tag = unsigned_u32(tag, "sum_new")?;
+    Ok(Value::Heap(
+        context.heap().alloc_sum(tag, payload.cloned())?,
+    ))
+}
+
+pub fn b_sum_tag(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::Sum { tag, .. } = &object.data else {
+        return Err(TinyOneError::runtime("sum_tag expects a Sum"));
+    };
+    Ok(Value::I64(*tag as i64))
+}
+
+pub fn b_sum_has_payload(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::Sum { payload, .. } = &object.data else {
+        return Err(TinyOneError::runtime("sum_has_payload expects a Sum"));
+    };
+    Ok(Value::I64(payload.is_some() as i64))
+}
+
+pub fn b_sum_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::Sum { payload, .. } = &object.data else {
+        return Err(TinyOneError::runtime("sum_unwrap expects a Sum"));
+    };
+    payload
+        .as_ref()
+        .map(crate::runtime::heap::decode_value_slot)
+        .ok_or_else(|| TinyOneError::runtime("sum_unwrap: variant has no payload"))
+}
+
+pub fn b_tagged_union_new(
+    context: &mut TinyRuntimeContext,
+    tag: &Value,
+    payload: &Value,
+) -> Result<Value> {
+    Ok(Value::Heap(context.heap().alloc_tagged_union(
+        unsigned_u32(tag, "tagged_union_new")?,
+        payload.clone(),
+    )?))
+}
+
+pub fn b_tagged_union_tag(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::TaggedUnion { tag, .. } = &object.data else {
+        return Err(TinyOneError::runtime(
+            "tagged_union_tag expects a TaggedUnion",
+        ));
+    };
+    Ok(Value::I64(*tag as i64))
+}
+
+pub fn b_tagged_union_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::TaggedUnion { payload, .. } = &object.data else {
+        return Err(TinyOneError::runtime(
+            "tagged_union_unwrap expects a TaggedUnion",
+        ));
+    };
+    Ok(crate::runtime::heap::decode_value_slot(payload))
+}
+
+pub fn b_dyn_new(
+    context: &mut TinyRuntimeContext,
+    type_id: &Value,
+    vtable_id: &Value,
+    value: &Value,
+) -> Result<Value> {
+    let type_id = u16::try_from(unsigned_u32(type_id, "dyn_new")?)
+        .map_err(|_| TinyOneError::runtime("dyn_new: type id exceeds u16"))?;
+    let vtable_id = unsigned_u32(vtable_id, "dyn_new")?;
+    Ok(Value::Heap(context.heap().alloc_dyn(
+        type_id,
+        vtable_id,
+        value.clone(),
+    )?))
+}
+
+pub fn b_dyn_metadata(
+    context: &TinyRuntimeContext,
+    target: &Value,
+    want_vtable: bool,
+) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::Dyn {
+        type_id, vtable_id, ..
+    } = &object.data
+    else {
+        return Err(TinyOneError::runtime("dyn metadata expects a Dyn"));
+    };
+    Ok(Value::I64(if want_vtable {
+        *vtable_id as i64
+    } else {
+        *type_id as i64
+    }))
+}
+
+pub fn b_dyn_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::Dyn { value, .. } = &object.data else {
+        return Err(TinyOneError::runtime("dyn_unwrap expects a Dyn"));
+    };
+    Ok(crate::runtime::heap::decode_value_slot(value))
+}
+
+pub fn b_box_new(context: &mut TinyRuntimeContext, value: &Value) -> Result<Value> {
+    Ok(Value::Heap(context.heap().alloc_box(value.clone())?))
+}
+
+pub fn b_box_get(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let HeapData::Box(value) = &object.data else {
+        return Err(TinyOneError::runtime("box_get expects a Box"));
+    };
+    Ok(crate::runtime::heap::decode_value_slot(value))
+}
+
+pub fn b_box_set(context: &mut TinyRuntimeContext, target: &Value, value: &Value) -> Result<Value> {
+    let mut heap = context.heap();
+    let object = heap.get_mut(target)?;
+    let HeapData::Box(bytes) = &mut object.data else {
+        return Err(TinyOneError::runtime("box_set expects a Box"));
+    };
+    let encoded = crate::runtime::value_codec::encode_value(value)?;
+    bytes.as_mut_slice().copy_from_slice(&encoded);
+    Ok(value.clone())
+}
+
+pub fn b_char_new(context: &mut TinyRuntimeContext, value: &Value) -> Result<Value> {
+    let scalar = unsigned_u32(value, "char_new")?;
+    char::from_u32(scalar)
+        .ok_or_else(|| TinyOneError::runtime("char_new: invalid Unicode scalar value"))?;
+    Ok(Value::Heap(context.heap().alloc_char(scalar)?))
+}
+
+pub fn b_fd_new(context: &mut TinyRuntimeContext, value: &Value) -> Result<Value> {
+    let fd = i32::try_from(expect_int(value, "fd_new")?)
+        .map_err(|_| TinyOneError::runtime("fd_new: descriptor exceeds i32"))?;
+    Ok(Value::Heap(context.heap().alloc_file_descriptor(fd)?))
+}
+
+pub fn b_char_buffer_new(context: &mut TinyRuntimeContext, values: &Value) -> Result<Value> {
+    let chars = {
+        let heap = context.heap();
+        let object = heap.get(values)?;
+        let HeapData::Array(values) = &object.data else {
+            return Err(TinyOneError::runtime("char_buffer_new expects an array"));
+        };
+        crate::runtime::heap::decode_array_values(values)
+            .iter()
+            .map(|value| unsigned_u32(value, "char_buffer_new"))
+            .collect::<Result<Vec<_>>>()?
+    };
+    for scalar in &chars {
+        char::from_u32(*scalar).ok_or_else(|| {
+            TinyOneError::runtime("char_buffer_new: invalid Unicode scalar value")
+        })?;
+    }
+    Ok(Value::Heap(context.heap().alloc_char_buffer(chars)?))
+}
+
+pub fn b_record_new(context: &mut TinyRuntimeContext, source: &Value) -> Result<Value> {
+    let fields = {
+        let heap = context.heap();
+        let object = heap.get(source)?;
+        match &object.data {
+            HeapData::Struct(record) | HeapData::Record(record) => record.fields(),
+            _ => {
+                return Err(TinyOneError::runtime(
+                    "record_new expects a struct or record",
+                ));
+            }
+        }
+    };
+    Ok(Value::Heap(context.heap().alloc_record(fields)?))
+}
+
+pub fn b_dictionary_new(context: &mut TinyRuntimeContext, source: &Value) -> Result<Value> {
+    let entries = {
+        let heap = context.heap();
+        let object = heap.get(source)?;
+        match &object.data {
+            HeapData::Map(entries) | HeapData::Dictionary(entries) => {
+                crate::runtime::heap::decode_map_entries(entries)
+            }
+            _ => {
+                return Err(TinyOneError::runtime(
+                    "dictionary_new expects a map or dictionary",
+                ));
+            }
+        }
+    };
+    Ok(Value::Heap(context.heap().alloc_dictionary(entries)?))
+}
+
+pub fn b_alloc_new(
+    context: &mut TinyRuntimeContext,
+    type_name: &Value,
+    buffer: &Value,
+) -> Result<Value> {
+    let type_name = expect_string(context, type_name, "alloc_new")?;
+    let kind = parse_type_name(&type_name, "alloc_new")?;
+    let bytes = {
+        let heap = context.heap();
+        let object = heap.get(buffer)?;
+        let HeapData::Buffer(bytes) = &object.data else {
+            return Err(TinyOneError::runtime("alloc_new expects a Buffer"));
+        };
+        bytes.as_slice().to_vec()
+    };
+    Ok(Value::Heap(context.heap().alloc_raw(kind, bytes)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -985,7 +1323,7 @@ pub fn b_fs_write(
         let HeapData::Buffer(bytes) = &object.data else {
             return Err(TinyOneError::runtime("fs_write expects a buffer payload"));
         };
-        bytes.clone()
+        bytes.as_slice().to_vec()
     };
     std::fs::write(&path, &bytes)
         .map_err(|error| TinyOneError::runtime(format!("fs_write: {error}")))?;
@@ -1123,14 +1461,18 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
         Value::Phantom => TypeKind::Phantom.name(),
         Value::Zst(_) => TypeKind::Zst.name(),
         Value::Unsafe => TypeKind::Unsafe.name(),
-        Value::Pointer(p) if p.kind == "null" && p.address == 0 => TypeKind::Null.name(),
+        Value::Pointer(p)
+            if p.kind == crate::runtime::value::PointerKind::Null && p.address == 0 =>
+        {
+            TypeKind::Null.name()
+        }
         Value::Pointer(_) => TypeKind::Pointer.name(),
         Value::Heap(_) => {
             let heap = context.heap();
             let object = heap.get(value)?;
             match &object.data {
                 HeapData::String(_) => TypeKind::String.name(),
-                HeapData::Array(_) => TypeKind::Vec.name(),
+                HeapData::Array(_) => TypeKind::Array.name(),
                 HeapData::Buffer(_) => TypeKind::Buffer.name(),
                 HeapData::Struct(_) => {
                     if object.type_name == "tinyone.result.Result" {
@@ -1142,19 +1484,25 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
                     }
                 }
                 HeapData::Map(_) => TypeKind::Map.name(),
-                HeapData::Cell(_) => TypeKind::Alloc.name(),
+                HeapData::Cell(_) => TypeKind::Cell.name(),
                 HeapData::Mutex(_) => TypeKind::Mutex.name(),
                 HeapData::Atomic(_) => TypeKind::Atomic.name(),
                 HeapData::Thread(_) => TypeKind::Thread.name(),
                 HeapData::Enum { .. } => TypeKind::Enum.name(),
-                HeapData::Char(_) | HeapData::CharBuffer(_) | HeapData::Vec(_)
-                | HeapData::Record(_) | HeapData::Dictionary(_) | HeapData::Box(_)
-                | HeapData::Alloc { .. } | HeapData::Closure { .. } | HeapData::Sum { .. }
-                | HeapData::TaggedUnion { .. }
-                | HeapData::Result { .. } | HeapData::Option { .. } | HeapData::Dyn { .. }
-                | HeapData::FileDescriptor(_) => {
-                    unimplemented!("Phase 2: type_of() not yet implemented for this HeapData variant — grep 'Phase 2:' to find all stubs")
-                }
+                HeapData::Char(_) => TypeKind::Char.name(),
+                HeapData::CharBuffer(_) => TypeKind::CharBuffer.name(),
+                HeapData::Vec(_) => TypeKind::Vec.name(),
+                HeapData::Record(_) => TypeKind::Record.name(),
+                HeapData::Dictionary(_) => TypeKind::Dictionary.name(),
+                HeapData::Box(_) => TypeKind::Box.name(),
+                HeapData::Alloc { .. } => TypeKind::Alloc.name(),
+                HeapData::Closure { .. } => TypeKind::Closure.name(),
+                HeapData::Sum { .. } => TypeKind::Sum.name(),
+                HeapData::TaggedUnion { .. } => TypeKind::TaggedUnion.name(),
+                HeapData::Result { .. } => TypeKind::Result.name(),
+                HeapData::Option { .. } => TypeKind::Option.name(),
+                HeapData::Dyn { .. } => TypeKind::Dyn.name(),
+                HeapData::FileDescriptor(_) => TypeKind::FileDescriptor.name(),
             }
         }
     };

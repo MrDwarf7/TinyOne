@@ -36,10 +36,21 @@ impl TinyRuntimeContext {
     }
 
     /// Construct a context that shares an existing heap. Used by spawned threads.
-    /// The heap already has its allocator wired; this context gets a reference to
-    /// a standalone allocator for API compatibility. The heap-level allocator is
-    /// the primary tracking layer for all heap operations.
+    ///
+    /// Shares the *same* `TinyAllocator` `Arc` the heap was wired with
+    /// (`TinyHeap::allocator_handle`), rather than constructing a disconnected
+    /// standalone instance — String/Buffer/CharBuffer heap objects now own
+    /// their real Ralloc-backed memory directly, and a spawned thread's
+    /// context must observe the same allocation-table bookkeeping as the
+    /// main-thread context for that memory, not a separate, always-empty
+    /// tracker. Falls back to a fresh standalone allocator only if the heap
+    /// somehow has none wired (not expected via `TinyRuntimeContext::new`).
     pub(crate) fn with_heap(heap_arc: Arc<Mutex<TinyHeap>>) -> Self {
+        let allocator = heap_arc
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .allocator_handle()
+            .unwrap_or_else(|| Arc::new(crate::tiny_allocator::TinyAllocator::with_defaults()));
         Self {
             heap_arc,
             program_arc: None,
@@ -50,18 +61,16 @@ impl TinyRuntimeContext {
             io_stderr: String::new(),
             sys_args: Vec::new(),
             sys_env: HashMap::new(),
-            allocator: Arc::new(crate::tiny_allocator::TinyAllocator::with_defaults()),
+            allocator,
         }
     }
 
     /// Return the [`TinyAllocator`] diagnostics layer for this context.
     ///
-    /// For the primary (main-thread) context this is the same allocator that is
-    /// wired into the heap.  For thread-spawned contexts (created via
-    /// [`with_heap`]) this is a standalone instance; the heap's allocator is the
-    /// authoritative tracker for all operations.
-    ///
-    /// [`with_heap`]: TinyRuntimeContext::with_heap
+    /// This is always the same allocator instance wired into the heap
+    /// (`TinyHeap::set_allocator`/`allocator_handle`), for both the primary
+    /// context and thread-spawned contexts created via
+    /// [`with_heap`][Self::with_heap].
     pub fn allocator(&self) -> &crate::tiny_allocator::TinyAllocator {
         &self.allocator
     }
