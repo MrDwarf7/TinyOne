@@ -23,6 +23,24 @@ durable language identity and TinyOne is its v1 implementation generation.
 TinyLang v2 is the active internal language roadmap: v2 features are developed
 on the v1 release foundation without creating a separate user-facing language.
 
+.. note::
+
+   **TinyLang v2 Development Update**
+   
+   With the successful v1 release line locked in, active development has shifted
+   to **TinyLang v2**. Key architectural upgrades currently underway include:
+   
+   * **Deterministic Binary FFI:** Replacing JSON-over-C with a zero-copy, 
+     cross-system binary serialization protocol.
+   * **Universal Language SDKs:** First-class test crates coming for **C, Python, 
+     JavaScript (Node.js), and Rust**.
+   * **Unified Memory Determinism:** Deepening ``Ralloc`` integration across all VM 
+     and runtime primitives.
+   
+   *The frozen v1 ABI remains stable in ``TinyOne/`` while v2 features evolve internally.*
+
+---
+
 .. contents::
 
 General Information
