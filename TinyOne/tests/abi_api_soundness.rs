@@ -811,7 +811,7 @@ fn map_growth_obeys_heap_byte_budget() {
     "#;
     for mode in ["vm", "jit"] {
         expect_error_contains(
-            run_source(&source, mode, &mut Vec::new(), Vec::new()),
+            run_source(source, mode, &mut Vec::new(), Vec::new()),
             "Heap byte limit",
         );
     }

@@ -221,10 +221,10 @@ impl AllocTable {
     pub fn insert(&self, record: AllocRecord) -> Result<(), AllocTableError> {
         let mut guard = self.inner.lock().unwrap();
         // Reject if a live record already occupies this slot.
-        if let Some(existing) = guard.records.get(&record.vm_address) {
-            if existing.live {
-                return Err(AllocTableError::AlreadyExists);
-            }
+        if let Some(existing) = guard.records.get(&record.vm_address)
+            && existing.live
+        {
+            return Err(AllocTableError::AlreadyExists);
         }
         guard.total_allocated = guard.total_allocated.saturating_add(1);
         guard.records.insert(record.vm_address, record);

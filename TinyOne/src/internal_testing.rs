@@ -173,10 +173,10 @@ mod tests {
         )
         .expect("compile fixture");
 
-        let program_inspection = inspect_program(&*program);
+        let program_inspection = inspect_program(&program);
         assert!(program_inspection.main_ops.iter().any(|op| op == "JUMP"));
 
-        let jit_inspection = inspect_jit(&*program);
+        let jit_inspection = inspect_jit(&program);
         assert_eq!(program.fingerprint(), jit_inspection.fingerprint);
         assert!(jit_inspection.chunk_count >= 1);
         assert!(jit_inspection.op_count > 0);

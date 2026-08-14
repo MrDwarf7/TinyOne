@@ -119,10 +119,10 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
     };
 
     if let Some(path) = args.emit_bytecode {
-        write_artifact(&*program, path)?;
+        write_artifact(&program, path)?;
     }
     if let Some(path) = args.emit_jit {
-        write_jit_listing(&*program, path)?;
+        write_jit_listing(&program, path)?;
     }
     if args.verbose {
         eprintln!(

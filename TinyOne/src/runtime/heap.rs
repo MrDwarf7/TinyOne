@@ -46,6 +46,7 @@ pub(crate) enum HeapData {
     CharBuffer(RallocBytes),
 
     // Sequences
+    #[allow(dead_code)]
     Vec(RallocVec),
     Record(RallocRecord),
 
@@ -57,6 +58,7 @@ pub(crate) enum HeapData {
     /// with by-value (not by-reference) semantics at the language level.
     Box(RallocBytes),
     Alloc {
+        #[allow(dead_code)]
         kind: TypeKind,
         data: RallocBytes,
     },
@@ -81,10 +83,12 @@ pub(crate) enum HeapData {
     },
 
     // Higher-level
+    #[allow(dead_code)]
     Result {
         is_ok: bool,
         value: RallocBytes,
     },
+    #[allow(dead_code)]
     Option {
         value: Option<RallocBytes>,
     },
@@ -134,6 +138,7 @@ impl HeapObject {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn type_kind(&self) -> crate::TypeKind {
         use crate::TypeKind;
         match self.data {
@@ -234,16 +239,6 @@ impl TinyHeap {
         self.allocator = Some(allocator);
     }
 
-    /// Returns the same [`TinyAllocator`][crate::tiny_allocator::TinyAllocator]
-    /// handle wired into this heap via [`set_allocator`][Self::set_allocator],
-    /// if any. Thread-spawned [`TinyRuntimeContext`][crate::TinyRuntimeContext]s
-    /// (see `context::with_heap`) use this to observe the same bookkeeping as
-    /// the main-thread context, instead of constructing a disconnected
-    /// standalone allocator.
-    pub(crate) fn allocator_handle(&self) -> Option<Arc<crate::tiny_allocator::TinyAllocator>> {
-        self.allocator.clone()
-    }
-
     pub(crate) fn alloc(&mut self, object: HeapObject) -> Result<HeapRef> {
         if self.shutdown {
             return Err(TinyOneError::runtime("Heap is already shut down"));
@@ -264,7 +259,9 @@ impl TinyHeap {
             })?;
             *target = Some(object);
             self.record_alloc(bytes)?;
-            if let Some(ref alloc) = self.allocator {
+            if bytes > 0
+                && let Some(ref alloc) = self.allocator
+            {
                 let result = if ralloc_owns_bytes(alloc_kind) {
                     alloc.allocate_owned(address, generation, alloc_kind, bytes, 0)
                 } else {
@@ -289,7 +286,9 @@ impl TinyHeap {
             self.generations.push(1);
             let generation = 1u64;
             self.record_alloc(bytes)?;
-            if let Some(ref alloc) = self.allocator {
+            if bytes > 0
+                && let Some(ref alloc) = self.allocator
+            {
                 let result = if ralloc_owns_bytes(alloc_kind) {
                     alloc.allocate_owned(address, generation, alloc_kind, bytes, 0)
                 } else {
@@ -521,6 +520,7 @@ impl TinyHeap {
         self.alloc_data(HeapData::CharBuffer(bytes))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn alloc_vec(&mut self, values: Vec<Value>) -> Result<HeapRef> {
         let vec = encode_into_ralloc_vec(ENCODED_VALUE_BYTES, &values)?;
         self.alloc_data(HeapData::Vec(vec))
@@ -582,11 +582,13 @@ impl TinyHeap {
         self.alloc_data(HeapData::TaggedUnion { tag, payload })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn alloc_result(&mut self, is_ok: bool, value: Value) -> Result<HeapRef> {
         let value = alloc_value_slot(&value)?;
         self.alloc_data(HeapData::Result { is_ok, value })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn alloc_option(&mut self, value: Option<Value>) -> Result<HeapRef> {
         let value = value.as_ref().map(alloc_value_slot).transpose()?;
         self.alloc_data(HeapData::Option { value })
@@ -690,10 +692,11 @@ impl TinyHeap {
         *target = None;
         self.free.push(reference.address);
         self.record_free(bytes)?;
-        if let Some(ref alloc) = self.allocator {
-            if let Err(e) = alloc.free(reference.address, reference.generation, 0) {
-                eprintln!("TinyAllocator tracking error: {:?}", e);
-            }
+        if bytes > 0
+            && let Some(ref alloc) = self.allocator
+            && let Err(e) = alloc.free(reference.address, reference.generation, 0)
+        {
+            eprintln!("TinyAllocator tracking error: {:?}", e);
         }
         Ok(())
     }
@@ -826,7 +829,7 @@ fn ralloc_owns_bytes(kind: crate::alloc_table::AllocKind) -> bool {
 /// allocation, matching how `runtime::pointers::runtime_read_uint`/
 /// `runtime_write_uint` already pack/unpack multi-byte integers by hand.
 pub(crate) fn pack_char_buffer(chars: &[u32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(chars.len() * std::mem::size_of::<u32>());
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(chars));
     for ch in chars {
         bytes.extend_from_slice(&ch.to_le_bytes());
     }
@@ -837,8 +840,10 @@ pub(crate) fn pack_char_buffer(chars: &[u32]) -> Vec<u8> {
 /// since it only ever comes from `pack_char_buffer`.
 pub(crate) fn unpack_char_buffer(bytes: &[u8]) -> Vec<u32> {
     bytes
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect()
 }
 

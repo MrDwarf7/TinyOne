@@ -645,10 +645,8 @@ impl Compiler {
                         loop {
                             let field_token = self.eat(TokenKind::Ident)?;
                             if field_token.text == "tag" {
-                                return Err(self.error(
-                                    "Enum variant field \"tag\" is reserved".to_string(),
-                                    field_token,
-                                ));
+                                return Err(self
+                                    .error("Enum variant field \"tag\" is reserved", field_token));
                             }
                             if !seen_fields.insert(field_token.text.clone()) {
                                 return Err(self.error(
@@ -1296,10 +1294,10 @@ impl Compiler {
         if let Some(slot) = self.symbols.get(&token.text) {
             return Ok(ReadSlot::Local(slot));
         }
-        if self.in_function {
-            if let Some(slot) = self.function_globals.get(&token.text).copied() {
-                return Ok(ReadSlot::Global(slot));
-            }
+        if self.in_function
+            && let Some(slot) = self.function_globals.get(&token.text).copied()
+        {
+            return Ok(ReadSlot::Global(slot));
         }
         Err(self.error(
             format!("Undefined variable {:?}", token.text),

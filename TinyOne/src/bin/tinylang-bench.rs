@@ -162,7 +162,7 @@ struct Fixture {
 fn make_fixture(source: &'static str) -> Fixture {
     let raw = compile_source_unoptimized(source).expect("fixture should compile");
     let program = optimize_program(Arc::clone(&raw));
-    BytecodeVerifier::verify(&*program).expect("fixture should verify");
+    BytecodeVerifier::verify(&program).expect("fixture should verify");
     let artifact = program.to_artifact();
     Fixture {
         raw,
@@ -296,8 +296,8 @@ fn print_help() {
 
 fn correctness_cases() -> Vec<CorrectnessCase> {
     vec![
-        CorrectnessCase::new("straightline/jit", STRAIGHTLINE_SOURCE, "4\n1\n"),
-        CorrectnessCase::new("straightline/vm", STRAIGHTLINE_SOURCE, "4\n1\n").mode("vm"),
+        CorrectnessCase::new("straightline/jit", STRAIGHTLINE_SOURCE, "4\ntrue\n"),
+        CorrectnessCase::new("straightline/vm", STRAIGHTLINE_SOURCE, "4\ntrue\n").mode("vm"),
         CorrectnessCase::new("loop/jit", LOOP_SOURCE, "24384\n"),
         CorrectnessCase::new("loop/vm", LOOP_SOURCE, "24384\n").mode("vm"),
         CorrectnessCase::new("functions/jit", FUNCTION_SOURCE, "2736\n"),
@@ -362,7 +362,7 @@ fn run_source_mode(source: &str, mode: &str, inputs: Vec<String>) {
 
 fn compile_jit(program: &Arc<Program>, cache: &mut JitCache) {
     let compiled = cache
-        .compile(&**program)
+        .compile(program)
         .expect("benchmark program should compile") as *const _;
     black_box(compiled);
 }
@@ -447,21 +447,21 @@ fn build_benchmarks() -> Vec<Benchmark> {
         bench("verifier.loop_cfg", 30_000, {
             let program = loop_fixture.program.clone();
             move || {
-                BytecodeVerifier::verify(&*program).expect("verify loop");
+                BytecodeVerifier::verify(&program).expect("verify loop");
                 black_box(());
             }
         }),
         bench("verifier.function_cfg", 20_000, {
             let program = functions.program.clone();
             move || {
-                BytecodeVerifier::verify(&*program).expect("verify functions");
+                BytecodeVerifier::verify(&program).expect("verify functions");
                 black_box(());
             }
         }),
         bench("verifier.heap_structs", 20_000, {
             let program = heap.program.clone();
             move || {
-                BytecodeVerifier::verify(&*program).expect("verify heap");
+                BytecodeVerifier::verify(&program).expect("verify heap");
                 black_box(());
             }
         }),
@@ -563,33 +563,33 @@ fn build_benchmarks() -> Vec<Benchmark> {
             move || run_mode(Arc::clone(&program), "vm", Vec::new())
         }),
         bench("runtime.jit_straightline", 10_000, {
-            let mut program = JitProgram::compile(&*straightline.program)
+            let mut program = JitProgram::compile(&straightline.program)
                 .expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_loop_control", 2_000, {
-            let mut program = JitProgram::compile(&*loop_fixture.program)
+            let mut program = JitProgram::compile(&loop_fixture.program)
                 .expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_function_calls", 600, {
             let mut program =
-                JitProgram::compile(&*functions.program).expect("benchmark program should compile");
+                JitProgram::compile(&functions.program).expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_control_interrupts", 2_000, {
-            let mut program = JitProgram::compile(&*interrupts.program)
-                .expect("benchmark program should compile");
+            let mut program =
+                JitProgram::compile(&interrupts.program).expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_heap_structs", 1_000, {
             let mut program =
-                JitProgram::compile(&*heap.program).expect("benchmark program should compile");
+                JitProgram::compile(&heap.program).expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("runtime.jit_builtin_heavy", 2_000, {
             let mut program =
-                JitProgram::compile(&*builtins.program).expect("benchmark program should compile");
+                JitProgram::compile(&builtins.program).expect("benchmark program should compile");
             move || run_compiled_jit(&mut program, Vec::new())
         }),
         bench("api.run_source_vm", 500, || {

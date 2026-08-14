@@ -212,15 +212,13 @@ fn run_sandboxed(request: SandboxRequest) -> Result<JsonValue> {
             TinyOneError::runtime(format!("sandbox worker could not start: {error}"))
         })?;
 
+    // Taking and dropping stdin after the write tells the worker that the
+    // complete request has arrived.
     child
         .stdin
         .take()
         .ok_or_else(|| TinyOneError::runtime("sandbox worker stdin was unavailable"))?
         .write_all(&request)
-        .and_then(|_| {
-            // Closing stdin tells the worker that the complete request has arrived.
-            Ok(())
-        })
         .map_err(|error| TinyOneError::runtime(format!("sandbox request failed: {error}")))?;
 
     let deadline = Instant::now() + SANDBOX_TIMEOUT;
@@ -306,8 +304,8 @@ fn sandbox_worker_path() -> Result<std::path::PathBuf> {
             return Ok(exact);
         }
         let deps = directory.join("deps");
-        if let Ok(entries) = std::fs::read_dir(deps) {
-            if let Some(path) = entries.flatten().map(|entry| entry.path()).find(|path| {
+        if let Ok(entries) = std::fs::read_dir(deps)
+            && let Some(path) = entries.flatten().map(|entry| entry.path()).find(|path| {
                 path.is_file()
                     && path
                         .file_name()
@@ -316,9 +314,9 @@ fn sandbox_worker_path() -> Result<std::path::PathBuf> {
                             value.starts_with("tinyone_sandbox_worker-")
                                 && value.ends_with(if cfg!(windows) { ".exe" } else { "" })
                         })
-            }) {
-                return Ok(path);
-            }
+            })
+        {
+            return Ok(path);
         }
     }
     Err(TinyOneError::runtime(format!(
