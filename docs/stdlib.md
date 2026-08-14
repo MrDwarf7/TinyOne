@@ -172,8 +172,8 @@ Returns the numeric heap address of the base object.
 Returns the element or byte offset within the base object.
 
 #### `ptr_kind(ptr) → string`
-Returns the pointer kind: `"object"`, `"array"`, `"buffer"`, `"struct"`,
-`"cell"`, or `"null"`.
+Returns the pointer kind: `"null"`, `"object"`, `"array"`, `"buffer"`, or
+`"field"`.
 
 #### `ptr_field(ptr) → string | null`
 Returns the field name for a field pointer, or `null` for other kinds.

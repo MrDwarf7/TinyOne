@@ -295,11 +295,12 @@ impl TypeKind {
         })
     }
 
-    /// Returns the `TypeKind` for a stack-resident `RuntimeValue`.
-    /// For `Heap` values, this panics — callers must resolve via `heap.get(r).type_kind()`.
-    pub fn from_runtime_value(v: &crate::Value) -> Self {
+    /// Returns the `TypeKind` carried directly by a stack-resident
+    /// `RuntimeValue`. Heap references return `None` because their type must be
+    /// resolved through the owning heap.
+    pub fn try_from_runtime_value(v: &crate::Value) -> Option<Self> {
         use crate::Value;
-        match v {
+        Some(match v {
             Value::Unit => TypeKind::Unit,
             Value::Bool(_) => TypeKind::Bool,
             Value::I8(_) => TypeKind::I8,
@@ -318,11 +319,28 @@ impl TypeKind {
             Value::Phantom => TypeKind::Phantom,
             Value::Zst(k) => *k,
             Value::Unsafe => TypeKind::Unsafe,
-            Value::Heap(r) => unimplemented!(
-                "from_runtime_value(Heap): call heap.get(r).type_kind() for heap types; \
-                 HeapRef alone does not carry TypeKind — {r:?}"
-            ),
-        }
+            Value::Heap(_) => return None,
+        })
+    }
+
+    /// Returns the `TypeKind` carried directly by a stack-resident
+    /// `RuntimeValue`.
+    ///
+    /// This method is retained for source compatibility. Prefer
+    /// [`TypeKind::try_from_runtime_value`] when the value may be a heap
+    /// reference.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a heap reference because its type can only be resolved
+    /// through the owning heap.
+    #[deprecated(
+        since = "1.2.0",
+        note = "use try_from_runtime_value; heap references require heap context"
+    )]
+    pub fn from_runtime_value(v: &crate::Value) -> Self {
+        Self::try_from_runtime_value(v)
+            .expect("from_runtime_value(Heap): resolve heap references through the owning heap")
     }
 }
 

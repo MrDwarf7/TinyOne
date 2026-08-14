@@ -116,10 +116,12 @@ Build the Rust crate and CLI executable::
 
 Run the repo-local CI/release gate from the repository root::
 
-    scripts/ci-gate.sh
+    cargo run --manifest-path xtask/Cargo.toml -- release-gate
 
-The gate runs the practical current checks and reports removed-stdlib fallout
-honestly instead of restoring or assuming a root ``stdlib/`` tree.
+The gate checks TinyOne, Ralloc, the developer harness, language fixtures,
+formatting, Clippy, benchmark smoke coverage, and Python tooling. It requires
+``uv`` for the Python steps. ``scripts/ci-gate.sh`` remains available as a
+Unix-oriented shell wrapper.
 
 This creates the debug executable at ``TinyOne/target/debug/tinylang``. Build
 with ``--release`` when you want the optimized executable at
@@ -364,16 +366,9 @@ Repository and documentation drift
   crate is currently under ``TinyOne/``.
 * Some historical planning documents still use ``Rust/Cargo.toml`` command
   examples; active user-facing docs use ``TinyOne/Cargo.toml``.
-* Some tests still assume a root ``stdlib/tinyone.json`` manifest. That root
-  ``stdlib/`` tree is intentionally absent in the current checkout while the
-  standard-library surface moves into the runtime/system layer.
 * Historical release-helper examples may still assume ``Rust/target`` or
   ``Rust/Cargo.toml``. Active tooling should use ``TinyOne/`` and excludes
   current ``TinyOne/target`` and ``Ralloc/target`` build outputs by default.
-* Some docs describe raw pointer kinds such as ``struct`` and ``cell`` while
-  the implementation uses object, array, buffer, field, and null pointer kinds.
-* Some docs describe generation changes as happening on free; the current heap
-  increments generations when a slot is reused for allocation.
 
 Test and verification gaps
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -386,17 +381,18 @@ Language and runtime gaps
 
 * The runtime type registry contains internal/staged variants beyond the
   source-level types. Heap ``type_of`` mappings are wired for all current
-  ``HeapData`` variants; resolving a bare ``HeapRef`` still requires heap
-  context rather than ``RuntimeValue::from_runtime_value`` alone.
+  ``HeapData`` variants; ``TypeKind::try_from_runtime_value`` returns ``None``
+  for a bare ``HeapRef`` because resolving its type requires heap context. The
+  original ``from_runtime_value`` API remains available for compatibility and
+  panics if passed a heap reference.
 * The static/hybrid type-system direction is documented, but a full static type
   checker is not implemented yet.
 * The peephole optimizer is conservative. It folds branch-free constant
   arithmetic/comparison chunks and intentionally avoids chunks with jumps.
 * The adaptive JIT is not native code generation.
-* ``thread_spawn`` support is VM-oriented today. The JIT context path does not
-  appear to set the program reference needed by ``thread_spawn``.
-* Mutex unlock currently checks locked/unlocked state but does not prove the
-  unlocking thread is the owner.
+* Spawned functions use the portable VM backend even when the parent program
+  uses JIT mode. Both parent modes provide the verified program reference and
+  are covered by threading parity tests.
 
 Allocator boundary
 ^^^^^^^^^^^^^^^^^^
@@ -407,8 +403,11 @@ Allocator boundary
   collections. They are control-plane data, not addressable TinyOne memory;
   moving them to Ralloc requires a separate variable-width value
   representation.
-* The Ralloc arena remains capacity-bounded, so allocation failures are
-  surfaced as runtime errors where the API is fallible.
+* The Ralloc arena remains capacity-bounded. VM, JIT, and spawned-thread frame
+  allocation use the fallible ``TinyMemory::try_new`` path so exhaustion is a
+  runtime error. ``TinyMemory::new`` and the standard ``Clone`` implementation
+  retain conventional infallible APIs that document their panic behavior;
+  embedders can use ``try_new`` and ``try_clone`` instead.
 
 Tests and Benchmarks
 --------------------
@@ -420,7 +419,6 @@ Useful commands::
     cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks
     cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
     ./TinyOne/target/release/tinylang-bench
-    cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
     ./TinyOne/target/release/tinylang-bench --quick --repeats 1
 
 Current state:

@@ -2,6 +2,10 @@
 name = "ralloc-staticlib"
 version = "0.1.0"
 edition = "2024"
+publish = false
+description = "Internal TinyLang Ralloc static-library wrapper"
+license-file = "../../License.rst"
+repository = "https://github.com/ConnerAdamsMaine/TinyOne"
 
 [lib]
 name = "ralloc"
@@ -11,4 +15,4 @@ test = false
 doctest = false
 
 [dependencies]
-ralloc_core = { package = "ralloc", path = ".." }
+ralloc_core = { package = "ralloc", version = "0.1.0", path = ".." }

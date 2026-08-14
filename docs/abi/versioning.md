@@ -21,6 +21,7 @@ The following changes break binary or source compatibility for callers:
 
 **Response-level breaks:**
 - Removing a key from a success `value` object
+- Adding a key to a success `value` object
 - Changing the type of an existing key in any response shape
 - Removing one of the four envelope shapes (`ok/value`, `compile`,
   `runtime`, `panic`)
@@ -33,8 +34,6 @@ The following changes break binary or source compatibility for callers:
 
 ## What Is Not a Breaking Change
 
-- Adding new keys to a success `value` object (callers should ignore
-  unknown keys)
 - Adding new entry points to `tinylang.h`
 - Adding new opcode ordinals above the frozen Phase-1 range
 - Adding new Phase-2 builtin slots above index 34
@@ -47,7 +46,7 @@ The following changes break binary or source compatibility for callers:
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Function signatures in `tinyone.h` | STABLE | Frozen at ABI version 1 |
+| Function signatures in `tinylang.h` | STABLE | Frozen at ABI version 1 |
 | Response envelope shape (4 kinds) | STABLE | Frozen now |
 | `value` object keys per endpoint | STABLE | Frozen by the committed JSON schema |
 | `memory` array encoding | STABLE | Frozen by the committed JSON schema and contract tests |
@@ -76,10 +75,11 @@ At startup, compare the library result from `tinyone_abi_version()` with the
 header constant `TINYONE_ABI_VERSION`. Refuse to load the library when the
 values differ; do not infer compatibility from the package version.
 
-For JSON responses, branch on the documented `ok` and `kind` fields, validate
-the fields your application requires, and ignore unknown success fields. Do
-not parse human-readable `error` text. A `compile`, `runtime`, or `panic`
-response is an application-visible failure, not an ABI mismatch.
+For JSON responses, branch on the documented `ok` and `kind` fields and
+validate against the committed schema. ABI version 1 response objects are
+closed shapes; unknown fields are not part of this ABI. Do not parse
+human-readable `error` text. A `compile`, `runtime`, or `panic` response is an
+application-visible failure, not an ABI mismatch.
 
 For bytecode artifacts, accept only `format: "tinyone-bytecode"` and
 `version: 1` unless the consumer explicitly supports another format version.

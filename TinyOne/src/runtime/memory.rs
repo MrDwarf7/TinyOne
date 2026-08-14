@@ -15,12 +15,17 @@ pub struct TinyMemory {
 }
 
 impl TinyMemory {
+    /// Allocates VM memory, panicking if the fixed-capacity Ralloc backend is
+    /// exhausted. Execution paths should use [`TinyMemory::try_new`] so
+    /// allocation failures remain recoverable runtime errors.
     pub fn new(slot_count: usize) -> Self {
         Self::try_new(slot_count)
             .unwrap_or_else(|error| panic!("failed to allocate VM memory with Ralloc: {error}"))
     }
 
-    pub(crate) fn try_new(slot_count: usize) -> Result<Self> {
+    /// Attempts to allocate VM memory without panicking on size overflow or
+    /// allocator exhaustion.
+    pub fn try_new(slot_count: usize) -> Result<Self> {
         let byte_len = slot_count
             .checked_mul(ENCODED_VALUE_BYTES)
             .ok_or_else(|| TinyOneError::runtime("VM memory size overflow"))?;
@@ -92,6 +97,25 @@ impl TinyMemory {
             .collect()
     }
 
+    /// Attempts to clone this memory without panicking on allocator
+    /// exhaustion.
+    pub fn try_clone(&self) -> Result<Self> {
+        let mut copy = Self::try_new(self.slot_count)?;
+        if self.slot_count != 0 {
+            copy.bytes
+                .as_mut()
+                .expect("non-empty VM memory must have backing bytes")
+                .as_mut_slice()
+                .copy_from_slice(
+                    self.bytes
+                        .as_ref()
+                        .expect("non-empty VM memory must have backing bytes")
+                        .as_slice(),
+                );
+        }
+        Ok(copy)
+    }
+
     fn slot_range(&self, slot: usize) -> Result<std::ops::Range<usize>> {
         if slot >= self.slot_count {
             return Err(TinyOneError::runtime(format!("Invalid memory slot {slot}")));
@@ -103,15 +127,8 @@ impl TinyMemory {
 
 impl Clone for TinyMemory {
     fn clone(&self) -> Self {
-        let mut copy = Self::new(self.slot_count);
-        if self.slot_count != 0 {
-            copy.bytes
-                .as_mut()
-                .unwrap()
-                .as_mut_slice()
-                .copy_from_slice(self.bytes.as_ref().unwrap().as_slice());
-        }
-        copy
+        self.try_clone()
+            .unwrap_or_else(|error| panic!("failed to clone VM memory with Ralloc: {error}"))
     }
 }
 

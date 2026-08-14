@@ -62,7 +62,7 @@ impl<'a> JitVm<'a> {
             .first()
             .ok_or_else(|| TinyOneError::runtime("JIT program has no main chunk"))?
             .slot_count;
-        let mut memory = TinyMemory::new(slot_count);
+        let mut memory = TinyMemory::try_new(slot_count)?;
         self.run_chunk(0, &mut memory, stdout, None)?;
         let heap_before_shutdown = self.context.heap_stats();
         let heap_after_shutdown = self.context.shutdown();
@@ -331,8 +331,10 @@ impl<'a> JitVm<'a> {
                 }
                 JitOp::Builtin(builtin_index, arg_count) => {
                     let args = pop_args(&mut stack, arg_count)?;
+                    let globals = global_memory.unwrap_or(&*memory);
                     stack.push(runtime_call_builtin(
                         &mut self.context,
+                        globals,
                         builtin_index,
                         args,
                     )?);
@@ -414,7 +416,7 @@ impl<'a> JitVm<'a> {
                 "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
             )));
         }
-        let mut memory = TinyMemory::new(slot_count);
+        let mut memory = TinyMemory::try_new(slot_count)?;
         for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;
         }

@@ -143,6 +143,35 @@ fn assert_runtime_value_schema(value: &JsonValue) {
     }
 }
 
+fn assert_run_value_schema(value: &JsonValue) {
+    assert_exact_object_keys(
+        value,
+        &[
+            "stdout",
+            "memory",
+            "heap_before_shutdown",
+            "heap_after_shutdown",
+        ],
+    );
+    for runtime_value in value["memory"].as_array().expect("memory array") {
+        assert_runtime_value_schema(runtime_value);
+    }
+    for field in ["heap_before_shutdown", "heap_after_shutdown"] {
+        assert_exact_object_keys(
+            &value[field],
+            &[
+                "live_objects",
+                "live_bytes",
+                "peak_objects",
+                "peak_bytes",
+                "total_allocations",
+                "total_frees",
+                "shutdown_frees",
+            ],
+        );
+    }
+}
+
 #[test]
 fn ffi_success_response_schemas_are_frozen() {
     let dir = TestDir::new("ffi-schema");
@@ -183,47 +212,20 @@ fn ffi_success_response_schemas_are_frozen() {
         tinyone_run_source_json(source.as_ptr(), mode.as_ptr(), std::ptr::null())
     });
     assert_exact_object_keys(&run, &["ok", "value"]);
-    assert_exact_object_keys(
-        &run["value"],
-        &[
-            "stdout",
-            "memory",
-            "heap_before_shutdown",
-            "heap_after_shutdown",
-        ],
-    );
-    for value in run["value"]["memory"].as_array().expect("memory array") {
-        assert_runtime_value_schema(value);
-    }
-    for field in ["heap_before_shutdown", "heap_after_shutdown"] {
-        assert_exact_object_keys(
-            &run["value"][field],
-            &[
-                "live_objects",
-                "live_bytes",
-                "peak_objects",
-                "peak_bytes",
-                "total_allocations",
-                "total_frees",
-                "shutdown_frees",
-            ],
-        );
-    }
+    assert_run_value_schema(&run["value"]);
+
+    let run_file = take_ffi_json(unsafe {
+        tinyone_run_file_json(file_path.as_ptr(), mode.as_ptr(), std::ptr::null())
+    });
+    assert_exact_object_keys(&run_file, &["ok", "value"]);
+    assert_run_value_schema(&run_file["value"]);
 
     let artifact = cstring(compiled["value"]["artifact"].to_string());
     let run_artifact = take_ffi_json(unsafe {
         tinyone_run_artifact_json(artifact.as_ptr(), mode.as_ptr(), std::ptr::null())
     });
     assert_exact_object_keys(&run_artifact, &["ok", "value"]);
-    assert_exact_object_keys(
-        &run_artifact["value"],
-        &[
-            "stdout",
-            "memory",
-            "heap_before_shutdown",
-            "heap_after_shutdown",
-        ],
-    );
+    assert_run_value_schema(&run_artifact["value"]);
 
     let listing = take_ffi_json(unsafe { tinyone_jit_listing_json(artifact.as_ptr()) });
     assert_exact_object_keys(&listing, &["ok", "value"]);
@@ -244,6 +246,7 @@ fn committed_ffi_response_schema_is_valid_json() {
 }
 
 fn assert_ffi_error(response: JsonValue, kind: &str, needle: &str) {
+    assert_exact_object_keys(&response, &["ok", "kind", "error"]);
     assert_eq!(response.get("ok").and_then(JsonValue::as_bool), Some(false));
     assert_eq!(response.get("kind").and_then(JsonValue::as_str), Some(kind));
     let error = response
@@ -520,7 +523,7 @@ fn c_header_ffi_smoke_covers_ownership_null_and_mode_contracts() {
     fs::write(
         &source,
         r#"
-#include "tinyone.h"
+#include "tinylang.h"
 
 #include <stdio.h>
 #include <string.h>

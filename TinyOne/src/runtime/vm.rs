@@ -114,12 +114,12 @@ impl VM {
         let slot_count = function.slot_count;
         let fn_name = function.name.clone();
         let code = function.code.clone();
-        let mut memory = TinyMemory::new(slot_count);
+        let mut memory = TinyMemory::try_new(slot_count)?;
         for (i, v) in args.into_iter().enumerate() {
             memory.store(i, v)?;
         }
-        let empty_globals = TinyMemory::new(0);
-        let result = self.run_chunk(&code, &mut memory, stdout, &fn_name, Some(&empty_globals))?;
+        let global_memory = std::mem::take(&mut self.memory);
+        let result = self.run_chunk(&code, &mut memory, stdout, &fn_name, Some(&global_memory))?;
         result.ok_or_else(|| TinyOneError::runtime("thread function returned no value"))
     }
 
@@ -330,8 +330,10 @@ impl VM {
                     let builtin_index = checked_non_negative_usize(instr.arg, "builtin index")?;
                     let arg_count = checked_non_negative_usize(instr.arg2, "builtin arity")?;
                     let args = pop_args(&mut stack, arg_count)?;
+                    let globals = global_memory.unwrap_or(&*memory);
                     stack.push(runtime_call_builtin(
                         &mut self.context,
+                        globals,
                         builtin_index,
                         args,
                     )?);
@@ -408,7 +410,7 @@ impl VM {
                 "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
             )));
         }
-        let mut memory = TinyMemory::new(fn_slot_count);
+        let mut memory = TinyMemory::try_new(fn_slot_count)?;
         for (slot, value) in args.into_iter().enumerate() {
             memory.store(slot, value)?;
         }

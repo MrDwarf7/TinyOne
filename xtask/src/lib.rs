@@ -363,7 +363,9 @@ fn cargo(args: &[&'static str]) -> CommandSpec {
 }
 
 fn python(args: &[&'static str]) -> CommandSpec {
-    CommandSpec::new("python3", args.to_vec())
+    let mut uv_args = vec!["run", "--no-project", "python"];
+    uv_args.extend_from_slice(args);
+    CommandSpec::new("uv", uv_args)
 }
 
 fn shell_word(value: &str) -> String {

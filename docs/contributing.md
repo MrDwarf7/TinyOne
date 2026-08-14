@@ -4,7 +4,7 @@
 
 - Rust toolchain with Cargo (stable, edition 2024)
 - A C compiler (`cc`) for the FFI smoke test
-- Python 3 for `Tools/hash.py` (optional; used for release manifests)
+- `uv` for the Python tooling used by `tools-test` and the full release gate
 
 ## Building
 

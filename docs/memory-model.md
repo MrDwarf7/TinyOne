@@ -24,6 +24,13 @@ Each function call allocates a fixed number of slots determined at compile time 
   variable was declared before the function. They cannot assign those slots
   directly; shared mutation should happen through heap objects stored in a
   top-level slot.
+- A spawned thread receives a snapshot of the top-level frame taken when
+  `thread_spawn` is called. Heap references in that snapshot still resolve
+  through the shared runtime heap; coordinate shared mutation with mutexes or
+  atomic values.
+- Spawned threads inherit the runtime's system arguments and environment.
+  Deterministic input queues are not shared between threads; pass input values
+  as function arguments before spawning.
 
 ---
 
@@ -32,12 +39,12 @@ Each function call allocates a fixed number of slots determined at compile time 
 `TinyHeap` is a **generational slab**:
 
 - An `objects: Vec<Option<HeapObject>>` vector holds all heap objects. Each slot is either `None` (free) or `Some(HeapObject)`.
-- A parallel `generations: Vec<u64>` vector holds the generation counter for each slot. The counter increments on every allocation and free at that slot.
+- A parallel `generations: Vec<u64>` vector holds the generation counter for each slot. New slots start at generation 1; reused slots increment immediately before allocation.
 - A `free: Vec<usize>` list holds the indices of currently free slots.
 
 **Allocation:** claims the next free slot from `free` (or appends a new slot if `free` is empty), increments the generation, and stores the object.
 
-**Deallocation (`unsafe free`):** sets the slot to `None`, increments the generation, and adds the index to `free`.
+**Deallocation (`unsafe free`):** sets the slot to `None` and adds the index to `free`. The generation increments if that slot is later reused.
 
 ---
 
@@ -61,7 +68,7 @@ This catches **use-after-free** and prevents a new allocation at the same addres
 
 A `RawPointer { address, kind, index, field, generation, cast }` derives from a `HeapRef` and adds:
 
-- `kind` — `"object"`, `"array"`, `"buffer"`, `"struct"`, `"cell"`, or `"null"`
+- `kind` — `"null"`, `"object"`, `"array"`, `"buffer"`, or `"field"`
 - `index` — element or byte offset (for array and buffer pointers)
 - `field` — field name (for struct field pointers)
 - `generation` — generation at pointer creation time

@@ -42,14 +42,21 @@ impl TinyMutex {
         Ok(())
     }
 
-    /// Release the mutex. Returns a runtime error if not currently locked.
+    /// Release the mutex. Returns a runtime error if it is unlocked or owned
+    /// by another thread.
     pub(crate) fn unlock(&self) -> Result<()> {
+        let current = thread::current().id();
         let mut state = self
             .state
             .lock()
             .map_err(|_| TinyOneError::runtime("mutex_unlock: mutex poisoned"))?;
         if state.is_none() {
             return Err(TinyOneError::runtime("mutex_unlock: mutex is not locked"));
+        }
+        if *state != Some(current) {
+            return Err(TinyOneError::runtime(
+                "mutex_unlock: mutex is owned by another thread",
+            ));
         }
         *state = None;
         self.cond.notify_one();
@@ -133,5 +140,19 @@ mod tests {
         });
         m.unlock().unwrap();
         t.join().unwrap();
+    }
+
+    #[test]
+    fn tinymutex_rejects_unlock_from_non_owner() {
+        let m = TinyMutex::new();
+        m.lock().unwrap();
+        let m2 = Arc::clone(&m);
+        let error = std::thread::spawn(move || m2.unlock())
+            .join()
+            .expect("unlocking thread should not panic")
+            .expect_err("non-owner unlock must fail");
+        assert!(error.to_string().contains("owned by another thread"));
+        assert!(m.is_locked());
+        m.unlock().unwrap();
     }
 }
