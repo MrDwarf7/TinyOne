@@ -35,7 +35,7 @@ The following changes break binary or source compatibility for callers:
 
 - Adding new keys to a success `value` object (callers should ignore
   unknown keys)
-- Adding new entry points to `tinyone.h`
+- Adding new entry points to `tinylang.h`
 - Adding new opcode ordinals above the frozen Phase-1 range
 - Adding new Phase-2 builtin slots above index 34
 - Changing internal implementation details with no observable effect on
@@ -61,7 +61,7 @@ The following changes break binary or source compatibility for callers:
 
 The following are stable and will not change without a major ABI version bump:
 
-1. All function signatures in `tinyone.h`
+1. All function signatures in `tinylang.h`
 2. All four response envelope shapes
 3. All `value` object keys for every entry point
 4. The `memory` array encoding
@@ -88,7 +88,7 @@ addresses, JIT listing text, or the Rust API.
 
 ## Decay Policy
 
-After v1 is declared, deprecated features will be marked in `tinyone.h`
+After v1 is declared, deprecated features will be marked in `tinylang.h`
 with a `// DEPRECATED(vX.Y): reason` comment and kept for at least one
 minor version cycle before removal. Removals require a major version
 bump.

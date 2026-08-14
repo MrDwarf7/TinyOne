@@ -19,14 +19,26 @@ fn release_build_emits_c_linkable_library_artifacts() {
     );
 
     let release_dir = Path::new(manifest_dir).join("target/release");
+    let static_library = if cfg!(windows) {
+        "ralloc.lib"
+    } else {
+        "libralloc.a"
+    };
+    let shared_library = if cfg!(windows) {
+        "ralloc.dll"
+    } else if cfg!(target_os = "macos") {
+        "libralloc.dylib"
+    } else {
+        "libralloc.so"
+    };
     assert!(
-        release_dir.join("libralloc.a").is_file(),
+        release_dir.join(static_library).is_file(),
         "missing C static library at {}",
-        release_dir.join("libralloc.a").display()
+        release_dir.join(static_library).display()
     );
     assert!(
-        release_dir.join("libralloc.so").is_file(),
+        release_dir.join(shared_library).is_file(),
         "missing C shared library at {}",
-        release_dir.join("libralloc.so").display()
+        release_dir.join(shared_library).display()
     );
 }

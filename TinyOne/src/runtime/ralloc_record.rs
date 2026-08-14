@@ -53,7 +53,7 @@ impl RallocRecord {
         let mut name_lens = Vec::with_capacity(field_count);
         let mut total_name_bytes = 0usize;
         for (name, _) in fields {
-            let len = name.as_bytes().len();
+            let len = name.len();
             if len > u16::MAX as usize {
                 return Err(TinyOneError::runtime(format!(
                     "field name {name:?} too long"

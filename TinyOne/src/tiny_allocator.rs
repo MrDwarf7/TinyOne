@@ -484,15 +484,18 @@ impl TinyAllocator {
             }
         };
 
-        match self.finish_allocate(
+        let record = AllocRecord {
             vm_address,
             vm_generation,
+            native_handle: Some(VmAllocHandle(native_id)),
             kind,
-            size,
-            thread_id,
-            seq,
-            Some(VmAllocHandle(native_id)),
-        ) {
+            byte_len: size,
+            capacity: size,
+            arena_id: 0,
+            log_seq: seq,
+            live: true,
+        };
+        match self.finish_allocate(record, thread_id) {
             Ok(()) => {
                 self.native.lock().unwrap().insert(native_id, native_alloc);
             }
@@ -534,7 +537,18 @@ impl TinyAllocator {
     ) -> Result<AllocationResult, TinyAllocatorError> {
         self.guard_allocation(size)?;
         let seq = self.next_seq();
-        self.finish_allocate(vm_address, vm_generation, kind, size, thread_id, seq, None)?;
+        let record = AllocRecord {
+            vm_address,
+            vm_generation,
+            native_handle: None,
+            kind,
+            byte_len: size,
+            capacity: size,
+            arena_id: 0,
+            log_seq: seq,
+            live: true,
+        };
+        self.finish_allocate(record, thread_id)?;
         Ok(AllocationResult {
             vm_address,
             vm_generation,
@@ -559,25 +573,14 @@ impl TinyAllocator {
     /// [`allocate`][Self::allocate] and [`allocate_owned`][Self::allocate_owned].
     fn finish_allocate(
         &self,
-        vm_address: usize,
-        vm_generation: u64,
-        kind: AllocKind,
-        size: usize,
+        record: AllocRecord,
         thread_id: u64,
-        seq: u64,
-        native_handle: Option<VmAllocHandle>,
     ) -> Result<(), TinyAllocatorError> {
-        let record = AllocRecord {
-            vm_address,
-            vm_generation,
-            native_handle,
-            kind,
-            byte_len: size,
-            capacity: size,
-            arena_id: 0,
-            log_seq: seq,
-            live: true,
-        };
+        let vm_address = record.vm_address;
+        let vm_generation = record.vm_generation;
+        let kind = record.kind;
+        let size = record.byte_len;
+        let seq = record.log_seq;
         self.table.insert(record).map_err(|_e| {
             // AlreadyExists is the only error `insert` can return; other
             // variants cannot occur here.

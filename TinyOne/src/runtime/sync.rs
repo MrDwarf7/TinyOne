@@ -4,6 +4,8 @@ use std::thread::{self, ThreadId};
 
 use crate::{Result, TinyOneError, Value};
 
+type ThreadResult = (Result<Value>, Vec<u8>);
+
 #[derive(Debug)]
 pub(crate) struct TinyMutex {
     // None = unlocked; Some(tid) = locked by thread tid
@@ -54,6 +56,7 @@ impl TinyMutex {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn is_locked(&self) -> bool {
         self.state
             .lock()
@@ -63,7 +66,7 @@ impl TinyMutex {
 }
 
 pub(crate) struct TinyThreadHandle {
-    pub(crate) inner: Mutex<Option<std::thread::JoinHandle<(Result<Value>, Vec<u8>)>>>,
+    pub(crate) inner: Mutex<Option<std::thread::JoinHandle<ThreadResult>>>,
 }
 
 impl fmt::Debug for TinyThreadHandle {
@@ -73,7 +76,7 @@ impl fmt::Debug for TinyThreadHandle {
 }
 
 impl TinyThreadHandle {
-    pub(crate) fn new(handle: std::thread::JoinHandle<(Result<Value>, Vec<u8>)>) -> Arc<Self> {
+    pub(crate) fn new(handle: std::thread::JoinHandle<ThreadResult>) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Some(handle)),
         })

@@ -357,10 +357,10 @@ fn jit_cache_reuses_straightline_dispatch_and_heap_programs() {
         let mut cache = JitCache::new();
 
         assert!(cache.is_empty(), "{name}");
-        let first = cache.compile(&*program).expect("jit compile") as *const _;
+        let first = cache.compile(&program).expect("jit compile") as *const _;
         assert_eq!(1, cache.len(), "{name}");
 
-        let second = cache.compile(&*program).expect("jit compile") as *const _;
+        let second = cache.compile(&program).expect("jit compile") as *const _;
         assert_eq!(first, second, "{name}");
         assert_eq!(1, cache.len(), "{name}");
     }
@@ -376,7 +376,7 @@ fn jit_compiles_to_lowered_bytecode_listing() {
     )
     .expect("source should compile");
     let mut cache = JitCache::new();
-    let compiled = cache.compile(&*program).expect("jit compile");
+    let compiled = cache.compile(&program).expect("jit compile");
 
     assert_eq!(program.fingerprint(), compiled.fingerprint());
     assert!(compiled.listing().contains(".chunk 0 main"));
@@ -393,7 +393,7 @@ fn write_jit_listing_emits_inspectable_file() {
     let temp = TestDir::new("jit-listing");
     let path = temp.path().join("program.tjit");
 
-    write_jit_listing(&*program, &path).expect("write jit listing");
+    write_jit_listing(&program, &path).expect("write jit listing");
     let listing = fs::read_to_string(path).expect("read jit listing");
 
     assert!(listing.contains("tinyone adaptive-jit"));
@@ -420,7 +420,7 @@ fn jit_quickens_hot_back_edges_after_warm_runs() {
     for _ in 0..2 {
         let mut stdout = Vec::new();
         cache
-            .run_program(&*program, &mut stdout, Vec::new())
+            .run_program(&program, &mut stdout, Vec::new())
             .expect("jit should run");
         assert_eq!("2016\n", String::from_utf8(stdout).expect("UTF-8 output"));
     }
@@ -430,7 +430,7 @@ fn jit_quickens_hot_back_edges_after_warm_runs() {
     assert!(stats.hot_ranges >= 1);
     assert!(stats.quickened_ops > 0);
 
-    let listing = cache.compile(&*program).expect("jit compile").listing();
+    let listing = cache.compile(&program).expect("jit compile").listing();
     assert!(listing.contains("add.int"));
     assert!(listing.contains("jmp.hot"));
 }
@@ -890,7 +890,7 @@ fn imports_and_artifact_roundtrip() {
     );
 
     let artifact_path = temp.path().join("main.tobc.json");
-    write_artifact(&*program, &artifact_path).expect("write artifact");
+    write_artifact(&program, &artifact_path).expect("write artifact");
     let loaded = Arc::new(load_artifact(&artifact_path).expect("load artifact"));
     assert_eq!(program.fingerprint(), loaded.fingerprint());
 

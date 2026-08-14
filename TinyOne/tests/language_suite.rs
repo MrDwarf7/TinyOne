@@ -170,7 +170,7 @@ fn check_pass_fixture(fixture: &Fixture) -> FixtureResult {
         }
     };
 
-    let inspection = testing::inspect_program(&*program);
+    let inspection = testing::inspect_program(&program);
     if inspection.fingerprint.is_empty() {
         return FixtureResult::fail(
             &fixture.path,
@@ -179,7 +179,7 @@ fn check_pass_fixture(fixture: &Fixture) -> FixtureResult {
         );
     }
 
-    let jit_inspection = testing::inspect_jit(&*program);
+    let jit_inspection = testing::inspect_jit(&program);
     if inspection.fingerprint != jit_inspection.fingerprint {
         return FixtureResult::fail(
             &fixture.path,
@@ -282,14 +282,14 @@ fn check_runtime_fail_fixture(fixture: &Fixture) -> FixtureResult {
             }
             Err(error) => error.to_string(),
         };
-        if let Some(expected) = fixture.expected_error.as_deref() {
-            if !error.contains(expected) {
-                return FixtureResult::fail(
-                    &fixture.path,
-                    format!("{mode} runtime diagnostic"),
-                    format!("expected error containing {expected:?}, got {error:?}"),
-                );
-            }
+        if let Some(expected) = fixture.expected_error.as_deref()
+            && !error.contains(expected)
+        {
+            return FixtureResult::fail(
+                &fixture.path,
+                format!("{mode} runtime diagnostic"),
+                format!("expected error containing {expected:?}, got {error:?}"),
+            );
         }
     }
 

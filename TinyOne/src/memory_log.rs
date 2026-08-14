@@ -216,9 +216,7 @@ impl LogInner {
     }
 
     fn clear(&mut self) {
-        for slot in &mut self.buf {
-            *slot = None;
-        }
+        self.buf.fill(None);
         self.head = 0;
         self.len = 0;
     }

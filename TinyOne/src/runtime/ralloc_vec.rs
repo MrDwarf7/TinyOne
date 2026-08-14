@@ -56,6 +56,7 @@ impl RallocVec {
     /// Real physical bytes currently reserved (>= `len() * stride`) — for
     /// `TinyAllocator` bookkeeping, which tracks actual Ralloc arena usage,
     /// not the logical element count.
+    #[cfg(test)]
     pub(crate) fn byte_capacity(&self) -> usize {
         self.bytes.len()
     }
