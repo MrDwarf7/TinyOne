@@ -41,9 +41,17 @@ jobs:
         shell: bash
         run: |
           cargo fmt --manifest-path TinyOne/Cargo.toml -- --check
+          cargo fmt --manifest-path Ralloc/Cargo.toml --all --check
+          cargo fmt --manifest-path xtask/Cargo.toml --all --check
           cargo check --manifest-path TinyOne/Cargo.toml
-          cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets
+          cargo check --manifest-path Ralloc/Cargo.toml --workspace --all-targets
+          cargo check --manifest-path xtask/Cargo.toml --all-targets
+          cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path Ralloc/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path TinyOne/Cargo.toml
+          cargo test --manifest-path Ralloc/Cargo.toml --workspace
+          cargo test --manifest-path xtask/Cargo.toml
           cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks --test language_suite
 
       - name: Rust checks and tests (Windows)
@@ -51,9 +59,17 @@ jobs:
         shell: pwsh
         run: |
           cargo fmt --manifest-path TinyOne/Cargo.toml -- --check
+          cargo fmt --manifest-path Ralloc/Cargo.toml --all --check
+          cargo fmt --manifest-path xtask/Cargo.toml --all --check
           cargo check --manifest-path TinyOne/Cargo.toml
-          cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets
+          cargo check --manifest-path Ralloc/Cargo.toml --workspace --all-targets
+          cargo check --manifest-path xtask/Cargo.toml --all-targets
+          cargo clippy --manifest-path TinyOne/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path Ralloc/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path TinyOne/Cargo.toml
+          cargo test --manifest-path Ralloc/Cargo.toml --workspace
+          cargo test --manifest-path xtask/Cargo.toml
           cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks --test language_suite
 
       - name: ABI drift

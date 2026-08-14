@@ -2,6 +2,9 @@
 name = "ralloc"
 version = "0.1.0"
 edition = "2024"
+description = "Fixed-capacity arena allocator backing the TinyLang v1 runtime"
+license-file = "../License.rst"
+repository = "https://github.com/ConnerAdamsMaine/TinyOne"
 
 [workspace]
 members = ["c-api", "c-static"]

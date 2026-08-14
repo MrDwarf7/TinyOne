@@ -37,6 +37,11 @@ fn command_plans_use_current_repo_paths() {
     assert!(
         tools
             .iter()
+            .all(|cmd| cmd.starts_with("uv run --no-project python "))
+    );
+    assert!(
+        tools
+            .iter()
             .any(|cmd| cmd.contains("Tools.test_abi_manifest"))
     );
     assert!(tools.iter().any(|cmd| cmd.contains("Tools.test_hash")));

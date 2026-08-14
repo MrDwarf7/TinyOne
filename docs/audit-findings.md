@@ -1,20 +1,40 @@
-## Audit Findings
+# V1 Audit Findings
 
-A. FFI Panic Boundary: OK Rust/src/ffi.rs:107-147 — `respond()` wraps `response_cstring()` in `catch_unwind(AssertUnwindSafe(...))` (line 108); `response_cstring()` wraps the callback in a second `catch_unwind(AssertUnwindSafe(callback))` (line 115); `fallback_response()` uses a static byte literal with `from_vec_with_nul_unchecked` (lines 142-147); `cstring_or_fallback()` uses `unwrap_or_else` (line 139); all `extern "C"` functions delegate exclusively to `respond()`. `grep -n 'unwrap()' ffi.rs` yields zero matches.
+This audit covers the TinyOne v1 implementation under `TinyOne/`. References
+use repository-relative paths so they remain valid as line numbers change.
 
-B. C String Ownership: OK `tinylang.h` states callers MUST use `tinyone_free_string`, NOT `free()`; `tinyone_free_string(NULL)` is documented as a no-op; non-null parameters must be valid NUL-terminated UTF-8 strings; and `inputs_json` is nullable. ABI version 1 is declared stable and is available through both `TINYONE_ABI_VERSION` and `tinyone_abi_version()`.
+## Confirmed boundaries
 
-C. Panic Paths: OK — `jit_operand` (Rust/src/jit/op.rs:149-152) delegates to `checked_non_negative_usize` which returns `Err` for negative or overflow, no panic; `jit/chunk.rs` has zero `.unwrap()` or `as usize` matches; `b_str_char_at` (Rust/src/runtime/stdlib.rs:334-351) checks `index < 0`, then uses `usize::try_from(index).map_err(...)`, then bounds-checks via `.nth(index).ok_or_else(...)`. Only `.unwrap()` occurrences surviving the grep filter are in `runtime/typing.rs` lines 413, 417, 421, 429, 431 — all inside a `#[test]` mod, not production paths.
+- **FFI panic containment:** all exported JSON entry points in
+  `TinyOne/src/ffi.rs` funnel through the guarded response path. The committed
+  C header defines string ownership, nullability, input limits, and the ABI
+  version check.
+- **Verified execution:** public VM/JIT dispatch verifies bytecode before using
+  unchecked internal constructors. Artifact parsing applies collection and
+  verifier budgets before execution.
+- **Recoverable frame allocation:** VM, JIT, recursive function, and spawned
+  thread frames use `TinyMemory::try_new`, preserving Ralloc exhaustion and
+  size overflow as `TinyOneError` values. The explicitly infallible
+  `TinyMemory::new` and `Clone` APIs document their panic behavior; embedders
+  can use `try_new` and `try_clone`.
+- **Mutex ownership:** `TinyMutex::unlock` rejects unlocked mutexes and calls
+  from threads other than the recorded owner.
+- **Heap generations:** freeing makes a slot vacant; its generation increments
+  immediately before the slot is reused. Heap references and raw pointers are
+  validated against the current generation.
+- **Closed ABI response shapes:** ABI version 1 success and error objects reject
+  unknown keys. The committed schema and exact-key contract tests cover every
+  exported JSON endpoint.
 
-D. Verified Execution: OK — `BytecodeVerifier::verify(program)?` is called at the top of every public dispatch path: `run_program_with_env` (runner.rs:42), `run_program_report` (runner.rs:63), `VM::new` (runtime/vm.rs:47), `JitProgram::compile` (jit/program.rs:24), `JitCache::compile` (jit/cache.rs:46), `JitCache::run_program` (jit/cache.rs:82), `JitCache::run_program_with_env` (jit/cache.rs:95), `JitCache::run_program_report` (jit/cache.rs:106), and `Program::from_artifact` (bytecode/artifact.rs:179). `VerifiedProgram::verify` (bytecode/program.rs:136-138) calls `crate::BytecodeVerifier::verify(&program)?` before wrapping.
+## Intentional constraints
 
-E. Artifact Limits: OK Rust/src/bytecode/artifact.rs:8-19 — Constants present with exact values: `MAX_ARTIFACT_BYTES = 8 * 1024 * 1024` (line 8), `MAX_FUNCTIONS = 4_096` (line 10), `MAX_CODE_OPS = 65_536` (line 12), `MAX_TOTAL_CODE_OPS = 262_144` (line 13), `MAX_STRINGS = 65_536` (line 14), `MAX_SLOT_COUNT = 65_536` (line 16), `MAX_MODULES = 256` (line 17), `MAX_MODULE_IMPORTS = 4_096` (line 18), `MAX_MODULE_EXPORTS = 4_096` (line 19). `from_artifact` calls `reject_over_limit` via `expect_array_limited`/`expect_string_list_limited` BEFORE any `.collect()` for functions (line 72), slot_count (line 74), strings (line 76), fields (line 77), structs (line 78); total code ops checked inside the iterator with `checked_add` + `reject_over_limit` (lines 88-91, 107-110) before the collect completes. `reject_over_limit` returns `Err`, confirmed by its callers propagating `?`.
-
-F. Verifier Limits: OK Rust/src/bytecode/verifier.rs:5-8 — `MAX_VERIFIER_STEPS = 10_000_000` (line 5), `MAX_STACK_DEPTH = 65_536` (line 6), `MAX_VERIFIER_FUNCTIONS = 4_096` (line 7), `MAX_VERIFIER_TOTAL_OPS = 262_144` (line 8). BFS while-loop in `verify_chunk` increments `steps` each iteration and checks `steps > MAX_VERIFIER_STEPS` returning `Err` (lines 96-101). `next_depth` checks `depth > MAX_STACK_DEPTH` and returns `Err` (lines 318-322). `verify_program_budget` checks function count against `MAX_VERIFIER_FUNCTIONS` (line 48) and total ops against `MAX_VERIFIER_TOTAL_OPS` (line 66) before BFS begins.
-
-G. FS Budget: OK Rust/src/runtime/stdlib.rs:793-875 — `b_fs_read`: `std::fs::metadata` called first (line 795), `meta.len() > crate::MAX_BUFFER_BYTES as u64` → Err before `File::open` (lines 797-803), `.take((MAX_BUFFER_BYTES + 1) as u64)` caps the read (line 808), post-read `bytes.len() > crate::MAX_BUFFER_BYTES` check as second guard (lines 811-817). `b_fs_list_dir`: `MAX_FS_LIST_DIR_ENTRIES = 65_536` at line 20, entry count checked with `sorted.len() >= MAX_FS_LIST_DIR_ENTRIES` before inserting (lines 853-857), `name_bytes` accumulated with `checked_add` (line 860) and checked against `MAX_BUFFER_BYTES` (lines 862-867), all IO errors mapped via `.map_err(|error| TinyOneError::runtime(...))`, no `.unwrap()`.
-
-H. usize Conversion: OK — `expect_usize` (Rust/src/bytecode/artifact.rs:250-259) calls `.as_u64()` then `usize::try_from(v).map_err(...)`. `grep -n 'as usize'` in artifact.rs, artifact_io.rs, jit/op.rs, and jit/chunk.rs all yield zero matches.
-
-GAPS:
-none
+- Spawned function bodies execute on the portable VM backend even when their
+  parent is running in JIT mode. Threading integration tests exercise both
+  parent modes.
+- The C smoke test requires a built debug dynamic library and may skip when the
+  library is unavailable. Rust-level ABI contract tests remain unconditional.
+- A bare `HeapRef` does not contain its heap object's type. Consequently,
+  `TypeKind::try_from_runtime_value` returns `None` for heap references; callers
+  must resolve those through the owning heap. The original
+  `TypeKind::from_runtime_value` signature is retained for compatibility and
+  panics when given a heap reference.

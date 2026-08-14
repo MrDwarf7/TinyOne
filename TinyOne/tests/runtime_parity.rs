@@ -1035,6 +1035,11 @@ fn memory_allocation_reset_and_bounds() {
 }
 
 #[test]
+fn fallible_memory_allocation_reports_size_overflow() {
+    assert_error_contains(TinyMemory::try_new(usize::MAX), "VM memory size overflow");
+}
+
+#[test]
 fn verifier_rejects_stack_underflow_before_runtime() {
     let program = minimal_program(vec![
         Instr::new(Op::Print, 0, 0),
@@ -1137,7 +1142,8 @@ fn all_43_runtime_value_variants_are_representable() {
 }
 
 #[test]
-fn type_kind_from_runtime_value_round_trips() {
+#[allow(deprecated)]
+fn type_kind_runtime_value_conversion_preserves_compatibility() {
     let cases: &[(RuntimeValue, TypeKind)] = &[
         (RuntimeValue::Unit, TypeKind::Unit),
         (RuntimeValue::Bool(true), TypeKind::Bool),
@@ -1186,11 +1192,30 @@ fn type_kind_from_runtime_value_round_trips() {
 
     for (value, expected_kind) in cases {
         assert_eq!(
+            TypeKind::try_from_runtime_value(value),
+            Some(*expected_kind),
+            "try_from_runtime_value({value:?}) should return {expected_kind:?}"
+        );
+        assert_eq!(
             TypeKind::from_runtime_value(value),
             *expected_kind,
-            "from_runtime_value({value:?}) should return {expected_kind:?}"
+            "the compatibility API should retain its original return type"
         );
     }
+
+    let program = compile_source("let value = \"heap\"").expect("heap source should compile");
+    let (_, memory) = run_compiled(&program, "vm", Vec::new()).expect("heap source should run");
+    assert!(matches!(memory.first(), Some(RuntimeValue::Heap(_))));
+    assert_eq!(TypeKind::try_from_runtime_value(&memory[0]), None);
+}
+
+#[test]
+#[allow(deprecated)]
+#[should_panic(expected = "resolve heap references through the owning heap")]
+fn compatibility_type_conversion_rejects_heap_references() {
+    let program = compile_source("let value = \"heap\"").expect("heap source should compile");
+    let (_, memory) = run_compiled(&program, "vm", Vec::new()).expect("heap source should run");
+    TypeKind::from_runtime_value(&memory[0]);
 }
 
 #[test]

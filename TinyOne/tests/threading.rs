@@ -1,4 +1,7 @@
-use tinyone::run_source;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tinyone::{compile_source, run_program_with_env, run_source};
 
 #[test]
 fn thread_join_collects_stdout_in_order() {
@@ -14,18 +17,24 @@ let r1 = thread_join(t1)
 let r2 = thread_join(t2)
 print r1 + r2
 "#;
-    let mut out = Vec::new();
-    run_source(src, "vm", &mut out, Vec::new()).unwrap();
-    let s = String::from_utf8(out).unwrap();
-    let lines: Vec<&str> = s.trim().lines().collect();
-    // Last line must be 3 (r1 + r2 = 1 + 2)
-    assert_eq!(
-        lines.last(),
-        Some(&"3"),
-        "expected last line to be 3, got: {s:?}"
-    );
-    // All lines: the two thread prints and the final sum
-    assert_eq!(lines.len(), 3, "expected 3 lines total, got: {s:?}");
+    for mode in ["vm", "jit"] {
+        let mut out = Vec::new();
+        run_source(src, mode, &mut out, Vec::new()).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = s.trim().lines().collect();
+        // Last line must be 3 (r1 + r2 = 1 + 2)
+        assert_eq!(
+            lines.last(),
+            Some(&"3"),
+            "expected last line to be 3 in {mode}, got: {s:?}"
+        );
+        // All lines: the two thread prints and the final sum
+        assert_eq!(
+            lines.len(),
+            3,
+            "expected 3 lines total in {mode}, got: {s:?}"
+        );
+    }
 }
 
 #[test]
@@ -37,14 +46,16 @@ let r1 = thread_join(t)
 let r2 = thread_join(t)
 print 1
 "#;
-    let mut out = Vec::new();
-    let result = run_source(src, "vm", &mut out, Vec::new());
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(
-        msg.contains("already joined"),
-        "expected 'already joined' in: {msg}"
-    );
+    for mode in ["vm", "jit"] {
+        let mut out = Vec::new();
+        let result = run_source(src, mode, &mut out, Vec::new());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("already joined"),
+            "expected 'already joined' in {mode}: {msg}"
+        );
+    }
 }
 
 #[test]
@@ -56,11 +67,16 @@ fn add(a, b) { return a + b }
 let t = thread_spawn("add", 1)
 let r = thread_join(t)
 "#;
-    let mut out = Vec::new();
-    let result = run_source(src, "vm", &mut out, Vec::new());
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("expects 2"), "expected arity error in: {msg}");
+    for mode in ["vm", "jit"] {
+        let mut out = Vec::new();
+        let result = run_source(src, mode, &mut out, Vec::new());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("expects 2"),
+            "expected arity error in {mode}: {msg}"
+        );
+    }
 }
 
 #[test]
@@ -83,9 +99,11 @@ let r1 = thread_join(t1)
 let r2 = thread_join(t2)
 print atomic_load(c)
 "#;
-    let mut out = Vec::new();
-    run_source(src, "vm", &mut out, Vec::new()).unwrap();
-    assert_eq!(String::from_utf8(out).unwrap().trim(), "2");
+    for mode in ["vm", "jit"] {
+        let mut out = Vec::new();
+        run_source(src, mode, &mut out, Vec::new()).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap().trim(), "2", "{mode}");
+    }
 }
 
 #[test]
@@ -102,17 +120,74 @@ let r1 = thread_join(t1)
 let r2 = thread_join(t2)
 print atomic_load(a)
 "#;
-    let mut out = Vec::new();
-    run_source(src, "vm", &mut out, Vec::new()).unwrap();
-    assert_eq!(String::from_utf8(out).unwrap().trim(), "20");
+    for mode in ["vm", "jit"] {
+        let mut out = Vec::new();
+        run_source(src, mode, &mut out, Vec::new()).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap().trim(), "20", "{mode}");
+    }
 }
 
 #[test]
 fn thread_spawn_unknown_function_errors() {
     let src = r#"let t = thread_spawn("does_not_exist")"#;
-    let mut out = Vec::new();
-    let result = run_source(src, "vm", &mut out, Vec::new());
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("not found"), "expected 'not found' in: {msg}");
+    for mode in ["vm", "jit"] {
+        let mut out = Vec::new();
+        let result = run_source(src, mode, &mut out, Vec::new());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("not found"),
+            "expected 'not found' in {mode}: {msg}"
+        );
+    }
+}
+
+#[test]
+fn thread_functions_read_a_snapshot_of_top_level_globals() {
+    let src = r#"
+let base = 40
+fn worker() { return base + 2 }
+let thread = thread_spawn("worker")
+let result = thread_join(thread)
+print result
+"#;
+    for mode in ["vm", "jit"] {
+        let mut out = Vec::new();
+        run_source(src, mode, &mut out, Vec::new()).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap().trim(), "42", "{mode}");
+    }
+}
+
+#[test]
+fn thread_functions_inherit_system_arguments_and_environment() {
+    let src = r#"
+fn worker() {
+  print sys_argc()
+  print sys_argv(0)
+  print sys_env_get("TINY_TEST")
+  return 0
+}
+let thread = thread_spawn("worker")
+let result = thread_join(thread)
+"#;
+    let program = compile_source(src).unwrap();
+    for mode in ["vm", "jit"] {
+        let mut out = Vec::new();
+        let mut env = HashMap::new();
+        env.insert("TINY_TEST".to_string(), "present".to_string());
+        run_program_with_env(
+            Arc::clone(&program),
+            mode,
+            &mut out,
+            Vec::new(),
+            vec!["argument".to_string()],
+            env,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "1\nargument\npresent\n",
+            "{mode}"
+        );
+    }
 }

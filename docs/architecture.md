@@ -53,7 +53,7 @@ the VM or JIT backend.
 ## Module Map
 
 ```
-Rust/src/
+TinyOne/src/
 ├── lib.rs              Public re-exports; feature gates for testing
 ├── api.rs              compile_source, compile_file, lex_source, optimize_program
 ├── cli.rs              CLI argument parsing and dispatch
@@ -237,8 +237,8 @@ catches use-after-free and prevents a new allocation at the same address from
 being confused with the old object.
 
 `RawPointer { address, kind, index, field, generation, cast }` derives from a
-`HeapRef` and adds a kind tag (`"array"`, `"buffer"`, `"struct"`, `"cell"`,
-`"object"`) plus an element index or field name. Before raw-pointer use, the
+`HeapRef` and adds a kind tag (`"null"`, `"object"`, `"array"`, `"buffer"`,
+`"field"`) plus an element index or field name. Before raw-pointer use, the
 runtime validates the base heap reference (generation check), the kind, and the
 index or offset bounds.
 

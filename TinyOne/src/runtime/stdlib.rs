@@ -674,7 +674,11 @@ pub fn b_atomic_add(context: &TinyRuntimeContext, target: &Value, delta: &Value)
     }
 }
 
-pub fn b_thread_spawn(context: &mut TinyRuntimeContext, args: Vec<Value>) -> Result<Value> {
+pub fn b_thread_spawn(
+    context: &mut TinyRuntimeContext,
+    global_memory: &TinyMemory,
+    args: Vec<Value>,
+) -> Result<Value> {
     let fn_name = {
         let heap = context.heap();
         let obj = heap.get(&args[0])?;
@@ -713,13 +717,17 @@ pub fn b_thread_spawn(context: &mut TinyRuntimeContext, args: Vec<Value>) -> Res
 
     let verified = crate::VerifiedProgram::verify_arc(Arc::clone(&program_arc))?;
     let heap_arc = Arc::clone(&context.heap_arc);
+    let thread_globals = global_memory.try_clone()?;
+    let sys_args = context.sys_args.clone();
+    let sys_env = context.sys_env.clone();
 
     let handle = std::thread::spawn(move || {
-        let slot_count = verified.program().functions[fn_index].slot_count;
         let mut thread_ctx = TinyRuntimeContext::with_heap(heap_arc);
         thread_ctx.program_arc = Some(Arc::clone(&program_arc));
-        let vm = VM::new_unchecked_with_context(&verified, TinyMemory::new(slot_count), thread_ctx);
+        thread_ctx.set_sys_args(sys_args);
+        thread_ctx.set_sys_env(sys_env);
         let mut thread_stdout: Vec<u8> = Vec::new();
+        let vm = VM::new_unchecked_with_context(&verified, thread_globals, thread_ctx);
         let result = vm.run_function_by_index(fn_index, fn_args, &mut thread_stdout);
         (result, thread_stdout)
     });

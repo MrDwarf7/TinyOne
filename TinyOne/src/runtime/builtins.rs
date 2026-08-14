@@ -1,16 +1,18 @@
 use crate::runtime::stdlib;
 use crate::{
-    BUILTINS, HeapData, MAX_ARRAY_LENGTH, Result, TinyOneError, TinyRuntimeContext, VALUE_BYTES,
-    Value, checked_bounded_len, checked_payload_bytes, expect_int, expect_pointer, expect_string,
-    runtime_array_pop, runtime_array_push, runtime_cast_pointer, runtime_make_buffer,
-    runtime_make_field_pointer, runtime_make_pointer, runtime_pointer_add, runtime_pointer_address,
-    runtime_pointer_at, runtime_pointer_base, runtime_pointer_eq, runtime_pointer_field,
-    runtime_pointer_kind, runtime_pointer_load, runtime_pointer_offset, runtime_pointer_store,
-    runtime_pointer_type, runtime_read_uint, runtime_write_uint, validate_pointer_base,
+    BUILTINS, HeapData, MAX_ARRAY_LENGTH, Result, TinyMemory, TinyOneError, TinyRuntimeContext,
+    VALUE_BYTES, Value, checked_bounded_len, checked_payload_bytes, expect_int, expect_pointer,
+    expect_string, runtime_array_pop, runtime_array_push, runtime_cast_pointer,
+    runtime_make_buffer, runtime_make_field_pointer, runtime_make_pointer, runtime_pointer_add,
+    runtime_pointer_address, runtime_pointer_at, runtime_pointer_base, runtime_pointer_eq,
+    runtime_pointer_field, runtime_pointer_kind, runtime_pointer_load, runtime_pointer_offset,
+    runtime_pointer_store, runtime_pointer_type, runtime_read_uint, runtime_write_uint,
+    validate_pointer_base,
 };
 
 pub(crate) fn runtime_call_builtin(
     context: &mut TinyRuntimeContext,
+    global_memory: &TinyMemory,
     builtin_index: usize,
     args: Vec<Value>,
 ) -> Result<Value> {
@@ -244,7 +246,7 @@ pub(crate) fn runtime_call_builtin(
         "u16" => stdlib::b_int_cast(&args[0], crate::TypeKind::U16, "u16"),
         "u32" => stdlib::b_int_cast(&args[0], crate::TypeKind::U32, "u32"),
         "assert" => stdlib::b_assert(&args[0], args.get(1), context),
-        "thread_spawn" => stdlib::b_thread_spawn(context, args),
+        "thread_spawn" => stdlib::b_thread_spawn(context, global_memory, args),
         "thread_join" => stdlib::b_thread_join(context, args),
         "fp8" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp8, "fp8"),
         "fp16" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp16, "fp16"),
