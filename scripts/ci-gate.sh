@@ -6,6 +6,8 @@ cd "$ROOT_DIR"
 
 MANIFEST="TinyOne/Cargo.toml"
 TIMEOUT_SECONDS="${CI_GATE_TIMEOUT_SECONDS:-300}"
+TARGET_DIR="${CARGO_TARGET_DIR:-TinyOne/target}"
+BENCH_BIN="$TARGET_DIR/release/tinylang-bench"
 
 failures=()
 skips=()
@@ -170,7 +172,7 @@ if should_skip "CI_GATE_SKIP_BENCH_SMOKE"; then
   skips+=("bench smoke skipped by CI_GATE_SKIP_BENCH_SMOKE")
 elif [[ "$release_built" == "1" ]]; then
   run_gate "bench smoke" "CI_GATE_SKIP_BENCH_SMOKE" \
-    TinyOne/target/release/tinylang-bench --quick --repeats 1 --filter runtime.vm_straightline
+    "$BENCH_BIN" --quick --repeats 1 --filter runtime.vm_straightline
 else
   printf '\n==> SKIP bench smoke (release binary did not build)\n'
   skips+=("bench smoke skipped because release binary did not build")

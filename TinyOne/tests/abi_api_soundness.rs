@@ -612,7 +612,10 @@ int main(void) {
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.parent().expect("Rust crate has repo parent");
-    let target_dir = manifest_dir.join("target").join("debug");
+    let sandbox_worker = Path::new(env!("CARGO_BIN_EXE_tinyone-sandbox-worker"));
+    let target_dir = sandbox_worker
+        .parent()
+        .expect("Cargo sandbox worker path has a parent");
     let dylib = target_dir.join(format!(
         "{}tinyone{}",
         std::env::consts::DLL_PREFIX,
@@ -640,7 +643,7 @@ int main(void) {
         .arg(repo_root)
         .arg(&source)
         .arg("-L")
-        .arg(&target_dir)
+        .arg(target_dir)
         .arg(format!("-Wl,-rpath,{}", target_dir.display()))
         .arg("-ltinyone")
         .arg("-o")
@@ -654,8 +657,12 @@ int main(void) {
         String::from_utf8_lossy(&compile.stderr)
     );
 
+    // Cargo exposes the exact executable built for each binary target to
+    // integration tests. Supplying it explicitly avoids relying on incidental
+    // target-directory layout, which differs between platforms and runners.
     let run = Command::new(&exe)
-        .env("LD_LIBRARY_PATH", &target_dir)
+        .env("LD_LIBRARY_PATH", target_dir)
+        .env("TINYONE_SANDBOX_WORKER", sandbox_worker)
         .output()
         .expect("run C FFI smoke");
     assert!(

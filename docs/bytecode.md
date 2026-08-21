@@ -314,17 +314,18 @@ variants:
 
 | Cold | Quickened | Effect |
 | --- | --- | --- |
-| `Add` | `AddInt` | Skips `Value` tag check; asserts integer |
+| `Add` | `AddInt` | Checked direct I64 path; generic fallback otherwise |
 | `Sub` | `SubInt` | Same |
 | `Mul` | `MulInt` | Same |
 | `Div` | `DivInt` | Same |
-| `Compare(op)` | `CompareInt(op)` | Same |
+| `Compare(op)` | `CompareInt(op)` | Direct I64 comparison; generic fallback otherwise |
 | `Jump(t)` | `JumpHot(t)` | Skips back-edge counter increment |
 | `JumpIfZero(t)` | `JumpIfZeroHot(t)` | Same |
 
 Quickening is in-place and permanent for the lifetime of the `JitProgram`.
-Programs with heterogeneous loop payloads (integers mixed with heap values) will
-receive the quickened jump ops even if the arithmetic ops do not qualify.
+Programs with heterogeneous loop payloads receive quickened ops too; arithmetic
+automatically falls back to the generic numeric implementation when operands
+are not both I64 values.
 
 The default hot-edge threshold is 8. `JitOptions` can select another `u16`
 threshold for `JitProgram::compile_with_options`, `JitCache::with_options`, or
@@ -335,6 +336,8 @@ the configured runner APIs; zero disables quickening.
 `JitCache` stores `JitProgram` instances keyed by fingerprint in a
 `HashMap<String, JitProgram>`. A cache hit reuses the compiled and potentially
 already-quickened program, so hot ranges from a previous run carry over.
+Source-based cache calls additionally reuse an exact-source `VerifiedProgram`;
+the first call still compiles and verifies normally.
 
 Compatibility methods accepting `Program` verify before insertion. The
 `compile_verified` and `run_verified_program*` methods accept the capability

@@ -80,6 +80,35 @@ fn read_i64(bytes: &[u8; ENCODED_VALUE_BYTES], offset: usize) -> i64 {
     i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
 }
 
+pub(crate) fn encode_i64(value: i64) -> [u8; ENCODED_VALUE_BYTES] {
+    let mut out = [0u8; ENCODED_VALUE_BYTES];
+    out[0] = TAG_I64;
+    write_i64(&mut out, OFF_SCALAR, value);
+    out
+}
+
+pub(crate) fn add_i64_in_place(bytes: &mut [u8; ENCODED_VALUE_BYTES], value: i64) -> Result<bool> {
+    if bytes[0] != TAG_I64 {
+        return Ok(false);
+    }
+    let next = read_i64(bytes, OFF_SCALAR)
+        .checked_add(value)
+        .ok_or_else(|| TinyOneError::runtime("Addition overflow"))?;
+    write_i64(bytes, OFF_SCALAR, next);
+    Ok(true)
+}
+
+pub(crate) fn sub_i64_in_place(bytes: &mut [u8; ENCODED_VALUE_BYTES], value: i64) -> Result<bool> {
+    if bytes[0] != TAG_I64 {
+        return Ok(false);
+    }
+    let next = read_i64(bytes, OFF_SCALAR)
+        .checked_sub(value)
+        .ok_or_else(|| TinyOneError::runtime("Subtraction overflow"))?;
+    write_i64(bytes, OFF_SCALAR, next);
+    Ok(true)
+}
+
 fn encode_pointer(out: &mut [u8; ENCODED_VALUE_BYTES], pointer: &RawPointer) -> Result<()> {
     write_u64(out, OFF_ADDRESS, pointer.address as u64);
     write_i64(out, OFF_INDEX, pointer.index);
@@ -136,8 +165,7 @@ pub(crate) fn encode_value(value: &Value) -> Result<[u8; ENCODED_VALUE_BYTES]> {
             out[OFF_SCALAR..OFF_SCALAR + 4].copy_from_slice(&v.to_le_bytes());
         }
         Value::I64(v) => {
-            out[0] = TAG_I64;
-            out[OFF_SCALAR..OFF_SCALAR + 8].copy_from_slice(&v.to_le_bytes());
+            return Ok(encode_i64(*v));
         }
         Value::U8(v) => {
             out[0] = TAG_U8;
@@ -261,6 +289,26 @@ mod tests {
             decoded, value,
             "round trip mismatch for {value:?} (decoded: {decoded:?})"
         );
+    }
+
+    #[test]
+    fn specialized_i64_updates_preserve_encoding_and_overflow_checks() {
+        let mut encoded = encode_i64(40);
+        assert!(add_i64_in_place(&mut encoded, 2).unwrap());
+        assert_eq!(decode_value(&encoded), Value::I64(42));
+        assert!(sub_i64_in_place(&mut encoded, 4).unwrap());
+        assert_eq!(decode_value(&encoded), Value::I64(38));
+
+        let mut maximum = encode_i64(i64::MAX);
+        assert!(add_i64_in_place(&mut maximum, 1).is_err());
+        assert_eq!(decode_value(&maximum), Value::I64(i64::MAX));
+    }
+
+    #[test]
+    fn specialized_i64_update_declines_other_value_kinds() {
+        let mut encoded = encode_value(&Value::I8(7)).unwrap();
+        assert!(!add_i64_in_place(&mut encoded, 1).unwrap());
+        assert_eq!(decode_value(&encoded), Value::I8(7));
     }
 
     #[test]

@@ -252,9 +252,10 @@ all ops in `[target, end)` that have a faster "hot" variant:
 | `Jump(target)` | `JumpHot(target)` |
 | `JumpIfZero(t)` | `JumpIfZeroHot(t)` |
 
-`*Int` variants skip the `Value` tag check and operate directly on the inner
-`i64`. `*Hot` variants skip the branch-counter increment. Quickening is
-in-place and irreversible within a run.
+`*Int` variants recognize the common `I64` pair once, perform checked
+arithmetic directly, and fall back to the generic numeric implementation for
+other value kinds. `*Hot` variants skip the branch-counter increment.
+Quickening is in-place and irreversible within a run.
 
 `JitOptions` configures this threshold for `JitProgram`, `JitCache`, and the
 configured runner APIs. Threshold zero disables quickening while retaining JIT
@@ -264,6 +265,10 @@ lowering and superinstructions.
 Programs are identified by their Blake2b512 fingerprint (truncated to 16 hex
 bytes). A `HashMap<String, JitProgram>` stores compiled programs. On a cache
 hit, quickened state from a previous run is preserved across repeated calls.
+`run_source` and `run_source_report` also retain the first verified compilation
+of each exact source string. A 16-byte content digest selects a collision
+bucket, then exact source equality is required before reuse; new or changed
+source is compiled and verified before entering either cache.
 
 Runtime maps retain insertion-ordered Ralloc entries and maintain a canonical
 key index for average constant-time `map_get`, `map_has`, and `map_set`
