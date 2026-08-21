@@ -429,6 +429,46 @@ Useful commands::
     cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
     ./TinyOne/target/release/tinylang-bench
     ./TinyOne/target/release/tinylang-bench --quick --repeats 1
+    ./TinyOne/target/release/tinylang-bench --filter runtime.jit
+    ./TinyOne/target/release/tinylang-bench --save-baseline tinyone-baseline.json
+    ./TinyOne/target/release/tinylang-bench --baseline tinyone-baseline.json
+
+The benchmark runner checks VM/JIT output parity before measuring and reports
+best time, mean time, coefficient of variation, and per-thread CPU work on both
+Windows and Linux. Windows uses scheduled thread cycles and thread CPU time;
+Linux uses ``CLOCK_THREAD_CPUTIME_ID`` plus the TSC cycle counter on x86/x86_64.
+Runtime rows reuse verified programs, keeping compiler and verifier work out of
+dispatch timings. Its paired rows are meant to make optimization work
+attributable: ``allocator.*`` isolates Ralloc,
+``compiler.file_modules_*`` compares full module compilation with a validated
+disk-cache hit, ``runtime.vm_*`` and ``runtime.jit_*`` compare execution tiers,
+and the paired ``runtime.jit_hot_loop_4096_*`` rows isolate the adaptive JIT's
+quickening benefit over a controlled 4,096-iteration loop. Collection and
+heap-churn rows exercise Ralloc-backed vectors, maps, generational slot reuse,
+and explicit frees. Run the suite from an optimized build; debug-profile timing
+is not representative.
+
+When Windows and WSL share this checkout through ``/mnt/c``, give Linux its
+own Cargo artifact directory before building or testing::
+
+    export CARGO_TARGET_DIR="$PWD/TinyOne/target/linux"
+
+The Linux benchmark binary is then
+``$CARGO_TARGET_DIR/release/tinylang-bench``. This keeps Linux and Windows
+binaries and Cargo fingerprints from overwriting each other while preserving
+the shared source worktree.
+
+The built-in cycle column does not count retired native instructions and Linux
+TSC cycles include descheduling time. On Linux, collect kernel hardware
+counters around a filtered row when instruction counts or branch behavior
+matter::
+
+    perf stat -e cycles,instructions,branches,branch-misses -- \
+      ./TinyOne/target/release/tinylang-bench \
+      --filter runtime.jit_hot_loop_4096 --skip-correctness
+
+See ``docs/performance.md`` for the workload map, measurement rules, and the
+current optimization priority order.
 
 Current state:
 

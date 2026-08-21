@@ -206,6 +206,7 @@ Key methods on `JitCache`:
 
 - `JitCache::new() -> JitCache` — create an empty cache
 - `cache.len() -> usize` — number of cached programs
+- `cache.source_cache_len() -> usize` — number of exact sources with a cached verified compilation
 - `cache.is_empty() -> bool` — true when the cache holds no programs
 - `cache.compile(program: &Program) -> Result<&JitProgram>` — compile and cache without running; verifies the program first
 - `cache.compile_verified(program: &VerifiedProgram) -> Result<&JitProgram>` — compile without duplicate verification or hashing
@@ -213,7 +214,7 @@ Key methods on `JitCache`:
 - `cache.run_verified_program(program, stdout, inputs) -> Result<TinyMemory>` — verified-token run path
 - `cache.run_program_report(program, stdout, inputs) -> Result<TinyRunReport>` — same, but includes heap statistics
 - `cache.run_program_with_env(program, stdout, inputs, sys_args, sys_env) -> Result<TinyMemory>` — run with explicit args and environment
-- `cache.run_source(source, stdout, inputs) -> Result<TinyMemory>` — compile source, then run via the cache
+- `cache.run_source(source, stdout, inputs) -> Result<TinyMemory>` — compile and verify new source, then reuse its verified compilation and JIT state on exact-source hits
 - `cache.run_source_report(source, stdout, inputs) -> Result<TinyRunReport>` — same, with heap statistics
 - `cache.stats() -> JitCacheStats` — aggregate stats across all cached programs
 

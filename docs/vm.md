@@ -77,15 +77,17 @@ When a counter reaches the configured threshold (**8** by default), the chunk pr
 
 | Cold op | Hot op | Difference |
 | --- | --- | --- |
-| `Add` | `AddInt` | Skips `Value` tag check; asserts integer |
+| `Add` | `AddInt` | Checked direct I64 path; generic fallback otherwise |
 | `Sub` | `SubInt` | Same |
 | `Mul` | `MulInt` | Same |
 | `Div` | `DivInt` | Same |
-| `Compare(op)` | `CompareInt(op)` | Same |
+| `Compare(op)` | `CompareInt(op)` | Direct I64 comparison; generic fallback otherwise |
 | `Jump(t)` | `JumpHot(t)` | Skips back-edge counter increment |
 | `JumpIfZero(t)` | `JumpIfZeroHot(t)` | Same |
 
-Quickening is **in-place and permanent** for the lifetime of the `JitProgram`. A loop that mixes integers and heap values will still receive quickened jump ops even if the arithmetic ops do not qualify.
+Quickening is **in-place and permanent** for the lifetime of the `JitProgram`.
+Mixed numeric loops remain correct because quickened arithmetic falls back to
+the generic implementation unless both operands are I64 values.
 
 `JitOptions::with_hot_back_edge_threshold` changes the threshold for direct JIT
 programs, caches, and configured runner calls. Threshold `0` disables
@@ -95,6 +97,12 @@ the same controls as `--jit-threshold N` and `--no-jit-quickening`.
 ### JitCache
 
 `JitCache` stores `JitProgram` instances keyed by their Blake2b512 program fingerprint (16 hex bytes). On a cache hit, the already-compiled and potentially already-quickened `JitProgram` is reused — hot ranges from a previous run carry over automatically.
+
+The source entry points keep a second cache of verified compilations. Source
+content is bucketed by a 16-byte Blake2 digest and compared byte-for-byte on a
+hit, so digest collisions cannot substitute a different program. This removes
+lexing, parsing, optimization, and verification from repeated
+`JitCache::run_source` calls without weakening first-run validation.
 
 Compatibility methods accepting raw `Program` values verify before insertion.
 `compile_verified` and the `run_verified_program*` methods preserve an earlier

@@ -38,6 +38,7 @@ Working on the TinyOne runtime implementation:
 - [Architecture](architecture.md) — pipeline overview, module map, stage details, key invariants
 - [Bytecode Reference](bytecode.md) — opcode table, artifact format, verifier rules, JIT tier
 - [VM and JIT Operation](vm.md) — dispatch loop, frame model, quickening lifecycle, JitCache
+- [Performance Workflow](performance.md) — Windows/Linux counters, workloads, baselines, priorities
 - [Memory Model](memory-model.md) — heap slab, generation tags, ownership rules, resource limits
 - [Contributing Guide](contributing.md) — build, test, adding features, builtins, and stdlib modules
 - [v2 Roadmap](v2-roadmap.md) — current language-generation commitments and implementation tracks
@@ -67,6 +68,7 @@ keep old implementations or all historical language versions available forever.
 | [`ffi/index.md`](ffi/index.md) | FFI area navigation |
 | [`ffi/rust-api.md`](ffi/rust-api.md) | Rust crate public API: compile, run, JIT, artifacts, verification |
 | [`memory-model.md`](memory-model.md) | Heap slab, HeapRef generation validation, ownership rules, limits |
+| [`performance.md`](performance.md) | Cross-platform benchmark workflow, workload map, optimization priorities |
 | [`stdlib.md`](stdlib.md) | Phase-1 core builtins and Phase-2 stdlib bridge reference |
 | [`syntax/expressions.md`](syntax/expressions.md) | Operators, precedence table, arithmetic, comparisons, unsafe gate |
 | [`syntax/index.md`](syntax/index.md) | Syntax area navigation |

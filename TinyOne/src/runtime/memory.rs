@@ -1,6 +1,6 @@
 use crate::runtime::value_codec::{self, ENCODED_VALUE_BYTES};
 use crate::tiny_allocator::RallocBytes;
-use crate::{Result, TinyOneError, Value, runtime_add, runtime_sub};
+use crate::{Result, TinyOneError, Value, runtime_add_int, runtime_sub_int};
 
 /// VM locals/globals backed by Ralloc-owned storage.
 ///
@@ -70,7 +70,8 @@ impl TinyMemory {
     }
 
     pub(crate) fn store_int(&mut self, slot: usize, value: i64) -> Result<()> {
-        self.store(slot, Value::I64(value))
+        *self.slot_bytes_mut(slot)? = value_codec::encode_i64(value);
+        Ok(())
     }
 
     fn update_int_slot(
@@ -84,11 +85,17 @@ impl TinyMemory {
     }
 
     pub(crate) fn add_int(&mut self, slot: usize, value: i64) -> Result<()> {
-        self.update_int_slot(slot, value, runtime_add)
+        if value_codec::add_i64_in_place(self.slot_bytes_mut(slot)?, value)? {
+            return Ok(());
+        }
+        self.update_int_slot(slot, value, runtime_add_int)
     }
 
     pub(crate) fn sub_int(&mut self, slot: usize, value: i64) -> Result<()> {
-        self.update_int_slot(slot, value, runtime_sub)
+        if value_codec::sub_i64_in_place(self.slot_bytes_mut(slot)?, value)? {
+            return Ok(());
+        }
+        self.update_int_slot(slot, value, runtime_sub_int)
     }
 
     pub fn snapshot(&self) -> Vec<Value> {
@@ -122,6 +129,14 @@ impl TinyMemory {
         }
         let start = slot * ENCODED_VALUE_BYTES;
         Ok(start..start + ENCODED_VALUE_BYTES)
+    }
+
+    fn slot_bytes_mut(&mut self, slot: usize) -> Result<&mut [u8; ENCODED_VALUE_BYTES]> {
+        let range = self.slot_range(slot)?;
+        let bytes = self.bytes.as_mut().unwrap().as_mut_slice();
+        Ok((&mut bytes[range])
+            .try_into()
+            .expect("VM slot width is fixed"))
     }
 }
 
