@@ -81,6 +81,27 @@ fn map_keys_and_values_preserve_insertion_order() {
 }
 
 #[test]
+fn map_index_handles_content_identity_and_index_shifts() {
+    let source = r#"
+    let m = map_new()
+    let first = [1]
+    let equal_but_distinct = [1]
+    let pointer = ptr(first, 0)
+    let ignored1 = map_set(m, first, 10)
+    let ignored2 = map_set(m, 7, 70)
+    let ignored3 = map_set(m, "name", 20)
+    let ignored4 = map_set(m, pointer, 30)
+    print map_has(m, first)
+    print map_has(m, equal_but_distinct)
+    print map_get(m, "name")
+    print map_del(m, 7)
+    print map_get(m, "name")
+    print map_get(m, pointer)
+    "#;
+    assert_parity(source, "1\n0\n20\n1\n20\n30\n");
+}
+
+#[test]
 fn io_capture_round_trips_writeln() {
     let source = r#"
     let captured = io_writeln(io_stdout(), "hi")

@@ -36,6 +36,7 @@ impl<'a> JitVm<'a> {
         let source_program = program.verified_program.program_arc();
         let mut context = TinyRuntimeContext::new(inputs);
         context.program_arc = Some(source_program);
+        context.verified_program = Some(program.verified_program.clone());
         Self {
             program,
             context,
@@ -60,6 +61,7 @@ impl<'a> JitVm<'a> {
             .program
             .chunks
             .first()
+            .and_then(Option::as_ref)
             .ok_or_else(|| TinyOneError::runtime("JIT program has no main chunk"))?
             .slot_count;
         let mut memory = TinyMemory::try_new(slot_count)?;
@@ -80,10 +82,12 @@ impl<'a> JitVm<'a> {
         stdout: &mut dyn Write,
         global_memory: Option<&TinyMemory>,
     ) -> Result<Option<Value>> {
+        self.program.ensure_chunk(chunk_index)?;
         let stack_capacity = self
             .program
             .chunks
             .get(chunk_index)
+            .and_then(Option::as_ref)
             .ok_or_else(|| TinyOneError::runtime(format!("Invalid JIT chunk {chunk_index}")))?
             .ops
             .len()
@@ -92,9 +96,14 @@ impl<'a> JitVm<'a> {
         let mut pc = 0usize;
         loop {
             let instr = {
-                let chunk = self.program.chunks.get(chunk_index).ok_or_else(|| {
-                    TinyOneError::runtime(format!("Invalid JIT chunk {chunk_index}"))
-                })?;
+                let chunk = self
+                    .program
+                    .chunks
+                    .get(chunk_index)
+                    .and_then(Option::as_ref)
+                    .ok_or_else(|| {
+                        TinyOneError::runtime(format!("Invalid JIT chunk {chunk_index}"))
+                    })?;
                 let Some(instr) = chunk.ops.get(pc).copied() else {
                     return Err(TinyOneError::runtime(format!(
                         "Invalid program counter in {}",
@@ -114,7 +123,7 @@ impl<'a> JitVm<'a> {
                     bits: f64::from_bits(bits),
                 }),
                 JitOp::PushFunction(function_index) => {
-                    if function_index >= self.program.functions.len() {
+                    if function_index >= self.program.verified_program.program().functions.len() {
                         return Err(TinyOneError::runtime(format!(
                             "Invalid function index {function_index}"
                         )));
@@ -127,6 +136,8 @@ impl<'a> JitVm<'a> {
                 JitOp::PushString(index) => {
                     let text = self
                         .program
+                        .verified_program
+                        .program()
                         .strings
                         .get(index)
                         .ok_or_else(|| {
@@ -287,9 +298,15 @@ impl<'a> JitVm<'a> {
                 }
                 JitOp::MakeStruct(struct_index, field_count) => {
                     let values = pop_args(&mut stack, field_count)?;
-                    let struct_def = self.program.structs.get(struct_index).ok_or_else(|| {
-                        TinyOneError::runtime(format!("Invalid struct index {struct_index}"))
-                    })?;
+                    let struct_def = self
+                        .program
+                        .verified_program
+                        .program()
+                        .structs
+                        .get(struct_index)
+                        .ok_or_else(|| {
+                            TinyOneError::runtime(format!("Invalid struct index {struct_index}"))
+                        })?;
                     stack.push(runtime_make_struct(
                         &mut self.context,
                         &struct_def.name,
@@ -299,23 +316,40 @@ impl<'a> JitVm<'a> {
                 }
                 JitOp::GetField(field_index) => {
                     let target = jit_pop(&mut stack)?;
-                    let field = self.program.fields.get(field_index).ok_or_else(|| {
-                        TinyOneError::runtime(format!("Invalid field index {field_index}"))
-                    })?;
+                    let field = self
+                        .program
+                        .verified_program
+                        .program()
+                        .fields
+                        .get(field_index)
+                        .ok_or_else(|| {
+                            TinyOneError::runtime(format!("Invalid field index {field_index}"))
+                        })?;
                     stack.push(runtime_get_field(&self.context, target, field)?);
                 }
                 JitOp::SetField(field_index) => {
                     let value = jit_pop(&mut stack)?;
                     let target = jit_pop(&mut stack)?;
-                    let field = self.program.fields.get(field_index).ok_or_else(|| {
-                        TinyOneError::runtime(format!("Invalid field index {field_index}"))
-                    })?;
+                    let field = self
+                        .program
+                        .verified_program
+                        .program()
+                        .fields
+                        .get(field_index)
+                        .ok_or_else(|| {
+                            TinyOneError::runtime(format!("Invalid field index {field_index}"))
+                        })?;
                     runtime_set_field(&mut self.context, target, field, value)?;
                 }
                 JitOp::MakeEnum(variant_id, field_count) => {
                     let values = pop_args(&mut stack, field_count)?;
-                    let variant_def =
-                        self.program.enum_variants.get(variant_id).ok_or_else(|| {
+                    let variant_def = self
+                        .program
+                        .verified_program
+                        .program()
+                        .enum_variants
+                        .get(variant_id)
+                        .ok_or_else(|| {
                             TinyOneError::runtime(format!(
                                 "Invalid enum variant index {variant_id}"
                             ))
@@ -362,6 +396,7 @@ impl<'a> JitVm<'a> {
                             .program
                             .chunks
                             .get(chunk_index)
+                            .and_then(Option::as_ref)
                             .map(|chunk| chunk.name.as_str())
                             .unwrap_or("<invalid>");
                         return Err(TinyOneError::runtime(format!(
@@ -393,16 +428,19 @@ impl<'a> JitVm<'a> {
         stdout: &mut dyn Write,
         global_memory: &TinyMemory,
     ) -> Result<Value> {
-        let (chunk_index, slot_count, param_count) = {
-            let function = self.program.functions.get(function_index).ok_or_else(|| {
-                TinyOneError::runtime(format!("Invalid function index {function_index}"))
-            })?;
-            (
-                function.chunk_index,
-                function.slot_count,
-                function.param_count,
-            )
+        let (slot_count, param_count) = {
+            let function = self
+                .program
+                .verified_program
+                .program()
+                .functions
+                .get(function_index)
+                .ok_or_else(|| {
+                    TinyOneError::runtime(format!("Invalid function index {function_index}"))
+                })?;
+            (function.slot_count, function.param_count)
         };
+        let chunk_index = function_index + 1;
         if args.len() != param_count {
             return Err(TinyOneError::runtime(format!(
                 "Function {:?} expects {} argument(s), got {}",
@@ -433,6 +471,8 @@ impl<'a> JitVm<'a> {
 
     fn function_name(&self, function_index: usize) -> &str {
         self.program
+            .verified_program
+            .program()
             .functions
             .get(function_index)
             .map(|function| function.name.as_str())

@@ -4,68 +4,61 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::{
-    EnumVariantDef, HOT_BACK_EDGE_THRESHOLD, JitChunk, JitFunction, JitStats, JitVm, Program,
-    Result, StructDef, TinyMemory, TinyOneError, TinyRunReport, VerifiedProgram,
+    JitChunk, JitOptions, JitStats, JitVm, Program, Result, TinyMemory, TinyOneError,
+    TinyRunReport, VerifiedProgram,
 };
 
 #[derive(Debug, Clone)]
 pub struct JitProgram {
     pub(crate) verified_program: VerifiedProgram,
     pub(crate) fingerprint: String,
-    pub(crate) chunks: Vec<JitChunk>,
-    pub(crate) functions: Vec<JitFunction>,
-    pub(crate) strings: Vec<String>,
-    pub(crate) structs: Vec<StructDef>,
-    pub(crate) fields: Vec<String>,
-    pub(crate) enum_variants: Vec<EnumVariantDef>,
+    pub(crate) chunks: Vec<Option<JitChunk>>,
+    pub(crate) options: JitOptions,
     pub(crate) stats: JitStats,
 }
 
 impl JitProgram {
     pub fn compile(program: &Program) -> crate::Result<Self> {
         let verified = VerifiedProgram::verify(program.clone())?;
-        let fingerprint = verified.program().fingerprint();
-        Self::compile_with_fingerprint(&verified, fingerprint)
+        let fingerprint = verified.fingerprint().to_owned();
+        Self::compile_with_fingerprint(&verified, fingerprint, JitOptions::default())
+    }
+
+    pub fn compile_with_options(program: &Program, options: JitOptions) -> crate::Result<Self> {
+        let verified = VerifiedProgram::verify(program.clone())?;
+        let fingerprint = verified.fingerprint().to_owned();
+        Self::compile_with_fingerprint(&verified, fingerprint, options)
+    }
+
+    pub fn compile_verified(verified: &VerifiedProgram) -> Result<Self> {
+        Self::compile_verified_with_options(verified, JitOptions::default())
+    }
+
+    pub fn compile_verified_with_options(
+        verified: &VerifiedProgram,
+        options: JitOptions,
+    ) -> Result<Self> {
+        Self::compile_with_fingerprint(verified, verified.fingerprint().to_owned(), options)
     }
 
     pub(crate) fn compile_with_fingerprint(
         verified: &VerifiedProgram,
         fingerprint: String,
+        options: JitOptions,
     ) -> Result<Self> {
         let program = verified.program();
-        let mut chunks = vec![JitChunk::compile(
-            "main",
-            program.slot_count,
-            &program.code,
-        )?];
-        let mut functions = Vec::with_capacity(program.functions.len());
-        for function in &program.functions {
-            let chunk_index = chunks.len();
-            chunks.push(JitChunk::compile(
-                function.name.clone(),
-                function.slot_count,
-                &function.code,
-            )?);
-            functions.push(JitFunction {
-                name: function.name.clone(),
-                param_count: function.param_count,
-                slot_count: function.slot_count,
-                chunk_index,
-            });
-        }
-        let compiled_ops = chunks.iter().map(|chunk| chunk.ops.len()).sum();
-        let compiled_chunks = chunks.len();
+        let main = JitChunk::compile("main", program.slot_count, &program.code)?;
+        let compiled_ops = main.ops.len();
+        let mut chunks = Vec::with_capacity(program.functions.len() + 1);
+        chunks.push(Some(main));
+        chunks.resize_with(program.functions.len() + 1, || None);
         Ok(Self {
             verified_program: verified.clone(),
             fingerprint,
             chunks,
-            functions,
-            strings: program.strings.clone(),
-            structs: program.structs.clone(),
-            fields: program.fields.clone(),
-            enum_variants: program.enum_variants.clone(),
+            options,
             stats: JitStats {
-                compiled_chunks,
+                compiled_chunks: 1,
                 compiled_ops,
                 ..JitStats::default()
             },
@@ -87,26 +80,78 @@ impl JitProgram {
         let _ = writeln!(&mut out, "; tinyone adaptive-jit {}", self.fingerprint);
         let _ = writeln!(
             &mut out,
-            "; chunks={} ops={} hot_back_edges={} hot_ranges={} quickened_ops={}",
+            "; chunks={} ops={} hot_back_edges={} hot_ranges={} quickened_ops={} hot_threshold={}",
             self.stats.compiled_chunks,
             self.stats.compiled_ops,
             self.stats.hot_back_edges,
             self.stats.hot_ranges,
-            self.stats.quickened_ops
+            self.stats.quickened_ops,
+            self.options.hot_back_edge_threshold()
         );
         for (chunk_index, chunk) in self.chunks.iter().enumerate() {
-            let _ = writeln!(
-                &mut out,
-                ".chunk {chunk_index} {} slots={} ops={}",
-                chunk.name,
-                chunk.slot_count,
-                chunk.ops.len()
-            );
-            for (pc, op) in chunk.ops.iter().enumerate() {
-                let _ = writeln!(&mut out, "  {pc:04} {}", op.listing());
+            if let Some(chunk) = chunk {
+                let _ = writeln!(
+                    &mut out,
+                    ".chunk {chunk_index} {} slots={} ops={}",
+                    chunk.name,
+                    chunk.slot_count,
+                    chunk.ops.len()
+                );
+                for (pc, op) in chunk.ops.iter().enumerate() {
+                    let _ = writeln!(&mut out, "  {pc:04} {}", op.listing());
+                }
+            } else {
+                let function_index = chunk_index.saturating_sub(1);
+                if let Some(function) = self
+                    .verified_program
+                    .program()
+                    .functions
+                    .get(function_index)
+                {
+                    let _ = writeln!(
+                        &mut out,
+                        ".lazy {chunk_index} {} slots={} bytecode_ops={}",
+                        function.name,
+                        function.slot_count,
+                        function.code.len()
+                    );
+                }
             }
         }
         out
+    }
+
+    pub(crate) fn ensure_chunk(&mut self, chunk_index: usize) -> Result<()> {
+        let slot = self
+            .chunks
+            .get(chunk_index)
+            .ok_or_else(|| TinyOneError::runtime(format!("Invalid JIT chunk {chunk_index}")))?;
+        if slot.is_some() {
+            return Ok(());
+        }
+        let function_index = chunk_index.checked_sub(1).ok_or_else(|| {
+            TinyOneError::runtime(format!("Invalid lazy JIT chunk {chunk_index}"))
+        })?;
+        let function = self
+            .verified_program
+            .program()
+            .functions
+            .get(function_index)
+            .ok_or_else(|| {
+                TinyOneError::runtime(format!("Invalid function index {function_index}"))
+            })?;
+        let chunk = JitChunk::compile(function.name.clone(), function.slot_count, &function.code)?;
+        self.stats.compiled_chunks += 1;
+        self.stats.compiled_ops += chunk.ops.len();
+        self.chunks[chunk_index] = Some(chunk);
+        Ok(())
+    }
+
+    fn compile_all(&mut self) -> Result<()> {
+        for chunk_index in 1..self.chunks.len() {
+            self.ensure_chunk(chunk_index)?;
+        }
+        Ok(())
     }
 
     pub fn run(&mut self, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyMemory> {
@@ -135,19 +180,20 @@ impl JitProgram {
     }
 
     pub(crate) fn record_back_edge(&mut self, chunk_index: usize, op_pc: usize, target: usize) {
-        if target >= op_pc {
+        let threshold = self.options.hot_back_edge_threshold();
+        if threshold == 0 || target >= op_pc {
             return;
         }
         self.stats.hot_back_edges += 1;
         let changed = {
-            let Some(chunk) = self.chunks.get_mut(chunk_index) else {
+            let Some(chunk) = self.chunks.get_mut(chunk_index).and_then(Option::as_mut) else {
                 return;
             };
             let Some(counter) = chunk.edge_counts.get_mut(op_pc) else {
                 return;
             };
             *counter = counter.saturating_add(1);
-            if *counter == HOT_BACK_EDGE_THRESHOLD {
+            if *counter == threshold {
                 chunk.promote_range(target, op_pc + 1)
             } else {
                 0
@@ -161,7 +207,8 @@ impl JitProgram {
 }
 
 pub fn write_jit_listing(program: &Program, path: impl AsRef<Path>) -> Result<()> {
-    let compiled = JitProgram::compile(program)?;
+    let mut compiled = JitProgram::compile(program)?;
+    compiled.compile_all()?;
     fs::write(path, compiled.listing())
         .map_err(|error| TinyOneError::compile(format!("JIT listing write error: {error}")))
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     BUILTINS, EnumVariantDef, Function, Instr, Op, Program, Result, StructDef, TinyOneError,
@@ -30,11 +30,212 @@ struct VerificationContext<'a> {
     fields: &'a [String],
     enum_variants: &'a [EnumVariantDef],
     global_slot_count: usize,
+    modules: ModuleGraph,
+}
+
+#[derive(Debug)]
+struct ModuleGraph {
+    function_owners: Vec<Option<usize>>,
+    struct_owners: Vec<Option<usize>>,
+    enum_variant_owners: Vec<Option<usize>>,
+    exported_functions: HashSet<usize>,
+    exported_structs: HashSet<usize>,
+    imports: Vec<HashSet<usize>>,
+}
+
+impl ModuleGraph {
+    fn build(program: &Program) -> Result<Self> {
+        let mut modules_by_name = HashMap::new();
+        for (module_index, module) in program.modules.iter().enumerate() {
+            verify_identifier("module name", &module.name)?;
+            if module.path != module.name {
+                return Err(TinyOneError::compile(format!(
+                    "Verifier: module {:?} has inconsistent logical path {:?}",
+                    module.name, module.path
+                )));
+            }
+            if modules_by_name
+                .insert(module.name.as_str(), module_index)
+                .is_some()
+            {
+                return Err(TinyOneError::compile(format!(
+                    "Verifier: duplicate module name {:?}",
+                    module.name
+                )));
+            }
+        }
+
+        let function_names = unique_named_indexes(
+            "function",
+            program
+                .functions
+                .iter()
+                .map(|function| function.name.as_str()),
+        )?;
+        let struct_names = unique_named_indexes(
+            "struct",
+            program.structs.iter().map(|item| item.name.as_str()),
+        )?;
+        let function_owners = program
+            .functions
+            .iter()
+            .map(|function| owner_for_name("function", &function.name, &modules_by_name))
+            .collect::<Result<Vec<_>>>()?;
+        let struct_owners = program
+            .structs
+            .iter()
+            .map(|item| owner_for_name("struct", &item.name, &modules_by_name))
+            .collect::<Result<Vec<_>>>()?;
+        let enum_variant_owners = program
+            .enum_variants
+            .iter()
+            .map(|item| owner_for_name("enum", &item.enum_name, &modules_by_name))
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut exported_functions = HashSet::new();
+        let mut exported_structs = HashSet::new();
+        let mut imports = vec![HashSet::new(); program.modules.len()];
+        for (module_index, module) in program.modules.iter().enumerate() {
+            let mut aliases = HashSet::new();
+            for import in &module.imports {
+                verify_identifier("module import alias", &import.alias)?;
+                verify_identifier("module import target", &import.module)?;
+                verify_identifier("resolved module import target", &import.resolved)?;
+                if !aliases.insert(import.alias.as_str()) {
+                    return Err(TinyOneError::compile(format!(
+                        "Verifier: duplicate import alias {:?} in module {:?}",
+                        import.alias, module.name
+                    )));
+                }
+                if import.module != import.resolved {
+                    return Err(TinyOneError::compile(format!(
+                        "Verifier: import {:?} in module {:?} resolves inconsistently",
+                        import.alias, module.name
+                    )));
+                }
+                let target = modules_by_name
+                    .get(import.resolved.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        TinyOneError::compile(format!(
+                            "Verifier: import {:?} in module {:?} targets unknown module {:?}",
+                            import.alias, module.name, import.resolved
+                        ))
+                    })?;
+                if target == module_index {
+                    return Err(TinyOneError::compile(format!(
+                        "Verifier: module {:?} imports itself",
+                        module.name
+                    )));
+                }
+                imports[module_index].insert(target);
+            }
+
+            let mut seen_exports = HashSet::new();
+            for export in &module.exported_functions {
+                verify_identifier("module function export", export)?;
+                if !seen_exports.insert(export.as_str()) {
+                    return Err(TinyOneError::compile(format!(
+                        "Verifier: duplicate function export {:?} in module {:?}",
+                        export, module.name
+                    )));
+                }
+                let full_name = format!("{}.{}", module.name, export);
+                let function_index =
+                    function_names
+                        .get(full_name.as_str())
+                        .copied()
+                        .ok_or_else(|| {
+                            TinyOneError::compile(format!(
+                                "Verifier: module {:?} exports missing function {:?}",
+                                module.name, export
+                            ))
+                        })?;
+                exported_functions.insert(function_index);
+            }
+
+            seen_exports.clear();
+            for export in &module.exported_structs {
+                verify_identifier("module struct export", export)?;
+                if !seen_exports.insert(export.as_str()) {
+                    return Err(TinyOneError::compile(format!(
+                        "Verifier: duplicate struct export {:?} in module {:?}",
+                        export, module.name
+                    )));
+                }
+                let full_name = format!("{}.{}", module.name, export);
+                let struct_index =
+                    struct_names
+                        .get(full_name.as_str())
+                        .copied()
+                        .ok_or_else(|| {
+                            TinyOneError::compile(format!(
+                                "Verifier: module {:?} exports missing struct {:?}",
+                                module.name, export
+                            ))
+                        })?;
+                exported_structs.insert(struct_index);
+            }
+        }
+        reject_module_cycles(&program.modules, &imports)?;
+
+        Ok(Self {
+            function_owners,
+            struct_owners,
+            enum_variant_owners,
+            exported_functions,
+            exported_structs,
+            imports,
+        })
+    }
+
+    fn caller_owner(&self, caller_function: Option<usize>) -> Option<usize> {
+        caller_function.and_then(|index| self.function_owners.get(index).copied().flatten())
+    }
+
+    fn can_access(
+        &self,
+        caller_function: Option<usize>,
+        target_owner: Option<usize>,
+        exported: bool,
+    ) -> bool {
+        let caller_owner = self.caller_owner(caller_function);
+        match (caller_owner, target_owner) {
+            (None, None) => true,
+            (None, Some(_)) => exported,
+            (Some(_), None) => false,
+            (Some(caller), Some(target)) if caller == target => true,
+            (Some(caller), Some(target)) => exported && self.imports[caller].contains(&target),
+        }
+    }
+
+    fn can_call(&self, caller_function: Option<usize>, target: usize) -> bool {
+        self.can_access(
+            caller_function,
+            self.function_owners[target],
+            self.exported_functions.contains(&target),
+        )
+    }
+
+    fn can_construct(&self, caller_function: Option<usize>, target: usize) -> bool {
+        self.can_access(
+            caller_function,
+            self.struct_owners[target],
+            self.exported_structs.contains(&target),
+        )
+    }
+
+    fn can_construct_enum(&self, caller_function: Option<usize>, target: usize) -> bool {
+        let target_owner = self.enum_variant_owners[target];
+        let caller_owner = self.caller_owner(caller_function);
+        (target_owner.is_none() && caller_owner.is_none()) || target_owner == caller_owner
+    }
 }
 
 impl BytecodeVerifier {
     pub fn verify(program: &Program) -> Result<()> {
         Self::verify_program_budget(program)?;
+        let modules = ModuleGraph::build(program)?;
         let context = VerificationContext {
             functions: &program.functions,
             strings: &program.strings,
@@ -42,6 +243,7 @@ impl BytecodeVerifier {
             fields: &program.fields,
             enum_variants: &program.enum_variants,
             global_slot_count: program.slot_count,
+            modules,
         };
         Self::verify_chunk(
             "main",
@@ -49,6 +251,7 @@ impl BytecodeVerifier {
             program.slot_count,
             &context,
             Op::Halt,
+            None,
         )?;
         for (index, function) in program.functions.iter().enumerate() {
             Self::verify_chunk(
@@ -57,6 +260,7 @@ impl BytecodeVerifier {
                 function.slot_count,
                 &context,
                 Op::Return,
+                Some(index),
             )?;
         }
         Ok(())
@@ -78,6 +282,16 @@ impl BytecodeVerifier {
         let mut total_ops = program.code.len();
         for function in &program.functions {
             reject_over_limit(
+                &format!("function {:?} name bytes", function.name),
+                function.name.len(),
+                MAX_VERIFIER_TEXT_BYTES,
+            )?;
+            verify_string_list(
+                &format!("function {:?} generic parameters", function.name),
+                &function.generic_params,
+                MAX_VERIFIER_NAMES,
+            )?;
+            reject_over_limit(
                 &format!("function {:?} slot_count", function.name),
                 function.slot_count,
                 MAX_VERIFIER_SLOT_COUNT,
@@ -98,6 +312,11 @@ impl BytecodeVerifier {
             })?;
         }
         for item in &program.structs {
+            reject_over_limit(
+                &format!("struct {:?} name bytes", item.name),
+                item.name.len(),
+                MAX_VERIFIER_TEXT_BYTES,
+            )?;
             verify_string_list(
                 &format!("struct {:?} fields", item.name),
                 &item.fields,
@@ -110,6 +329,16 @@ impl BytecodeVerifier {
             MAX_VERIFIER_ENUM_VARIANTS,
         )?;
         for item in &program.enum_variants {
+            reject_over_limit(
+                &format!("enum {:?} name bytes", item.enum_name),
+                item.enum_name.len(),
+                MAX_VERIFIER_TEXT_BYTES,
+            )?;
+            reject_over_limit(
+                &format!("enum variant {:?} name bytes", item.variant_name),
+                item.variant_name.len(),
+                MAX_VERIFIER_TEXT_BYTES,
+            )?;
             verify_string_list(
                 &format!(
                     "enum {:?} variant {:?} fields",
@@ -121,10 +350,34 @@ impl BytecodeVerifier {
         }
         for module in &program.modules {
             reject_over_limit(
+                &format!("module {:?} name bytes", module.name),
+                module.name.len(),
+                MAX_VERIFIER_TEXT_BYTES,
+            )?;
+            reject_over_limit(
+                &format!("module {:?} path bytes", module.name),
+                module.path.len(),
+                MAX_VERIFIER_TEXT_BYTES,
+            )?;
+            reject_over_limit(
                 &format!("module {:?} imports", module.name),
                 module.imports.len(),
                 MAX_VERIFIER_MODULE_IMPORTS,
             )?;
+            for import in &module.imports {
+                for (label, value) in [
+                    ("alias", &import.alias),
+                    ("path", &import.path),
+                    ("module", &import.module),
+                    ("resolved module", &import.resolved),
+                ] {
+                    reject_over_limit(
+                        &format!("module {:?} import {label} bytes", module.name),
+                        value.len(),
+                        MAX_VERIFIER_TEXT_BYTES,
+                    )?;
+                }
+            }
             verify_string_list(
                 &format!("module {:?} function exports", module.name),
                 &module.exported_functions,
@@ -150,6 +403,7 @@ impl BytecodeVerifier {
         slot_count: usize,
         context: &VerificationContext<'_>,
         final_op: Op,
+        caller_function: Option<usize>,
     ) -> Result<()> {
         if code.last().map(|instr| instr.op) != Some(final_op) {
             let got = code
@@ -162,7 +416,15 @@ impl BytecodeVerifier {
             )));
         }
         for (pc, instr) in code.iter().copied().enumerate() {
-            Self::verify_instruction_operands(chunk_name, code, slot_count, context, pc, instr)?;
+            Self::verify_instruction_operands(
+                chunk_name,
+                code,
+                slot_count,
+                context,
+                caller_function,
+                pc,
+                instr,
+            )?;
         }
         let mut seen: HashMap<usize, i64> = HashMap::new();
         let mut todo = Vec::new();
@@ -415,6 +677,7 @@ impl BytecodeVerifier {
         code: &[Instr],
         slot_count: usize,
         context: &VerificationContext<'_>,
+        caller_function: Option<usize>,
         pc: usize,
         instr: Instr,
     ) -> Result<()> {
@@ -431,15 +694,30 @@ impl BytecodeVerifier {
                 "Verifier: invalid global slot {arg} at instruction {pc} in {chunk_name}"
             )));
         }
+        if op == Op::LoadGlobal && context.modules.caller_owner(caller_function).is_some() {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: module function in {chunk_name} cannot access root global slots"
+            )));
+        }
         if op == Op::PushString && checked_index(arg, context.strings.len()).is_err() {
             return Err(TinyOneError::compile(format!(
                 "Verifier: invalid string index {arg} at instruction {pc} in {chunk_name}"
             )));
         }
-        if op == Op::PushFunction && checked_index(arg, context.functions.len()).is_err() {
-            return Err(TinyOneError::compile(format!(
-                "Verifier: invalid function index {arg} at instruction {pc} in {chunk_name}"
-            )));
+        if op == Op::PushFunction {
+            let function_index = checked_index(arg, context.functions.len()).map_err(|_| {
+                TinyOneError::compile(format!(
+                    "Verifier: invalid function index {arg} at instruction {pc} in {chunk_name}"
+                ))
+            })?;
+            if !context.modules.can_call(caller_function, function_index) {
+                return Err(module_access_error(
+                    "function",
+                    &context.functions[function_index].name,
+                    chunk_name,
+                    pc,
+                ));
+            }
         }
         if op == Op::CallValue && arg < 0 {
             return Err(TinyOneError::compile(format!(
@@ -470,6 +748,14 @@ impl BytecodeVerifier {
                 ))
             })?;
             let function = &context.functions[function_index];
+            if !context.modules.can_call(caller_function, function_index) {
+                return Err(module_access_error(
+                    "function",
+                    &function.name,
+                    chunk_name,
+                    pc,
+                ));
+            }
             if arg_count != function.param_count {
                 return Err(TinyOneError::compile(format!(
                     "Function {:?} expects {} argument(s), got {arg2} at instruction {pc} in {chunk_name}",
@@ -494,12 +780,34 @@ impl BytecodeVerifier {
                 ))
             })?;
             let struct_def = &context.structs[struct_index];
+            if !context.modules.can_construct(caller_function, struct_index) {
+                return Err(module_access_error(
+                    "struct",
+                    &struct_def.name,
+                    chunk_name,
+                    pc,
+                ));
+            }
             let expected = struct_def.fields.len();
             if field_count != expected {
                 return Err(TinyOneError::compile(format!(
                     "Struct {:?} expects {expected} field value(s), got {arg2} at instruction {pc} in {chunk_name}",
                     struct_def.name
                 )));
+            }
+        }
+        if op == Op::MakeEnum {
+            let variant_index = checked_index(arg, context.enum_variants.len()).map_err(|_| {
+                TinyOneError::compile(format!(
+                    "Verifier: invalid enum variant index {arg} at instruction {pc} in {chunk_name}"
+                ))
+            })?;
+            if !context
+                .modules
+                .can_construct_enum(caller_function, variant_index)
+            {
+                let item = &context.enum_variants[variant_index];
+                return Err(module_access_error("enum", &item.enum_name, chunk_name, pc));
             }
         }
         if op == Op::Builtin {
@@ -518,6 +826,119 @@ impl BytecodeVerifier {
         }
         Ok(())
     }
+}
+
+fn verify_identifier(kind: &str, value: &str) -> Result<()> {
+    reject_over_limit(
+        &format!("{kind} text bytes"),
+        value.len(),
+        MAX_VERIFIER_TEXT_BYTES,
+    )?;
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err(TinyOneError::compile(format!(
+            "Verifier: {kind} must not be empty"
+        )));
+    };
+    if first.is_ascii_digit()
+        || !(first == '_' || first.is_alphanumeric())
+        || chars.any(|ch| ch != '_' && !ch.is_alphanumeric())
+    {
+        return Err(TinyOneError::compile(format!(
+            "Verifier: invalid {kind} {value:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn unique_named_indexes<'a>(
+    kind: &str,
+    names: impl IntoIterator<Item = &'a str>,
+) -> Result<HashMap<&'a str, usize>> {
+    let mut indexes = HashMap::new();
+    for (index, name) in names.into_iter().enumerate() {
+        reject_over_limit(
+            &format!("{kind} name bytes"),
+            name.len(),
+            MAX_VERIFIER_TEXT_BYTES,
+        )?;
+        if indexes.insert(name, index).is_some() {
+            return Err(TinyOneError::compile(format!(
+                "Verifier: duplicate {kind} name {name:?}"
+            )));
+        }
+    }
+    Ok(indexes)
+}
+
+fn owner_for_name(
+    kind: &str,
+    name: &str,
+    modules_by_name: &HashMap<&str, usize>,
+) -> Result<Option<usize>> {
+    let Some((module_name, local_name)) = name.split_once('.') else {
+        verify_identifier(&format!("{kind} name"), name)?;
+        return Ok(None);
+    };
+    if local_name.contains('.') {
+        return Err(TinyOneError::compile(format!(
+            "Verifier: invalid qualified {kind} name {name:?}"
+        )));
+    }
+    verify_identifier(&format!("{kind} module qualifier"), module_name)?;
+    verify_identifier(&format!("{kind} local name"), local_name)?;
+    modules_by_name
+        .get(module_name)
+        .copied()
+        .map(Some)
+        .ok_or_else(|| {
+            TinyOneError::compile(format!(
+                "Verifier: {kind} {name:?} belongs to unknown module {module_name:?}"
+            ))
+        })
+}
+
+fn reject_module_cycles(modules: &[crate::ModuleDef], imports: &[HashSet<usize>]) -> Result<()> {
+    fn visit_module(
+        module_index: usize,
+        modules: &[crate::ModuleDef],
+        imports: &[HashSet<usize>],
+        states: &mut [u8],
+    ) -> Result<()> {
+        match states[module_index] {
+            2 => return Ok(()),
+            1 => {
+                return Err(TinyOneError::compile(format!(
+                    "Verifier: cyclic module dependency involving {:?}",
+                    modules[module_index].name
+                )));
+            }
+            _ => {}
+        }
+        states[module_index] = 1;
+        for dependency in &imports[module_index] {
+            visit_module(*dependency, modules, imports, states)?;
+        }
+        states[module_index] = 2;
+        Ok(())
+    }
+
+    let mut states = vec![0; modules.len()];
+    for module_index in 0..modules.len() {
+        visit_module(module_index, modules, imports, &mut states)?;
+    }
+    Ok(())
+}
+
+fn module_access_error(
+    target_kind: &str,
+    target_name: &str,
+    chunk_name: &str,
+    pc: usize,
+) -> TinyOneError {
+    TinyOneError::compile(format!(
+        "Verifier: {target_kind} {target_name:?} is not visible from {chunk_name} at instruction {pc}"
+    ))
 }
 
 fn visit(

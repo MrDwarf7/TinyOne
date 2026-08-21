@@ -17,8 +17,8 @@ Import declarations must appear before any executable statements or
 non-import declarations in the file. Placing an `import` after a `let`,
 `fn`, or `struct` is a compile error.
 
-The imported file is compiled into a separate function chunk with its
-own export table. Importing a module does not run hidden top-level
+The imported file is compiled into qualified program functions and structs
+with module ownership and an export table. Importing a module does not run hidden top-level
 code — module files may only contain `import`, `struct`, `fn`, and
 `export` declarations; top-level executable statements in a module are
 a compile error.
@@ -68,6 +68,21 @@ A `tinyone.json` file in a directory maps module names to source paths:
 With this manifest, `import "math" as m` resolves `lib/math.to` relative
 to the manifest file. The `"package"` key is optional metadata.
 
+Within one compilation session, TinyOne caches canonical resolutions, parsed
+manifests (including missing-manifest probes), and source text. Repeated or
+diamond-shaped imports do not reread the same file. CLI source runs also use a
+dependency-validated `.tinyone-cache/` artifact by default; `--no-cache`
+disables it. A single changed module with stable declaration topology can be
+relocated into the cached program and the complete result is re-verified.
+
+Manifest targets are TinyLang source files. Native shared libraries (`.dll`,
+`.so`, versioned `.so.*`, and `.dylib`) are rejected explicitly, including
+when hidden behind a manifest module name. Loading arbitrary native code in
+the VM/JIT process would bypass bytecode verification and could corrupt the
+runtime. The planned native-module boundary requires a versioned C ABI,
+validated value marshalling, capability declarations, and generation-checked
+foreign handles; untrusted libraries additionally require process isolation.
+
 ---
 
 ## Export Visibility
@@ -89,6 +104,14 @@ export struct Vec2 { x, y }            # visible to importers
 
 Only `fn` and `struct` declarations can be exported. Variables declared
 with `let` in a module are not visible to importers.
+
+Visibility is enforced twice: by the source compiler and by the bytecode
+verifier. This matters for JSON artifacts, which are untrusted input. A forged
+artifact cannot call or take a function value for a private module function,
+construct a private module struct, access root globals from module code, forge
+an export for a missing declaration, or add an invalid/cyclic dependency.
+String-based runtime entry points such as `closure_new` and `thread_spawn`
+also resolve only root functions and exported module functions.
 
 ---
 

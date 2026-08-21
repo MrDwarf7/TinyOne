@@ -55,10 +55,13 @@ impl VM {
         memory: TinyMemory,
         inputs: Vec<String>,
     ) -> Self {
+        let mut context = TinyRuntimeContext::new(inputs);
+        context.program_arc = Some(verified.program_arc());
+        context.verified_program = Some(verified.clone());
         Self {
             program: verified.program_arc(),
             memory,
-            context: TinyRuntimeContext::new(inputs),
+            context,
             call_depth: 0,
         }
     }
@@ -68,6 +71,9 @@ impl VM {
         memory: TinyMemory,
         context: TinyRuntimeContext,
     ) -> Self {
+        let mut context = context;
+        context.program_arc = Some(verified.program_arc());
+        context.verified_program = Some(verified.clone());
         Self {
             program: verified.program_arc(),
             memory,

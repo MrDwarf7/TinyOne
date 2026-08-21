@@ -10,6 +10,11 @@
   `docs/ffi/c-integration.md`, which is retained as a convenience/debug façade
   (see §5).
 
+Current v1 TinyLang imports accept source modules only. `.dll`, `.so`,
+versioned `.so.*`, and `.dylib` import targets fail closed because they cannot
+pass the bytecode verifier. This proposal defines the boundary required before
+native module execution can be enabled safely.
+
 ---
 
 ## 1. Summary

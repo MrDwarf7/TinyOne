@@ -201,8 +201,11 @@ Releases the heap byte budget for the element values.
 
 ### Hash maps (`map`)
 
-Maps are heap-allocated association lists. Keys may be integers, strings, or
-raw pointers (pointers are checked for staleness at map access time).
+Maps keep insertion-ordered key/value entries in Ralloc-owned storage and a
+canonical key index for average constant-time lookup. Keys may be integers,
+strings, heap objects, or raw pointers (pointers are checked for staleness at
+map access time). Integer widths compare by numeric value, strings by content,
+and heap/pointer identities include their allocation generation.
 
 #### `map_new() → map`
 Allocates an empty hash map.

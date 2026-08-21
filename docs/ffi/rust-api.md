@@ -28,6 +28,20 @@ let program = tinyone::compile_source("let x = 6 * 7\nprint x")?;
 
 Same as `compile_source` but attaches `filename` to diagnostic messages.
 
+### Verified compilation and disk-cache APIs
+
+The `compile_source_verified`, `compile_source_verified_with_filename`,
+`compile_file_verified`, and unoptimized verified variants return
+`VerifiedProgram` directly. Prefer them when compilation is followed by VM or
+JIT execution; the verified token avoids repeating verification and shares a
+memoized fingerprint across clones.
+
+`compile_file_cached_verified_with_options(path, optimize)` additionally uses
+the dependency-validated disk cache and returns `(VerifiedProgram,
+CompileCacheStatus)`. Status is `Hit`, `Incremental`, or `Miss`. The shorter
+`compile_file_cached` and `compile_file_cached_verified` variants use optimized
+compilation and omit status where appropriate.
+
 ### `compile_file(path: impl AsRef<Path>) -> Result<Arc<Program>>`
 
 Read the file at `path` and compile it. Resolves imports relative to the file's directory.
@@ -39,6 +53,11 @@ let program = tinyone::compile_file(std::path::Path::new("example.to"))?;
 ### `compile_source_unoptimized(source: &str) -> Result<Arc<Program>>`
 
 Compile without the peephole optimizer. Useful for testing the verifier against unoptimized bytecode.
+
+### `compile_file_unoptimized(path: impl AsRef<Path>) -> Result<Arc<Program>>`
+
+Read, resolve imports, compile, and verify a file without running the peephole
+optimizer. This is the API used by the CLI's `-O0` mode.
 
 ### `compile_source_unoptimized_with_filename(source: &str, filename: &str) -> Result<Arc<Program>>`
 
@@ -112,6 +131,28 @@ tinyone::run_program_with_env(
 )?;
 ```
 
+The corresponding `run_verified_program*` functions accept
+`&VerifiedProgram` and do not re-run the verifier. Use these with the verified
+compiler and loader APIs on startup-sensitive paths.
+
+### Configured JIT runner variants
+
+`run_program_with_jit_options` and
+`run_program_with_env_and_jit_options` mirror the corresponding program
+runners and accept a final `JitOptions` value. Existing runner functions use
+`JitOptions::default()`.
+
+```rust
+let options = tinyone::JitOptions::new().with_hot_back_edge_threshold(2);
+tinyone::run_program_with_jit_options(
+    program,
+    "jit",
+    &mut out,
+    vec![],
+    options,
+)?;
+```
+
 ---
 
 ## Artifacts
@@ -126,11 +167,16 @@ tinyone::write_artifact(&program, std::path::Path::new("out.tobc.json"))?;
 
 ### `load_artifact(path: impl AsRef<Path>) -> Result<Program>`
 
-Deserialize and verify an artifact file. Enforces all resource limits before any allocation.
+Deserialize and verify a JSON or compact binary artifact file. Enforces
+resource limits before constructing program tables.
 
 ```rust
 let program = tinyone::load_artifact(std::path::Path::new("out.tobc.json"))?;
 ```
+
+`write_binary_artifact(program, path)` writes the compact versioned `.tob`
+representation. `load_verified_artifact(path)` auto-detects binary magic or
+JSON and preserves the `VerifiedProgram` capability for direct execution.
 
 ---
 
@@ -149,13 +195,22 @@ cache.run_program(&program, &mut out, vec![])?;
 cache.run_program(&program, &mut out, vec![])?;
 ```
 
+Use `JitCache::with_options(options)` to configure the cache. A hot-back-edge
+threshold of zero disables adaptive quickening while keeping lowering,
+superinstructions, caching, and JIT execution enabled.
+
 Key methods on `JitCache`:
+
+- `JitCache::with_options(options) -> JitCache` — create a configured cache
+- `cache.options() -> JitOptions` — inspect its immutable JIT configuration
 
 - `JitCache::new() -> JitCache` — create an empty cache
 - `cache.len() -> usize` — number of cached programs
 - `cache.is_empty() -> bool` — true when the cache holds no programs
 - `cache.compile(program: &Program) -> Result<&JitProgram>` — compile and cache without running; verifies the program first
+- `cache.compile_verified(program: &VerifiedProgram) -> Result<&JitProgram>` — compile without duplicate verification or hashing
 - `cache.run_program(program, stdout, inputs) -> Result<TinyMemory>` — compile (if not cached) and run
+- `cache.run_verified_program(program, stdout, inputs) -> Result<TinyMemory>` — verified-token run path
 - `cache.run_program_report(program, stdout, inputs) -> Result<TinyRunReport>` — same, but includes heap statistics
 - `cache.run_program_with_env(program, stdout, inputs, sys_args, sys_env) -> Result<TinyMemory>` — run with explicit args and environment
 - `cache.run_source(source, stdout, inputs) -> Result<TinyMemory>` — compile source, then run via the cache
@@ -184,17 +239,17 @@ tinyone::BytecodeVerifier::verify(&program)?;
 
 ### `VerifiedProgram`
 
-A newtype wrapper that records that verification has already run. Constructed via `VerifiedProgram::verify(program)`, which runs `BytecodeVerifier::verify` internally.
+A capability wrapper that records that verification has already run. It owns
+an `Arc<Program>` and a shared, lazily initialized fingerprint. Construct it via
+`VerifiedProgram::verify(program)` or obtain it from a verified compiler or
+artifact-loader API.
 
 ```rust
-// VerifiedProgram::verify takes an owned Program, not Arc<Program>.
-// Extract from the Arc first (clones only if there are other references):
-let arc = tinyone::compile_source("print 1")?;
-let program = Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone());
-let verified = tinyone::VerifiedProgram::verify(program)?;
+let verified = tinyone::compile_source_verified("print 1")?;
 // Borrow the inner Program without consuming:
 let _inner: &tinyone::Program = verified.program();
-// Consume and recover the inner Program (type-system guarantee is lost):
+let fingerprint: &str = verified.fingerprint(); // memoized and clone-shared
+// Consume and recover an owned Program (the type-system guarantee is lost):
 let program = verified.into_program();
 ```
 

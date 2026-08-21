@@ -2,8 +2,45 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
-    JitProgram, Program, Result, TinyMemory, TinyRunReport, VerifiedProgram, compile_source,
+    JitProgram, Program, Result, TinyMemory, TinyRunReport, VerifiedProgram,
+    compile_source_verified,
 };
+
+pub const DEFAULT_HOT_BACK_EDGE_THRESHOLD: u16 = 8;
+
+/// Controls adaptive JIT behavior. A threshold of zero disables quickening,
+/// which is useful for deterministic cold-tier profiling and diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitOptions {
+    hot_back_edge_threshold: u16,
+}
+
+impl JitOptions {
+    pub const fn new() -> Self {
+        Self {
+            hot_back_edge_threshold: DEFAULT_HOT_BACK_EDGE_THRESHOLD,
+        }
+    }
+
+    pub const fn with_hot_back_edge_threshold(mut self, threshold: u16) -> Self {
+        self.hot_back_edge_threshold = threshold;
+        self
+    }
+
+    pub const fn hot_back_edge_threshold(self) -> u16 {
+        self.hot_back_edge_threshold
+    }
+
+    pub const fn quickening_enabled(self) -> bool {
+        self.hot_back_edge_threshold != 0
+    }
+}
+
+impl Default for JitOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct JitStats {
@@ -27,11 +64,23 @@ pub struct JitCacheStats {
 #[derive(Debug, Default, Clone)]
 pub struct JitCache {
     cache: HashMap<String, JitProgram>,
+    options: JitOptions,
 }
 
 impl JitCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_options(options: JitOptions) -> Self {
+        Self {
+            cache: HashMap::new(),
+            options,
+        }
+    }
+
+    pub fn options(&self) -> JitOptions {
+        self.options
     }
 
     pub fn len(&self) -> usize {
@@ -44,14 +93,18 @@ impl JitCache {
 
     pub fn compile(&mut self, program: &Program) -> crate::Result<&JitProgram> {
         let verified = VerifiedProgram::verify(program.clone())?;
-        Ok(&*self.compile_mut(&verified)?)
+        self.compile_verified(&verified)
+    }
+
+    pub fn compile_verified(&mut self, verified: &VerifiedProgram) -> Result<&JitProgram> {
+        Ok(&*self.compile_mut(verified)?)
     }
 
     fn compile_mut(&mut self, verified: &VerifiedProgram) -> Result<&mut JitProgram> {
-        let program = verified.program();
-        let key = program.fingerprint();
+        let key = verified.fingerprint().to_owned();
         if !self.cache.contains_key(&key) {
-            let compiled = JitProgram::compile_with_fingerprint(verified, key.clone())?;
+            let compiled =
+                JitProgram::compile_with_fingerprint(verified, key.clone(), self.options)?;
             self.cache.insert(key.clone(), compiled);
         }
         self.cache
@@ -84,6 +137,15 @@ impl JitCache {
         self.run_program_unchecked(&verified, stdout, inputs)
     }
 
+    pub fn run_verified_program(
+        &mut self,
+        verified: &VerifiedProgram,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+    ) -> Result<TinyMemory> {
+        self.run_program_unchecked(verified, stdout, inputs)
+    }
+
     pub fn run_program_with_env(
         &mut self,
         program: &Program,
@@ -96,6 +158,17 @@ impl JitCache {
         self.run_program_with_env_unchecked(&verified, stdout, inputs, sys_args, sys_env)
     }
 
+    pub fn run_verified_program_with_env(
+        &mut self,
+        verified: &VerifiedProgram,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+        sys_args: Vec<String>,
+        sys_env: HashMap<String, String>,
+    ) -> Result<TinyMemory> {
+        self.run_program_with_env_unchecked(verified, stdout, inputs, sys_args, sys_env)
+    }
+
     pub fn run_program_report(
         &mut self,
         program: &Program,
@@ -104,6 +177,15 @@ impl JitCache {
     ) -> Result<TinyRunReport> {
         let verified = VerifiedProgram::verify(program.clone())?;
         self.run_program_report_unchecked(&verified, stdout, inputs)
+    }
+
+    pub fn run_verified_program_report(
+        &mut self,
+        verified: &VerifiedProgram,
+        stdout: &mut dyn Write,
+        inputs: Vec<String>,
+    ) -> Result<TinyRunReport> {
+        self.run_program_report_unchecked(verified, stdout, inputs)
     }
 
     /// Run without re-verifying from a verification token.
@@ -145,8 +227,8 @@ impl JitCache {
         stdout: &mut dyn Write,
         inputs: Vec<String>,
     ) -> Result<TinyMemory> {
-        let program = compile_source(source)?;
-        self.run_program(&program, stdout, inputs)
+        let program = compile_source_verified(source)?;
+        self.run_verified_program(&program, stdout, inputs)
     }
 
     pub fn run_source_report(
@@ -155,7 +237,49 @@ impl JitCache {
         stdout: &mut dyn Write,
         inputs: Vec<String>,
     ) -> Result<TinyRunReport> {
-        let program = compile_source(source)?;
-        self.run_program_report(&program, stdout, inputs)
+        let program = compile_source_verified(source)?;
+        self.run_verified_program_report(&program, stdout, inputs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LOOP: &str = r#"
+        let i = 0
+        while i < 4 {
+          i = i + 1
+        }
+        print i
+    "#;
+
+    #[test]
+    fn configurable_threshold_quickens_at_the_requested_back_edge() {
+        let program = compile_source_verified(LOOP).unwrap();
+        let mut cache = JitCache::with_options(JitOptions::new().with_hot_back_edge_threshold(1));
+        let mut stdout = Vec::new();
+        cache
+            .run_verified_program(&program, &mut stdout, Vec::new())
+            .unwrap();
+
+        let stats = cache.stats();
+        assert!(stats.hot_back_edges >= 1);
+        assert!(stats.hot_ranges >= 1);
+        assert!(stats.quickened_ops >= 1);
+    }
+
+    #[test]
+    fn zero_threshold_keeps_the_cold_tier_stable() {
+        let program = compile_source_verified(LOOP).unwrap();
+        let mut cache = JitCache::with_options(JitOptions::new().with_hot_back_edge_threshold(0));
+        cache
+            .run_verified_program(&program, &mut Vec::new(), Vec::new())
+            .unwrap();
+
+        let stats = cache.stats();
+        assert_eq!(stats.hot_back_edges, 0);
+        assert_eq!(stats.hot_ranges, 0);
+        assert_eq!(stats.quickened_ops, 0);
     }
 }

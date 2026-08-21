@@ -40,12 +40,19 @@ Every operation that can fail returns `Result`. The `?` operator propagates erro
 
 ## JIT Backend
 
+Startup lowering is lazy: the main chunk is decoded immediately, while each
+function chunk is decoded and fused only on its first call. The JIT retains a
+single `VerifiedProgram` for all strings and declaration metadata rather than
+cloning those tables. Listing generation is the deliberate exception and
+lowers every chunk so the output is complete.
+
 The JIT is an **adaptive bytecode tier** — it compiles TinyLang bytecode into a lower-level internal bytecode (`JitOp`) with decoded operands, then interprets `JitOp` and quickens hot loops in-place. It does not produce native machine code.
 
 ### Compilation Phase (`JitProgram::compile`)
 
-1. **Verify** — runs `BytecodeVerifier::verify` on the input `Program`.
-2. **Decode operands** — each `Instr { op, arg, arg2 }` is translated to a `JitOp` enum variant with operands already converted to `usize` or `i64`. No conversion happens at dispatch time.
+1. **Verify or accept capability** — raw `Program` entry points verify once;
+   `VerifiedProgram` entry points preserve an earlier proof.
+2. **Decode operands lazily** — each reached chunk's `Instr { op, arg, arg2 }` is translated to a `JitOp` enum variant with operands already converted to `usize` or `i64`. No conversion happens at dispatch time.
    - `LOAD 3` → `JitOp::Load(3usize)`
    - `LOAD_GLOBAL 1` → `JitOp::LoadGlobal(1usize)`
    - `PUSH_INT 42` → `JitOp::PushInt(42i64)`
@@ -66,7 +73,7 @@ The JIT is an **adaptive bytecode tier** — it compiles TinyLang bytecode into 
 
 Every compiled chunk carries an `edge_counts: Vec<u16>` parallel to its ops. At every backward branch, `JitVm` increments the counter for that branch.
 
-When a counter reaches **8** (`HOT_BACK_EDGE_THRESHOLD`), the chunk promotes all ops in `[branch_target, branch_instruction + 1)` to faster "hot" variants in-place:
+When a counter reaches the configured threshold (**8** by default), the chunk promotes all ops in `[branch_target, branch_instruction + 1)` to faster "hot" variants in-place:
 
 | Cold op | Hot op | Difference |
 | --- | --- | --- |
@@ -80,11 +87,18 @@ When a counter reaches **8** (`HOT_BACK_EDGE_THRESHOLD`), the chunk promotes all
 
 Quickening is **in-place and permanent** for the lifetime of the `JitProgram`. A loop that mixes integers and heap values will still receive quickened jump ops even if the arithmetic ops do not qualify.
 
+`JitOptions::with_hot_back_edge_threshold` changes the threshold for direct JIT
+programs, caches, and configured runner calls. Threshold `0` disables
+quickening without disabling JIT lowering or superinstructions. The CLI exposes
+the same controls as `--jit-threshold N` and `--no-jit-quickening`.
+
 ### JitCache
 
 `JitCache` stores `JitProgram` instances keyed by their Blake2b512 program fingerprint (16 hex bytes). On a cache hit, the already-compiled and potentially already-quickened `JitProgram` is reused — hot ranges from a previous run carry over automatically.
 
-`JitCache::compile` re-verifies the program before inserting it. The public `run_*` methods verify once then delegate to internal `*_unchecked` helpers that skip re-verification.
+Compatibility methods accepting raw `Program` values verify before insertion.
+`compile_verified` and the `run_verified_program*` methods preserve an earlier
+verification capability and its memoized fingerprint.
 
 ---
 

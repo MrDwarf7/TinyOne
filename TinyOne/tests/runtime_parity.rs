@@ -4,9 +4,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tinyone::{
-    BytecodeVerifier, Function, Instr, JitCache, Op, Program, RuntimeValue, StructDef, TinyMemory,
-    TinyOneError, TypeKind, compile_file, compile_source, load_artifact, run_program,
-    run_program_report, write_artifact, write_jit_listing,
+    BytecodeVerifier, CompileCacheStatus, Function, Instr, JitCache, JitProgram, Op, Program,
+    RuntimeValue, StructDef, TinyMemory, TinyOneError, TypeKind, compile_file,
+    compile_file_cached_verified_with_status, compile_source, compile_source_verified,
+    load_artifact, run_program, run_program_report, run_verified_program, write_artifact,
+    write_binary_artifact, write_jit_listing,
 };
 
 fn run_compiled(
@@ -385,6 +387,32 @@ fn jit_compiles_to_lowered_bytecode_listing() {
     assert_eq!(1, stats.programs);
     assert_eq!(1, stats.compiled_chunks);
     assert!(stats.compiled_ops > 0);
+}
+
+#[test]
+fn jit_lowers_functions_only_when_first_called() {
+    let verified = compile_source_verified(
+        r#"
+        fn unused(value) { return value + 1000 }
+        fn used(value) { return value + 1 }
+        print used(41)
+        "#,
+    )
+    .expect("source should compile");
+    let mut compiled = JitProgram::compile_verified(&verified).expect("jit compile");
+
+    assert_eq!(1, compiled.stats().compiled_chunks);
+    assert!(compiled.listing().contains(".lazy 1 unused"));
+    assert!(compiled.listing().contains(".lazy 2 used"));
+
+    let mut stdout = Vec::new();
+    compiled
+        .run(&mut stdout, Vec::new())
+        .expect("jit should run");
+    assert_eq!("42\n", String::from_utf8(stdout).expect("UTF-8"));
+    assert_eq!(2, compiled.stats().compiled_chunks);
+    assert!(compiled.listing().contains(".lazy 1 unused"));
+    assert!(compiled.listing().contains(".chunk 2 used"));
 }
 
 #[test]
@@ -905,6 +933,98 @@ fn imports_and_artifact_roundtrip() {
 }
 
 #[test]
+fn binary_artifact_roundtrips_modules_and_runs_both_backends() {
+    let temp = TestDir::new("binary-artifact");
+    fs::write(
+        temp.path().join("math.to"),
+        "export fn answer() { return 42 }\n",
+    )
+    .expect("write module");
+    let main_path = temp.path().join("main.to");
+    fs::write(
+        &main_path,
+        "import \"math.to\" as math\nprint math.answer()\n",
+    )
+    .expect("write main");
+    let program = compile_file(&main_path).expect("compile source graph");
+    let artifact_path = temp.path().join("main.tob");
+    write_binary_artifact(&program, &artifact_path).expect("write binary artifact");
+    let loaded = Arc::new(load_artifact(&artifact_path).expect("load binary artifact"));
+
+    assert_eq!(program.fingerprint(), loaded.fingerprint());
+    assert!(fs::metadata(&artifact_path).expect("metadata").len() > 8);
+    for mode in ["vm", "jit"] {
+        assert_eq!(
+            "42\n",
+            run_compiled(&loaded, mode, Vec::new())
+                .expect("run artifact")
+                .0
+        );
+    }
+}
+
+#[test]
+fn disk_compile_cache_hits_and_invalidates_changed_modules() {
+    let temp = TestDir::new("compile-cache");
+    let module_path = temp.path().join("math.to");
+    fs::write(&module_path, "export fn answer() { return 41 }\n").expect("write module");
+    let main_path = temp.path().join("main.to");
+    fs::write(
+        &main_path,
+        "import \"math.to\" as math\nprint math.answer()\n",
+    )
+    .expect("write main");
+
+    let (first, first_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("first compile");
+    assert_eq!(CompileCacheStatus::Miss, first_status);
+    let (second, second_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("cached compile");
+    assert_eq!(CompileCacheStatus::Hit, second_status);
+    assert_eq!(first.fingerprint(), second.fingerprint());
+    let cache_dir = temp.path().join(".tinyone-cache");
+    assert!(cache_dir.is_dir());
+
+    let artifact = fs::read_dir(&cache_dir)
+        .expect("read cache")
+        .map(|entry| entry.expect("cache entry").path())
+        .find(|path| path.extension().is_some_and(|extension| extension == "tob"))
+        .expect("cached binary artifact");
+    fs::write(&artifact, b"corrupt cache entry").expect("corrupt cached artifact");
+    let (recovered, recovered_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("recover corrupt cache");
+    assert_eq!(CompileCacheStatus::Miss, recovered_status);
+    assert_eq!(first.fingerprint(), recovered.fingerprint());
+    let (_, repaired_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("reuse repaired cache");
+    assert_eq!(CompileCacheStatus::Hit, repaired_status);
+
+    fs::write(&module_path, "export fn answer() { return 42 }\n").expect("change module");
+    let (changed, changed_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("recompile changed module");
+    assert_eq!(CompileCacheStatus::Incremental, changed_status);
+    assert_ne!(first.fingerprint(), changed.fingerprint());
+    let mut stdout = Vec::new();
+    run_verified_program(&changed, "jit", &mut stdout, Vec::new()).expect("run changed graph");
+    assert_eq!("42\n", String::from_utf8(stdout).expect("UTF-8"));
+    let (_, post_incremental_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("reuse incremental artifact");
+    assert_eq!(CompileCacheStatus::Hit, post_incremental_status);
+
+    fs::write(
+        &module_path,
+        "fn bump(value) { return value + 1 }\nexport fn answer() { return bump(42) }\n",
+    )
+    .expect("change module declarations");
+    let (rebuilt, rebuilt_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("rebuild changed interface");
+    assert_eq!(CompileCacheStatus::Miss, rebuilt_status);
+    let mut stdout = Vec::new();
+    run_verified_program(&rebuilt, "jit", &mut stdout, Vec::new()).expect("run rebuilt graph");
+    assert_eq!("43\n", String::from_utf8(stdout).expect("UTF-8"));
+}
+
+#[test]
 fn import_manifest_namespaces_and_export_visibility() {
     let temp = TestDir::new("manifest");
     fs::write(
@@ -977,6 +1097,70 @@ fn import_manifest_namespaces_and_export_visibility() {
     )
     .expect("write bad file");
     assert_error_contains(compile_file(&bad_private), "not exported");
+}
+
+#[test]
+fn dynamic_function_lookup_cannot_reach_private_module_functions() {
+    let temp = TestDir::new("dynamic-private-module");
+    fs::write(
+        temp.path().join("secrets.to"),
+        r#"
+        fn hidden() {
+          return 99
+        }
+
+        export fn visible() {
+          return hidden()
+        }
+        "#,
+    )
+    .expect("write module");
+
+    for (filename, expression, expected) in [
+        (
+            "closure.to",
+            r#"print closure_new("secrets.hidden", [])"#,
+            "closure_new",
+        ),
+        (
+            "thread.to",
+            r#"let thread = thread_spawn("secrets.hidden")"#,
+            "thread_spawn",
+        ),
+    ] {
+        let main_path = temp.path().join(filename);
+        fs::write(
+            &main_path,
+            format!("import \"secrets.to\" as secrets\n{expression}\n"),
+        )
+        .expect("write main");
+        let program = compile_file(&main_path).expect("compile file");
+        for mode in ["vm", "jit"] {
+            let error = run_compiled(&program, mode, Vec::new())
+                .expect_err("private module function lookup must fail");
+            let message = error.to_string();
+            assert!(message.contains(expected), "unexpected error: {message}");
+            assert!(
+                message.contains("not exported"),
+                "unexpected error: {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_library_module_imports_fail_closed() {
+    let temp = TestDir::new("native-module");
+    fs::write(
+        temp.path().join("tinyone.json"),
+        r#"{"package": "native-test", "modules": {"plugin": "native/plugin.dll"}}"#,
+    )
+    .expect("write manifest");
+    let main_path = temp.path().join("main.to");
+    fs::write(&main_path, "import \"plugin\" as plugin\n").expect("write main");
+
+    assert_error_contains(compile_file(&main_path), "Native module import");
+    assert_error_contains(compile_file(&main_path), "bytecode verification");
 }
 
 #[test]

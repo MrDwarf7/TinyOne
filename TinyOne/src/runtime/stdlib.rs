@@ -10,6 +10,7 @@ use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use crate::runtime::heap::MapKey;
 use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
 use crate::runtime::typing::{TypeKind, integer_range, promote_integer, smallest_fit_literal};
 use crate::{
@@ -101,23 +102,10 @@ pub fn b_map_set(
     key: Value,
     value: Value,
 ) -> Result<Value> {
-    // Decode entries out so we can call map_key_equal without holding the guard.
-    let entries_clone: Vec<(Value, Value)> = {
-        let heap = context.heap();
-        let object = heap.get(target)?;
-        let HeapData::Map(entries) = &object.data else {
-            return Err(TinyOneError::runtime("map_set expects a map"));
-        };
-        crate::runtime::heap::decode_map_entries(entries)
-    };
-
-    let mut existing: Option<usize> = None;
-    for (idx, (k, _)) in entries_clone.iter().enumerate() {
-        if map_key_equal(context, k, &key)? {
-            existing = Some(idx);
-            break;
-        }
-    }
+    let lookup_key = canonical_map_key(context, &key)?;
+    validate_indexed_pointer_keys(context, target, "map_set")?;
+    let existing = indexed_map_entry(context, target, &key, lookup_key.as_ref(), "map_set")?
+        .map(|(index, _)| index);
 
     if existing.is_none() {
         context
@@ -140,11 +128,18 @@ pub fn b_map_set(
             slot[crate::runtime::value_codec::ENCODED_VALUE_BYTES..]
                 .copy_from_slice(&encoded_value);
         } else {
+            let index = entries.len();
             let mut pair = [0u8; 2 * crate::runtime::value_codec::ENCODED_VALUE_BYTES];
             let width = crate::runtime::value_codec::ENCODED_VALUE_BYTES;
             pair[..width].copy_from_slice(&encoded_key);
             pair[width..].copy_from_slice(&encoded_value);
             entries.push(&pair)?;
+            if matches!(&lookup_key, Some(MapKey::Pointer { .. })) {
+                entries.pointer_indices.push(index);
+            }
+            if let Some(lookup_key) = lookup_key {
+                entries.index.insert(lookup_key, index);
+            }
             inserted = true;
         }
     }
@@ -157,62 +152,26 @@ pub fn b_map_set(
 }
 
 pub fn b_map_get(context: &mut TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
-    // Decode entries out so we can call map_key_equal without holding the guard.
-    let entries_clone: Vec<(Value, Value)> = {
-        let heap = context.heap();
-        let object = heap.get(target)?;
-        let HeapData::Map(entries) = &object.data else {
-            return Err(TinyOneError::runtime("map_get expects a map"));
-        };
-        crate::runtime::heap::decode_map_entries(entries)
-    };
-    for (k, v) in &entries_clone {
-        if map_key_equal(context, k, key)? {
-            return Ok(v.clone());
-        }
-    }
-    Err(TinyOneError::runtime("map_get: missing key"))
+    let lookup_key = canonical_map_key(context, key)?;
+    validate_indexed_pointer_keys(context, target, "map_get")?;
+    indexed_map_entry(context, target, key, lookup_key.as_ref(), "map_get")?
+        .map(|(_, value)| value)
+        .ok_or_else(|| TinyOneError::runtime("map_get: missing key"))
 }
 
 pub fn b_map_has(context: &TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
-    // Decode entries so map_key_equal can acquire the guard independently.
-    let entries_clone: Vec<(Value, Value)> = {
-        let heap = context.heap();
-        let object = heap.get(target)?;
-        let HeapData::Map(entries) = &object.data else {
-            return Err(TinyOneError::runtime("map_has expects a map"));
-        };
-        crate::runtime::heap::decode_map_entries(entries)
-    };
-    for (k, _) in &entries_clone {
-        if map_key_equal(context, k, key)? {
-            return Ok(Value::I64(1));
-        }
-    }
-    Ok(Value::I64(0))
+    let lookup_key = canonical_map_key(context, key)?;
+    validate_indexed_pointer_keys(context, target, "map_has")?;
+    Ok(Value::I64(
+        indexed_map_entry(context, target, key, lookup_key.as_ref(), "map_has")?.is_some() as i64,
+    ))
 }
 
 pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
-    // Decode entries so map_key_equal can acquire the guard independently.
-    let entries_clone: Vec<(Value, Value)> = {
-        let heap = context.heap();
-        let object = heap.get(target)?;
-        let HeapData::Map(entries) = &object.data else {
-            return Err(TinyOneError::runtime("map_del expects a map"));
-        };
-        crate::runtime::heap::decode_map_entries(entries)
-    };
-
-    let to_remove: Option<usize> = {
-        let mut found = None;
-        for (idx, (k, _)) in entries_clone.iter().enumerate() {
-            if map_key_equal(context, k, key)? {
-                found = Some(idx);
-                break;
-            }
-        }
-        found
-    };
+    let lookup_key = canonical_map_key(context, key)?;
+    validate_indexed_pointer_keys(context, target, "map_del")?;
+    let to_remove = indexed_map_entry(context, target, key, lookup_key.as_ref(), "map_del")?
+        .map(|(index, _)| index);
     let removed = if let Some(idx) = to_remove {
         let mut heap = context.heap();
         let object = heap.get_mut(target)?;
@@ -220,6 +179,7 @@ pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) 
             return Err(TinyOneError::runtime("map_del expects a map"));
         };
         entries.remove(idx);
+        entries.remove_index(idx);
         true
     } else {
         false
@@ -231,6 +191,97 @@ pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) 
         Ok(Value::I64(1))
     } else {
         Ok(Value::I64(0))
+    }
+}
+
+fn canonical_map_key(context: &TinyRuntimeContext, value: &Value) -> Result<Option<MapKey>> {
+    match value {
+        Value::I64(_) | Value::U8(_) | Value::U16(_) | Value::U32(_) => Ok(Some(MapKey::Integer(
+            runtime_integer_value(value, "map key")?,
+        ))),
+        Value::Pointer(pointer) => {
+            validate_pointer_base(context, pointer, "map key")?;
+            Ok(Some(MapKey::Pointer {
+                address: pointer.address,
+                kind: pointer.kind,
+                index: pointer.index,
+                field: pointer.field.clone(),
+                generation: pointer.generation,
+            }))
+        }
+        Value::Heap(reference) => {
+            let heap = context.heap();
+            let Ok(object) = heap.get(value) else {
+                return Ok(None);
+            };
+            match &object.data {
+                HeapData::String(text) => Ok(Some(MapKey::String(
+                    crate::runtime::heap::heap_str(text)?.to_owned(),
+                ))),
+                _ => Ok(Some(MapKey::HeapObject {
+                    address: reference.address,
+                    generation: reference.generation,
+                })),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn validate_indexed_pointer_keys(
+    context: &TinyRuntimeContext,
+    target: &Value,
+    operation: &str,
+) -> Result<()> {
+    let pointers = {
+        let heap = context.heap();
+        let object = heap.get(target)?;
+        let HeapData::Map(entries) = &object.data else {
+            return Err(TinyOneError::runtime(format!("{operation} expects a map")));
+        };
+        entries
+            .pointer_indices
+            .iter()
+            .filter_map(|index| crate::runtime::heap::decode_map_entry(entries, *index))
+            .map(|(key, _)| key)
+            .collect::<Vec<_>>()
+    };
+    for pointer in pointers {
+        if let Value::Pointer(pointer) = pointer {
+            validate_pointer_base(context, &pointer, "map key")?;
+        }
+    }
+    Ok(())
+}
+
+fn indexed_map_entry(
+    context: &TinyRuntimeContext,
+    target: &Value,
+    requested: &Value,
+    lookup_key: Option<&MapKey>,
+    operation: &str,
+) -> Result<Option<(usize, Value)>> {
+    let Some(lookup_key) = lookup_key else {
+        return Ok(None);
+    };
+    let candidate = {
+        let heap = context.heap();
+        let object = heap.get(target)?;
+        let HeapData::Map(entries) = &object.data else {
+            return Err(TinyOneError::runtime(format!("{operation} expects a map")));
+        };
+        entries.index.get(lookup_key).and_then(|index| {
+            crate::runtime::heap::decode_map_entry(entries, *index)
+                .map(|(key, value)| (*index, key, value))
+        })
+    };
+    let Some((index, stored, value)) = candidate else {
+        return Ok(None);
+    };
+    if map_key_equal(context, &stored, requested)? {
+        Ok(Some((index, value)))
+    } else {
+        Ok(None)
     }
 }
 
@@ -690,20 +741,21 @@ pub fn b_thread_spawn(
         crate::runtime::heap::heap_str(s)?.to_owned()
     };
 
-    let program_arc = context
-        .program_arc
+    let verified = context
+        .verified_program
         .clone()
-        .ok_or_else(|| TinyOneError::runtime("thread_spawn: runtime has no compiled program"))?;
+        .ok_or_else(|| TinyOneError::runtime("thread_spawn: runtime has no verified program"))?;
+    let program_arc = verified.program_arc();
 
     let fn_args = args[1..].to_vec();
     let (fn_index, fn_param_count) = program_arc
-        .functions
-        .iter()
-        .enumerate()
-        .find(|(_, f)| f.name == fn_name)
-        .map(|(i, f)| (i, f.param_count))
+        .publicly_callable_function(&fn_name)
+        .map(|(index, function)| (index, function.param_count))
         .ok_or_else(|| {
-            TinyOneError::runtime(format!("thread_spawn: function {:?} not found", fn_name))
+            TinyOneError::runtime(format!(
+                "thread_spawn: function {:?} not found or not exported",
+                fn_name
+            ))
         })?;
 
     if fn_args.len() != fn_param_count {
@@ -715,7 +767,6 @@ pub fn b_thread_spawn(
         )));
     }
 
-    let verified = crate::VerifiedProgram::verify_arc(Arc::clone(&program_arc))?;
     let heap_arc = Arc::clone(&context.heap_arc);
     let thread_globals = global_memory.try_clone()?;
     let sys_args = context.sys_args.clone();
@@ -724,6 +775,7 @@ pub fn b_thread_spawn(
     let handle = std::thread::spawn(move || {
         let mut thread_ctx = TinyRuntimeContext::with_heap(heap_arc);
         thread_ctx.program_arc = Some(Arc::clone(&program_arc));
+        thread_ctx.verified_program = Some(verified.clone());
         thread_ctx.set_sys_args(sys_args);
         thread_ctx.set_sys_env(sys_env);
         let mut thread_stdout: Vec<u8> = Vec::new();
@@ -951,11 +1003,12 @@ pub fn b_closure_new(
         .as_ref()
         .ok_or_else(|| TinyOneError::runtime("closure_new: runtime has no compiled program"))?;
     let function_id = program
-        .functions
-        .iter()
-        .position(|function| function.name == name)
+        .publicly_callable_function(&name)
+        .map(|(index, _)| index)
         .ok_or_else(|| {
-            TinyOneError::runtime(format!("closure_new: function {name:?} not found"))
+            TinyOneError::runtime(format!(
+                "closure_new: function {name:?} not found or not exported"
+            ))
         })?;
     Ok(Value::Heap(
         context
@@ -1182,9 +1235,8 @@ pub fn b_dictionary_new(context: &mut TinyRuntimeContext, source: &Value) -> Res
         let heap = context.heap();
         let object = heap.get(source)?;
         match &object.data {
-            HeapData::Map(entries) | HeapData::Dictionary(entries) => {
-                crate::runtime::heap::decode_map_entries(entries)
-            }
+            HeapData::Map(entries) => crate::runtime::heap::decode_map_entries(entries),
+            HeapData::Dictionary(entries) => crate::runtime::heap::decode_map_entries(entries),
             _ => {
                 return Err(TinyOneError::runtime(
                     "dictionary_new expects a map or dictionary",

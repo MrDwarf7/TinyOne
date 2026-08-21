@@ -48,6 +48,50 @@ tinylang example.to
 tinylang --mode vm example.to
 ```
 
+`-j` / `--jit` and `--vm` are direct aliases for the corresponding mode, so
+`tinylang --vm example.to` is equivalent to `--mode vm`.
+
+---
+
+### `-O0`, `--no-optimize` / `-O1`, `--optimize`
+
+Control bytecode optimization for source compilation. Optimization is enabled
+by default. `-O0` is useful when comparing raw compiler output with optimized
+bytecode; `-O1` explicitly restores the current optimization tier.
+
+```sh
+tinylang -O0 --emit-bytecode raw.tobc.json example.to
+tinylang -O1 example.to
+```
+
+---
+
+### `--no-cache`
+
+Source files use a dependency-validated `.tinyone-cache/` beside the root
+program by default. Cache hits skip lexing, parsing, optimization, and module
+assembly. TinyOne hashes the root, imported sources, manifests (including
+previously missing manifest probes), and canonical import resolutions before
+loading a compact artifact, then verifies the artifact and fingerprint.
+
+A single changed module with stable function/struct topology is rebuilt and
+relocated incrementally; other changes safely fall back to a full build. Use
+`--no-cache` for reproducibility checks or read-only workflows. `--verbose`
+prints `cache=hit`, `cache=incremental`, `cache=miss`, or `cache=off`.
+
+---
+
+### `--jit-threshold N` / `--no-jit-quickening`
+
+Set the number of backward-edge executions before a loop is quickened. The
+default is `8`; valid values are `0..65535`, and `0` disables quickening.
+`--no-jit-quickening` is the readable alias for threshold zero.
+
+```sh
+tinylang --jit-threshold 2 example.to
+tinylang --no-jit-quickening example.to
+```
+
 ---
 
 ### `--check`
@@ -62,11 +106,16 @@ tinylang --check example.to
 
 ### `--emit-bytecode PATH`
 
-After compilation, write the JSON bytecode artifact to `PATH`. The artifact can be executed later with `--run-bytecode`.
+After compilation, write a bytecode artifact to `PATH`. A `.tob` suffix selects
+the compact binary format; every other suffix writes readable JSON. Either can
+be executed later with `--run-bytecode`.
 
 ```sh
 tinylang \
   --check --emit-bytecode out.tobc.json example.to
+
+tinylang \
+  --check --emit-bytecode out.tob example.to
 ```
 
 See [`bytecode.md`](bytecode.md) for the artifact format.
@@ -86,7 +135,9 @@ tinylang \
 
 ### `--run-bytecode PATH`
 
-Execute a pre-compiled JSON artifact from `PATH` without recompiling from source. The artifact is verified again before execution.
+Execute a pre-compiled JSON or compact binary artifact from `PATH` without
+recompiling from source. Format detection uses the binary magic, not the file
+suffix. The artifact is verified before execution.
 
 ```sh
 # Compile once

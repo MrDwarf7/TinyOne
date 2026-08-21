@@ -164,4 +164,50 @@ impl Op {
             Op::CallValue => 36,
         }
     }
+
+    pub(crate) fn from_ordinal(ordinal: u16) -> Result<Self> {
+        Ok(match ordinal {
+            1 => Op::PushInt,
+            2 => Op::Load,
+            3 => Op::Store,
+            4 => Op::Add,
+            5 => Op::Sub,
+            6 => Op::Mul,
+            7 => Op::Div,
+            8 => Op::Neg,
+            9 => Op::Print,
+            10 => Op::Lt,
+            11 => Op::Lte,
+            12 => Op::Gt,
+            13 => Op::Gte,
+            14 => Op::Eq,
+            15 => Op::Ne,
+            16 => Op::Jump,
+            17 => Op::JumpIfZero,
+            18 => Op::Call,
+            19 => Op::Return,
+            20 => Op::Halt,
+            21 => Op::PushString,
+            22 => Op::MakeArray,
+            23 => Op::Index,
+            24 => Op::SetIndex,
+            25 => Op::MakeStruct,
+            26 => Op::GetField,
+            27 => Op::SetField,
+            28 => Op::Builtin,
+            29 => Op::PushNull,
+            30 => Op::Pop,
+            31 => Op::LoadGlobal,
+            32 => Op::MakeEnum,
+            33 => Op::PushBool,
+            34 => Op::PushFloat,
+            35 => Op::PushFunction,
+            36 => Op::CallValue,
+            _ => {
+                return Err(TinyOneError::compile(format!(
+                    "Unknown opcode ordinal {ordinal}"
+                )));
+            }
+        })
+    }
 }

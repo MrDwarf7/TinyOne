@@ -1,14 +1,94 @@
+use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, atomic::AtomicI64};
 
 use crate::runtime::ralloc_record::RallocRecord;
 use crate::runtime::ralloc_vec::RallocVec;
 use crate::runtime::sync::{TinyMutex, TinyThreadHandle};
+use crate::runtime::value::PointerKind;
 use crate::runtime::value_codec::{self, ENCODED_VALUE_BYTES};
 use crate::tiny_allocator::RallocBytes;
 use crate::{
     HeapRef, MAX_ARRAY_LENGTH, MAX_HEAP_BYTES, MAX_HEAP_OBJECTS, Result, TinyOneError, TypeKind,
     VALUE_BYTES, Value,
 };
+
+/// Canonical, hashable map-key representation. It mirrors `map_key_equal`:
+/// integer widths compare by value, strings compare by content, pointers omit
+/// cast metadata, and other heap objects compare by generational identity.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum MapKey {
+    Integer(i128),
+    String(String),
+    HeapObject {
+        address: usize,
+        generation: u64,
+    },
+    Pointer {
+        address: usize,
+        kind: PointerKind,
+        index: i64,
+        field: String,
+        generation: u64,
+    },
+}
+
+/// Insertion-ordered map payload plus an O(1)-average lookup sidecar. Entries
+/// remain Ralloc-owned; the index is rebuildable control metadata and is never
+/// exposed through the language memory model.
+#[derive(Debug)]
+pub(crate) struct MapData {
+    entries: RallocVec,
+    pub(crate) index: HashMap<MapKey, usize>,
+    pub(crate) pointer_indices: Vec<usize>,
+}
+
+impl MapData {
+    fn new(entries: RallocVec) -> Self {
+        Self {
+            entries,
+            index: HashMap::new(),
+            pointer_indices: Vec::new(),
+        }
+    }
+
+    pub(crate) fn remove_index(&mut self, removed: usize) {
+        self.index.retain(|_, index| {
+            if *index == removed {
+                false
+            } else {
+                if *index > removed {
+                    *index -= 1;
+                }
+                true
+            }
+        });
+        self.pointer_indices.retain_mut(|index| {
+            if *index == removed {
+                false
+            } else {
+                if *index > removed {
+                    *index -= 1;
+                }
+                true
+            }
+        });
+    }
+}
+
+impl Deref for MapData {
+    type Target = RallocVec;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl DerefMut for MapData {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
 
 // `HeapData` deliberately does not derive/implement `Clone`: `String`,
 // `Buffer`, and `CharBuffer` own a `RallocBytes`, which wraps a real,
@@ -36,7 +116,7 @@ pub(crate) enum HeapData {
     /// value_codec::ENCODED_VALUE_BYTES`-wide slots (encoded key then
     /// encoded value, contiguous per entry). Iteration order is insertion
     /// order, matching the spec.
-    Map(RallocVec),
+    Map(MapData),
     Mutex(Arc<TinyMutex>),
     Atomic(Arc<AtomicI64>),
     Thread(Arc<TinyThreadHandle>),
@@ -476,7 +556,7 @@ impl TinyHeap {
 
     pub(crate) fn alloc_map(&mut self, entries: Vec<(Value, Value)>) -> Result<HeapRef> {
         let vec = encode_into_ralloc_map_vec(&entries)?;
-        self.alloc_data(HeapData::Map(vec))
+        self.alloc_data(HeapData::Map(MapData::new(vec)))
     }
 
     pub(crate) fn alloc_struct(
@@ -922,6 +1002,13 @@ pub(crate) fn decode_map_entries(vec: &RallocVec) -> Vec<(Value, Value)> {
             (key, value)
         })
         .collect()
+}
+
+pub(crate) fn decode_map_entry(vec: &RallocVec, index: usize) -> Option<(Value, Value)> {
+    let pair = vec.get(index)?;
+    let key = value_codec::decode_value(pair[..ENCODED_VALUE_BYTES].try_into().unwrap());
+    let value = value_codec::decode_value(pair[ENCODED_VALUE_BYTES..].try_into().unwrap());
+    Some((key, value))
 }
 
 #[cfg(test)]
