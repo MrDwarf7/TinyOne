@@ -2,8 +2,6 @@ use std::collections::HashSet;
 
 use crate::{Instr, JitOp, Op, Result, TinyOneError, checked_non_negative_usize};
 
-pub(crate) const HOT_BACK_EDGE_THRESHOLD: u16 = 8;
-
 #[derive(Debug, Clone)]
 pub(crate) struct JitChunk {
     pub(crate) name: String,
@@ -134,12 +132,4 @@ fn slot_immediate_update(
 fn jit_operand(value: i64) -> Result<usize> {
     checked_non_negative_usize(value, "JIT operand")
         .map_err(|error| TinyOneError::compile(format!("JIT invalid operand: {error}")))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct JitFunction {
-    pub(crate) name: String,
-    pub(crate) param_count: usize,
-    pub(crate) slot_count: usize,
-    pub(crate) chunk_index: usize,
 }

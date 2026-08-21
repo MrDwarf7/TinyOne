@@ -87,10 +87,11 @@ pub(crate) fn inspect_jit(program: &Program) -> JitInspection {
         Ok(compiled) => JitInspection {
             fingerprint: compiled.fingerprint().to_string(),
             listing: compiled.listing(),
-            chunk_count: compiled.chunks.len(),
+            chunk_count: compiled.chunks.iter().flatten().count(),
             op_count: compiled
                 .chunks
                 .iter()
+                .flatten()
                 .map(|chunk| chunk.ops.len())
                 .sum::<usize>(),
         },

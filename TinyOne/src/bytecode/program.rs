@@ -116,13 +116,40 @@ impl Program {
         self
     }
 
+    /// Resolve a function name supplied by untrusted runtime data. Root
+    /// functions are callable by name; module functions must be explicitly
+    /// exported by their owning module. Bytecode-level calls are checked by
+    /// the verifier against the more precise caller/import relationship.
+    pub(crate) fn publicly_callable_function(&self, name: &str) -> Option<(usize, &Function)> {
+        let (index, function) = self
+            .functions
+            .iter()
+            .enumerate()
+            .find(|(_, function)| function.name == name)?;
+        let Some((module_name, local_name)) = name.split_once('.') else {
+            return Some((index, function));
+        };
+        if local_name.contains('.') {
+            return None;
+        }
+        self.modules
+            .iter()
+            .find(|module| module.name == module_name)
+            .filter(|module| {
+                module
+                    .exported_functions
+                    .iter()
+                    .any(|export| export == local_name)
+            })
+            .map(|_| (index, function))
+    }
+
     pub fn fingerprint(&self) -> String {
         let mut hasher = Blake2b512::new();
+        hasher.update(b"tinyone-program-fingerprint-v2");
         self.hash_code(&mut hasher, &self.code);
         hasher.update((self.slot_count as u64).to_le_bytes());
-        for name in &self.names {
-            hash_string_u32(&mut hasher, name);
-        }
+        hash_string_list(&mut hasher, self.names.iter());
         hasher.update((self.functions.len() as u64).to_le_bytes());
         for function in &self.functions {
             hash_string_u32(&mut hasher, &function.name);
@@ -130,10 +157,13 @@ impl Program {
             hasher.update((function.param_count as u64).to_le_bytes());
             hasher.update((function.slot_count as u64).to_le_bytes());
             self.hash_code(&mut hasher, &function.code);
+            hash_string_list(&mut hasher, function.names.iter());
         }
+        hasher.update((self.strings.len() as u64).to_le_bytes());
         for text in &self.strings {
             hash_string_u64(&mut hasher, text);
         }
+        hasher.update((self.structs.len() as u64).to_le_bytes());
         for item in &self.structs {
             hash_string_u32(&mut hasher, &item.name);
             hasher.update((item.fields.len() as u32).to_le_bytes());
@@ -141,9 +171,8 @@ impl Program {
                 hash_string_u32(&mut hasher, field);
             }
         }
-        for field in &self.fields {
-            hash_string_u32(&mut hasher, field);
-        }
+        hash_string_list(&mut hasher, self.fields.iter());
+        hasher.update((self.modules.len() as u64).to_le_bytes());
         for module in &self.modules {
             hash_string_u32(&mut hasher, &module.name);
             hash_string_u32(&mut hasher, &module.path);
@@ -157,11 +186,19 @@ impl Program {
             hash_string_list(&mut hasher, module.exported_functions.iter());
             hash_string_list(&mut hasher, module.exported_structs.iter());
         }
+        hasher.update((self.enum_variants.len() as u64).to_le_bytes());
+        for item in &self.enum_variants {
+            hash_string_u32(&mut hasher, &item.enum_name);
+            hash_string_u32(&mut hasher, &item.variant_name);
+            hasher.update(item.tag.to_le_bytes());
+            hash_string_list(&mut hasher, item.fields.iter());
+        }
         let digest = hasher.finalize();
         hex::encode(&digest[..16])
     }
 
     fn hash_code(&self, hasher: &mut Blake2b512, code: &[Instr]) {
+        hasher.update((code.len() as u64).to_le_bytes());
         for instr in code {
             hasher.update(instr.op.ordinal().to_le_bytes());
             hasher.update((instr.arg as i128).to_le_bytes());
@@ -257,27 +294,62 @@ where
 /// verification ran. Public execution APIs accept `&VerifiedProgram` or
 /// `&Program` (with internal re-verification) — this type is provided for
 /// callers that want to verify once and reuse.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedProgram(std::sync::Arc<Program>);
+#[derive(Debug, Clone)]
+pub struct VerifiedProgram {
+    program: std::sync::Arc<Program>,
+    fingerprint: std::sync::Arc<std::sync::OnceLock<String>>,
+}
+
+impl PartialEq for VerifiedProgram {
+    fn eq(&self, other: &Self) -> bool {
+        self.program == other.program
+    }
+}
+
+impl Eq for VerifiedProgram {}
 
 impl VerifiedProgram {
     /// Verify `program` and wrap it. Returns `Err` if verification fails.
     pub fn verify(program: Program) -> crate::Result<Self> {
         crate::BytecodeVerifier::verify(&program)?;
-        Ok(Self(std::sync::Arc::new(program)))
+        Ok(Self::from_verified_arc(std::sync::Arc::new(program)))
     }
 
     pub(crate) fn verify_arc(program: std::sync::Arc<Program>) -> crate::Result<Self> {
         crate::BytecodeVerifier::verify(&program)?;
-        Ok(Self(program))
+        Ok(Self::from_verified_arc(program))
+    }
+
+    pub(crate) fn from_verified_arc(program: std::sync::Arc<Program>) -> Self {
+        Self {
+            program,
+            fingerprint: std::sync::Arc::new(std::sync::OnceLock::new()),
+        }
     }
 
     /// Borrow the inner program.
     pub fn program(&self) -> &Program {
-        &self.0
+        &self.program
+    }
+
+    /// Return the stable program fingerprint, computing it at most once for
+    /// this verification token and all of its clones.
+    pub fn fingerprint(&self) -> &str {
+        self.fingerprint
+            .get_or_init(|| self.program.fingerprint())
+            .as_str()
     }
 
     pub(crate) fn program_arc(&self) -> std::sync::Arc<Program> {
-        std::sync::Arc::clone(&self.0)
+        std::sync::Arc::clone(&self.program)
+    }
+
+    /// Consume the capability and recover an owned program. If other clones
+    /// still share the program, the metadata is cloned for the caller.
+    pub fn into_program(self) -> Program {
+        match std::sync::Arc::try_unwrap(self.program) {
+            Ok(program) => program,
+            Err(program) => (*program).clone(),
+        }
     }
 }

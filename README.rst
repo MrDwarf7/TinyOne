@@ -148,6 +148,7 @@ Compile and verify without running::
 Emit bytecode and JIT listings::
 
     tinylang --emit-bytecode program.tobc.json program.to
+    tinylang --emit-bytecode program.tob program.to
     tinylang --emit-jit program.jit.txt program.to
 
 Run a bytecode artifact::
@@ -163,8 +164,15 @@ The CLI supports::
 
     Options:
       --mode {jit,vm}       Execution mode (default: jit)
+      -j, --jit             Use adaptive JIT mode
+      --vm                  Use portable VM mode
+      -O0, --no-optimize    Disable bytecode optimization
+      -O1, --optimize       Enable bytecode optimization (default)
+      --no-cache            Disable the dependency-validated disk compile cache
+      --jit-threshold N     Quicken loops after N back edges (default: 8)
+      --no-jit-quickening   Disable adaptive JIT quickening
       --check               Compile only, do not run
-      --emit-bytecode PATH  Write a bytecode artifact to PATH
+      --emit-bytecode PATH  Write JSON, or compact binary for a .tob path
       --emit-jit PATH       Write a JIT listing to PATH
       --run-bytecode PATH   Run a compiled bytecode artifact
       --input VALUE         Supply a program input value (repeatable)
@@ -387,8 +395,9 @@ Language and runtime gaps
   panics if passed a heap reference.
 * The static/hybrid type-system direction is documented, but a full static type
   checker is not implemented yet.
-* The peephole optimizer is conservative. It folds branch-free constant
-  arithmetic/comparison chunks and intentionally avoids chunks with jumps.
+* The peephole optimizer is conservative. It folds constant arithmetic and
+  comparisons within basic blocks, remapping branch targets without moving
+  expressions across control-flow boundaries.
 * The adaptive JIT is not native code generation.
 * Spawned functions use the portable VM backend even when the parent program
   uses JIT mode. Both parent modes provide the verified program reference and

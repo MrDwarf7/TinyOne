@@ -443,13 +443,15 @@ impl Compiler {
         } else {
             (default_import_alias(&path_token.text), path_token.pos)
         };
-        let resolver = self.resolver.ok_or_else(|| {
+        let resolver = self.resolver.as_ref().ok_or_else(|| {
             self.error(
                 "Imports require compiling from a source file",
                 path_token.clone(),
             )
         })?;
-        let (module_filename, module_source) = resolver(&self.filename, &path_token.text)?;
+        let (module_filename, module_source) = resolver
+            .borrow_mut()
+            .resolve_import(&self.filename, &path_token.text)?;
         if self.namespaces.contains_key(&alias) || self.symbols.contains(&alias) {
             return Err(self.error_at(
                 format!("Import namespace {alias:?} is already defined"),
@@ -486,7 +488,7 @@ impl Compiler {
                 let mut compiler = Compiler::new(
                     module_source,
                     module_filename.clone(),
-                    self.resolver,
+                    self.resolver.clone(),
                     true,
                     module_name_from_import(&path_token.text, &module_filename),
                     Rc::clone(&self.shared),
@@ -507,6 +509,11 @@ impl Compiler {
             .get(&module_filename)
             .cloned()
             .ok_or_else(|| TinyOneError::compile("Internal import state error"))?;
+        if let Some(resolver) = &self.resolver {
+            resolver
+                .borrow_mut()
+                .record_module_name(&module_filename, &info.name);
+        }
         self.namespaces.insert(alias.clone(), info.clone());
         self.module_imports.push(ModuleImportDef {
             alias,

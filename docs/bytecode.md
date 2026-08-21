@@ -154,7 +154,9 @@ Function {
 
 Functions are indexed from zero. The main chunk is not in `functions`; it is
 `program.code`. Module metadata records the original import strings and export
-lists; it does not affect runtime behavior.
+lists. It is security-relevant: the verifier derives declaration ownership
+from qualified names and checks calls, function values, constructors, globals,
+exports, imports, and dependency cycles before either backend can execute.
 
 ## JSON Artifact Format
 
@@ -180,7 +182,7 @@ lists; it does not affect runtime behavior.
   "modules":    [
     {
       "name":               "math",
-      "path":               "math.to",
+      "path":               "math",
       "imports":            [],
       "exported_functions": ["add"],
       "exported_structs":   []
@@ -213,13 +215,28 @@ These are checked by `Program::from_artifact` before any `Vec::collect`:
 A hostile artifact that exceeds any limit receives a structured `TinyOneError`
 before any allocation for the program body.
 
+## Compact Binary Artifact Format
+
+`.tob` files use the magic `TINYONEB`, a little-endian version field, bounded
+length-prefixed tables, numeric opcode ordinals, and fixed-width instruction
+operands. The format includes the complete program metadata, including enum
+variants. Decoding applies byte, table, text, per-chunk, and total-instruction
+limits before verification and rejects unknown versions, unknown opcodes,
+truncation, invalid UTF-8, and trailing bytes.
+
+`load_verified_artifact` auto-detects compact binary versus JSON by magic.
+The CLI emits binary when the `--emit-bytecode` path ends in `.tob`; other
+extensions retain the readable JSON format.
+
 ## Program Fingerprint
 
 `Program::fingerprint()` hashes the complete program with Blake2b512 and
-returns the first 16 bytes as a lowercase hex string. The hash covers opcodes,
-operands, slot counts, function names and arities, string literals, struct
-definitions, field names, and module metadata. It is used as the cache key for
-`JitCache` and may be used for artifact integrity checks.
+returns the first 16 bytes as a lowercase hex string. The domain-separated v2
+hash covers opcodes, operands, code/table lengths, slot and local names,
+function declarations, string literals, structs, fields, modules, and enum
+variants. `VerifiedProgram` computes it once in a shared `OnceLock`, so clones
+do not re-hash metadata. It keys both the in-memory JIT cache and integrity
+checks for dependency-validated disk artifacts.
 
 ## Verifier Rules
 
@@ -253,13 +270,28 @@ following hold for every chunk (main and all functions):
     total text bytes ≤ 1 MiB.
 12. **Work limit** — BFS step count ≤ 10,000,000. Prevents timeout on adversarial
     jump graphs.
+13. **Module metadata integrity** — module names and logical paths agree;
+    declarations have valid unique qualified names; imports resolve to known
+    modules with consistent targets and unique aliases; exports name existing
+    owned declarations; and the dependency graph is acyclic.
+14. **Module visibility** — main/root bytecode may call, take function values
+    for, or construct only exported module declarations. Module functions may
+    access their own declarations and exported declarations of directly
+    imported modules. Module functions cannot read root global slots. Private
+    structs/functions and unexported cross-module declarations are rejected.
+    Module enums remain file-local.
+
+These rules are applied by `VerifiedProgram` before VM execution and before
+JIT lowering, so the adaptive JIT never receives bytecode with a wider module
+authority than the source compiler would grant.
 
 ## JIT Adaptive Tier
 
 ### Compilation
 
 `JitProgram::compile` translates verified TinyOne bytecode into `JitOp` — a
-Rust enum with all operands decoded to native types at compile time:
+Rust enum with all operands decoded to native types. Main is lowered eagerly;
+function chunks are lowered into reserved slots on their first call:
 
 - `LOAD 3` → `JitOp::Load(3usize)` — no conversion at runtime
 - `PUSH_INT 42` → `JitOp::PushInt(42i64)`
@@ -294,20 +326,25 @@ Quickening is in-place and permanent for the lifetime of the `JitProgram`.
 Programs with heterogeneous loop payloads (integers mixed with heap values) will
 receive the quickened jump ops even if the arithmetic ops do not qualify.
 
+The default hot-edge threshold is 8. `JitOptions` can select another `u16`
+threshold for `JitProgram::compile_with_options`, `JitCache::with_options`, or
+the configured runner APIs; zero disables quickening.
+
 ### Cache
 
 `JitCache` stores `JitProgram` instances keyed by fingerprint in a
 `HashMap<String, JitProgram>`. A cache hit reuses the compiled and potentially
 already-quickened program, so hot ranges from a previous run carry over.
 
-`JitCache::compile` re-verifies the program before inserting it. The public
-`run_*` methods each verify once then delegate to internal `*_unchecked` helpers
-that skip re-verification.
+Compatibility methods accepting `Program` verify before insertion. The
+`compile_verified` and `run_verified_program*` methods accept the capability
+returned by verified compiler/artifact APIs and skip redundant verification
+and fingerprint calculation.
 
 ## Peephole Optimizer
 
-The optimizer runs a single forward pass before verification. It folds
-constant-only sequences within straight-line (branch-free) code:
+The optimizer runs shrinking forward passes before verification. It folds
+constant-only sequences within each straight-line control-flow region:
 
 | Input sequence | Output |
 | --- | --- |
@@ -318,6 +355,7 @@ constant-only sequences within straight-line (branch-free) code:
 | `PUSH_INT a, NEG` | `PUSH_INT (-a)` |
 | `PUSH_INT a, PUSH_INT b, LT/LTE/GT/GTE/EQ/NE` | `PUSH_BOOL (true or false)` |
 
-Folding stops at any branch or non-constant opcode. The optimizer does not
-reorder or eliminate instructions and does not analyze across basic block
+Folding never consumes an instruction that is an interior branch target. When
+a fold shortens a chunk, every jump target is remapped before the next pass.
+The optimizer does not reorder expressions or analyze across basic-block
 boundaries.

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::{Program, Result, TinyHeap, TinyHeapStats};
+use crate::{Program, Result, TinyHeap, TinyHeapStats, VerifiedProgram};
 
 pub(crate) struct TinyRuntimeContext {
     pub(crate) heap_arc: Arc<Mutex<TinyHeap>>,
     pub(crate) program_arc: Option<Arc<Program>>,
+    pub(crate) verified_program: Option<VerifiedProgram>,
     pub(crate) queued_stdout: Vec<u8>,
     pub(crate) inputs: Vec<String>,
     pub(crate) input_index: usize,
@@ -23,6 +24,7 @@ impl TinyRuntimeContext {
         Self {
             heap_arc: Arc::new(Mutex::new(heap)),
             program_arc: None,
+            verified_program: None,
             queued_stdout: Vec::new(),
             inputs: inputs.into_iter().collect(),
             input_index: 0,
@@ -41,6 +43,7 @@ impl TinyRuntimeContext {
         Self {
             heap_arc,
             program_arc: None,
+            verified_program: None,
             queued_stdout: Vec::new(),
             inputs: Vec::new(),
             input_index: 0,

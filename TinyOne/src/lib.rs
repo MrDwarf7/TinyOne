@@ -3,6 +3,7 @@ mod api;
 mod artifact_io;
 mod builtins;
 mod bytecode;
+mod compile_cache;
 mod compiler;
 mod error;
 mod ffi;
@@ -20,28 +21,41 @@ pub mod tiny_allocator;
 pub mod vm_hooks;
 
 pub use api::{
-    compile_file, compile_source, compile_source_unoptimized,
-    compile_source_unoptimized_with_filename, compile_source_with_filename, lex_source,
-    optimize_program,
+    compile_file, compile_file_cached, compile_file_cached_verified,
+    compile_file_cached_verified_with_options, compile_file_cached_verified_with_status,
+    compile_file_unoptimized, compile_file_unoptimized_verified, compile_file_verified,
+    compile_source, compile_source_unoptimized, compile_source_unoptimized_verified,
+    compile_source_unoptimized_verified_with_filename, compile_source_unoptimized_with_filename,
+    compile_source_verified, compile_source_verified_with_filename, compile_source_with_filename,
+    lex_source, optimize_program,
 };
-pub use artifact_io::{load_artifact, write_artifact};
+pub use artifact_io::{
+    load_artifact, load_verified_artifact, write_artifact, write_binary_artifact,
+};
 pub(crate) use builtins::{BUILTINS, builtin_index};
 pub use bytecode::{
     BytecodeVerifier, EnumVariantDef, Function, Instr, ModuleDef, ModuleImportDef, Op,
     PeepholeOptimizer, Program, StructDef, VerifiedProgram,
 };
+pub use compile_cache::CompileCacheStatus;
 pub(crate) use compiler::{
-    Compiler, CompilerSharedState, ModuleInfo, Resolver, SharedState, SymbolTable,
-    default_import_alias, module_name_from_import, read_source_file, resolve_import,
-    unique_module_name,
+    Compiler, CompilerSharedState, ModuleInfo, ModuleResolver, Resolver, ResolverInput,
+    SharedState, SymbolTable, content_digest, default_import_alias, module_name_from_import,
+    patch_module, read_source_file, unique_module_name,
 };
 pub use error::{Result, TinyOneError};
 #[doc(hidden)]
 pub use ffi::sandbox_worker_main;
-pub(crate) use jit::{HOT_BACK_EDGE_THRESHOLD, JitChunk, JitFunction, JitOp, JitVm};
-pub use jit::{JitCache, JitCacheStats, JitProgram, JitStats, write_jit_listing};
+pub use jit::{
+    DEFAULT_HOT_BACK_EDGE_THRESHOLD, JitCache, JitCacheStats, JitOptions, JitProgram, JitStats,
+    write_jit_listing,
+};
+pub(crate) use jit::{JitChunk, JitOp, JitVm};
 pub use runner::{
-    run_program, run_program_report, run_program_with_env, run_source, run_source_report,
+    run_program, run_program_report, run_program_with_env, run_program_with_env_and_jit_options,
+    run_program_with_jit_options, run_source, run_source_report, run_verified_program,
+    run_verified_program_report, run_verified_program_with_env,
+    run_verified_program_with_env_and_jit_options, run_verified_program_with_jit_options,
 };
 pub(crate) use runtime::{
     HeapData, MAX_ARRAY_LENGTH, MAX_BUFFER_BYTES, MAX_CALL_DEPTH, MAX_HEAP_BYTES, MAX_HEAP_OBJECTS,

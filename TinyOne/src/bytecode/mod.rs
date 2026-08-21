@@ -1,4 +1,5 @@
 pub(crate) mod artifact;
+pub(crate) mod binary;
 pub(crate) mod instr;
 pub(crate) mod opcode;
 pub(crate) mod peephole;

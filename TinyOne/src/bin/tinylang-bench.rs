@@ -9,8 +9,8 @@ use std::time::Instant;
 use serde_json::{Value as JsonValue, json};
 use tinyone::{
     BytecodeVerifier, JitCache, JitProgram, Program, RuntimeValue, TinyMemory, TinyOneError,
-    compile_source, compile_source_unoptimized, lex_source, optimize_program, run_program,
-    run_source,
+    VerifiedProgram, compile_source, compile_source_unoptimized, lex_source, optimize_program,
+    run_program, run_source,
 };
 
 const STRAIGHTLINE_SOURCE: &str = r#"
@@ -486,6 +486,21 @@ fn build_benchmarks() -> Vec<Benchmark> {
                 black_box(Program::from_artifact(artifact.clone()).expect("artifact"));
             }
         }),
+        bench("program.to_binary_artifact", 10_000, {
+            let program = functions.program.clone();
+            move || {
+                black_box(program.to_binary_artifact().expect("binary artifact"));
+            }
+        }),
+        bench("program.from_binary_artifact", 5_000, {
+            let bytes = functions
+                .program
+                .to_binary_artifact()
+                .expect("binary artifact");
+            move || {
+                black_box(Program::from_binary_artifact(&bytes).expect("binary artifact"));
+            }
+        }),
         bench("jit.codegen_straightline_cold", 5_000, {
             let program = straightline.program.clone();
             move || {
@@ -520,6 +535,21 @@ fn build_benchmarks() -> Vec<Benchmark> {
             compile_jit(&program, &mut cache);
             move || {
                 compile_jit(&program, &mut cache);
+            }
+        }),
+        bench("jit.cache_hit_verified_dispatch", 100_000, {
+            let verified = VerifiedProgram::verify((*functions.program).clone())
+                .expect("verified benchmark program");
+            let mut cache = JitCache::new();
+            cache
+                .compile_verified(&verified)
+                .expect("warm verified cache");
+            move || {
+                black_box(
+                    cache
+                        .compile_verified(&verified)
+                        .expect("verified cache hit") as *const _,
+                );
             }
         }),
         bench("jit.cache_hit_straightline", 100_000, {
@@ -851,6 +881,7 @@ mod tests {
             "jit.codegen_heap_cold",
             "jit.codegen_builtin_cold",
             "jit.cache_hit_dispatch",
+            "jit.cache_hit_verified_dispatch",
             "jit.cache_hit_straightline",
             "jit.cache_hit_heap",
             "api.run_source_jit_cold",

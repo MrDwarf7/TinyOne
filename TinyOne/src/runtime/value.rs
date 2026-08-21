@@ -9,7 +9,7 @@ pub struct HeapRef {
 /// The kind of location a [`RawPointer`] refers to. A small closed set —
 /// every construction site passes one of these five literals — so this is
 /// an enum rather than a `String`, unlike `field` (see below).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PointerKind {
     Null,
     Object,

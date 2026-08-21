@@ -45,10 +45,15 @@ source text
  VM    JIT
 ```
 
-The public API surface (`api.rs`) ties these stages together.
-`compile_source` and `compile_file` run all three pre-execution stages and
-return a verified `Program`. The execution functions then dispatch to either
-the VM or JIT backend.
+The public API surface (`api.rs`) ties these stages together. The
+`compile_*_verified` entry points return a `VerifiedProgram` capability that
+keeps both the immutable `Program` and its memoized fingerprint. Compatibility
+entry points still return `Arc<Program>`. Execution APIs accepting the verified
+capability skip duplicate verification and fingerprint work.
+
+File compilation may first consult the dependency-validated disk cache. A
+valid compact binary artifact bypasses lexing, parsing, optimization, and
+module assembly, but is still decoded under resource limits and verified.
 
 ## Module Map
 
@@ -134,18 +139,36 @@ Key compiler subsystems:
   claims the next stack slot in the current scope. Block exit does not reclaim
   slots; slots are zero-initialized at frame entry and hidden after their scope
   exits.
-- **Module resolution** — `import` declarations call the injected `resolver`
-  function (`resolve_import`) to locate and compile the referenced source file.
-  Modules are compiled into separate `Function` chunks with an export table.
-  Circular imports are detected via a seen-set in `CompilerSharedState`.
+- **Module resolution** — all nested compilers share one `ModuleResolver`.
+  Canonical paths, manifest probes (including missing manifests), parsed
+  manifests, import results, and source text are memoized for the compilation
+  session. A source file is therefore read once even when reached through
+  several aliases. Circular imports are detected in `CompilerSharedState`.
+
+### Compile Cache
+
+The CLI enables a sibling `.tinyone-cache/` by default. Its metadata records
+the compiler/cache format version, optimization mode, root path, content
+digests for every source and manifest probe, canonical path resolutions, and
+logical module names. A hit loads the compact `.tob` artifact and verifies its
+fingerprint before use. Missing, stale, malformed, or unverifiable entries are
+ordinary misses.
+
+When exactly one existing module source changed, TinyOne attempts a bounded
+incremental rebuild. It recompiles that module and its imports, relocates table
+indexes by semantic name/content, replaces only declarations owned by that
+module, and verifies the combined program. Declaration-topology changes or any
+failed invariant fall back to a full compile. Cache failures never prevent a
+correct source build.
 
 ### Optimizer
 
-`PeepholeOptimizer::optimize(program)` runs a single forward pass over each
+`PeepholeOptimizer::optimize(program)` runs bounded forward passes over each
 chunk's instruction stream. It folds adjacent constant pushes through
 arithmetic and comparison opcodes, collapsing patterns like
-`PUSH_INT 2, PUSH_INT 3, MUL` into `PUSH_INT 6`. The optimizer only folds
-sequences that are free of branches; it does not alter control flow.
+`PUSH_INT 2, PUSH_INT 3, MUL` into `PUSH_INT 6`. It optimizes straight-line
+regions inside control-flow-heavy chunks, never consumes an interior branch
+target, and remaps jump offsets after each shrinking pass.
 
 ### Verifier
 
@@ -159,6 +182,9 @@ instruction and rejects programs where:
 - A branch target is out of range.
 - A slot index, string index, field index, or struct index is out of range.
 - Builtin argument count is outside the declared `[min_args, max_args]` range.
+- Module metadata is inconsistent, forged, cyclic, or names a missing export.
+- A call, function value, struct construction, enum construction, or global
+  load crosses a module boundary without the required export/import authority.
 - A chunk does not end with the required terminal opcode (`HALT` for main,
   `RETURN` for functions).
 - Work steps exceed `MAX_VERIFIER_STEPS` (10,000,000) — guards against
@@ -170,6 +196,13 @@ if visited with a different depth it is immediately rejected as a stack
 mismatch.
 
 All verification runs before any allocation for execution.
+
+The VM and JIT share this verifier. Dynamic function-name entry points
+(`closure_new` and `thread_spawn`) separately restrict lookups to root or
+exported module functions because their target is supplied as runtime data,
+not encoded in an instruction. Native shared-library imports currently fail
+closed: arbitrary DLL/SO execution is outside the verified bytecode boundary
+until a versioned native ABI and isolation policy are implemented.
 
 ### VM Backend
 
@@ -190,18 +223,23 @@ used internally by `runner.rs` which has already verified the program.
 The JIT is an **adaptive bytecode tier**, not a native machine-code JIT.
 
 **Compilation** (`JitProgram::compile`):
-1. Verifies the program (same verifier as the VM path).
-2. Translates each `Instr { op, arg, arg2 }` into a `JitOp` — a Rust enum
+1. Accepts or constructs a `VerifiedProgram` (same verifier as the VM path).
+2. Translates the main `Instr { op, arg, arg2 }` chunk into a `JitOp` — a Rust enum
    variant with decoded, type-safe operands already converted to `usize` or
    `i64`. No operand decoding happens at runtime.
 3. Builds `store.i` (`StoreInt`) and `slot.add.i` / `slot.sub.i` (`AddSlotInt`
    / `SubSlotInt`) superinstructions for common `PUSH_INT, STORE` and
    `LOAD, PUSH_INT, ADD/SUB, STORE` sequences.
 
+Function chunks are lowered into reserved slots only on their first call.
+`JitProgram` retains the verified program as the single owner of strings,
+functions, structs, fields, modules, and enum metadata instead of cloning
+those tables. Human-readable listing generation explicitly lowers all chunks.
+
 **Hot-loop quickening**:
 Each compiled chunk carries an `edge_counts: Vec<u16>` parallel to its ops.
 `JitVm` increments the counter at every backward branch. When a counter reaches
-`HOT_BACK_EDGE_THRESHOLD` (8), `JitChunk::promote_range(target, end)` rewrites
+the configured threshold (8 by default), `JitChunk::promote_range(target, end)` rewrites
 all ops in `[target, end)` that have a faster "hot" variant:
 
 | Cold op | Hot op |
@@ -218,10 +256,20 @@ all ops in `[target, end)` that have a faster "hot" variant:
 `i64`. `*Hot` variants skip the branch-counter increment. Quickening is
 in-place and irreversible within a run.
 
+`JitOptions` configures this threshold for `JitProgram`, `JitCache`, and the
+configured runner APIs. Threshold zero disables quickening while retaining JIT
+lowering and superinstructions.
+
 **Caching** (`JitCache`):
 Programs are identified by their Blake2b512 fingerprint (truncated to 16 hex
 bytes). A `HashMap<String, JitProgram>` stores compiled programs. On a cache
 hit, quickened state from a previous run is preserved across repeated calls.
+
+Runtime maps retain insertion-ordered Ralloc entries and maintain a canonical
+key index for average constant-time `map_get`, `map_has`, and `map_set`
+lookup. Integer widths normalize by value, strings index by content, and heap
+or pointer identities include their allocation generation. Pointer-key access
+still validates every stored pointer key before consulting the index.
 
 ### Heap
 

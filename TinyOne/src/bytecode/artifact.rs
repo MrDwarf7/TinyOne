@@ -1,8 +1,8 @@
 use serde_json::{Value as JsonValue, json};
 
 use crate::{
-    BytecodeVerifier, Function, Instr, ModuleDef, ModuleImportDef, Op, Program, Result, StructDef,
-    TinyOneError,
+    Function, Instr, ModuleDef, ModuleImportDef, Op, Program, Result, StructDef, TinyOneError,
+    VerifiedProgram,
 };
 
 pub(crate) const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
@@ -61,6 +61,10 @@ impl Program {
     }
 
     pub fn from_artifact(data: JsonValue) -> Result<Self> {
+        VerifiedProgram::from_artifact(data).map(VerifiedProgram::into_program)
+    }
+
+    pub(crate) fn decode_artifact(data: JsonValue) -> Result<Self> {
         let object = data
             .as_object()
             .ok_or_else(|| TinyOneError::compile("Artifact must be a JSON object"))?;
@@ -189,8 +193,13 @@ impl Program {
             // incorrectly. Source-file compilation is unaffected.
             enum_variants: Vec::new(),
         };
-        BytecodeVerifier::verify(&program)?;
         Ok(program)
+    }
+}
+
+impl VerifiedProgram {
+    pub fn from_artifact(data: JsonValue) -> Result<Self> {
+        Self::verify(Program::decode_artifact(data)?)
     }
 }
 

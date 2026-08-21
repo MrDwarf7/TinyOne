@@ -4,7 +4,6 @@ use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -12,8 +11,9 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::bytecode::artifact::MAX_ARTIFACT_BYTES;
 use crate::{
-    JitProgram, Program, Result, RuntimeValue, TinyHeapStats, TinyMemory, TinyOneError,
-    compile_file, compile_source, lex_source, run_program_report, run_source_report,
+    JitProgram, Result, RuntimeValue, TinyHeapStats, TinyMemory, TinyOneError, VerifiedProgram,
+    compile_file_verified, compile_source_verified, lex_source, run_source_report,
+    run_verified_program_report,
 };
 
 /// The declared, frozen C ABI version.
@@ -97,7 +97,7 @@ pub unsafe extern "C" fn tinyone_lex_source_json(source: *const c_char) -> *mut 
 pub unsafe extern "C" fn tinyone_compile_source_json(source: *const c_char) -> *mut c_char {
     respond(|| {
         let source = read_string_limited(source, "source", MAX_FFI_SOURCE_BYTES)?;
-        program_payload(compile_source(&source)?)
+        program_payload(compile_source_verified(&source)?)
     })
 }
 
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn tinyone_compile_source_json(source: *const c_char) -> *
 pub unsafe extern "C" fn tinyone_compile_file_json(path: *const c_char) -> *mut c_char {
     respond(|| {
         let path = read_string_limited(path, "path", MAX_FFI_PATH_BYTES)?;
-        program_payload(compile_file(Path::new(&path))?)
+        program_payload(compile_file_verified(Path::new(&path))?)
     })
 }
 
@@ -366,7 +366,7 @@ fn execute_sandbox_request(request: SandboxRequest) -> Result<JsonValue> {
             )
         }
         SandboxRequest::RunFile { path, mode, inputs } => {
-            let program = compile_file(Path::new(&path))?;
+            let program = compile_file_verified(Path::new(&path))?;
             run_compiled_program(program, &mode, inputs)
         }
         SandboxRequest::RunArtifact {
@@ -377,15 +377,15 @@ fn execute_sandbox_request(request: SandboxRequest) -> Result<JsonValue> {
             let artifact = serde_json::from_str(&artifact_json).map_err(|error| {
                 TinyOneError::compile(format!("artifact must be valid JSON: {error}"))
             })?;
-            let program = Arc::new(Program::from_artifact(artifact)?);
+            let program = VerifiedProgram::from_artifact(artifact)?;
             run_compiled_program(program, &mode, inputs)
         }
         SandboxRequest::JitListing { artifact_json } => {
             let artifact = serde_json::from_str(&artifact_json).map_err(|error| {
                 TinyOneError::compile(format!("artifact must be valid JSON: {error}"))
             })?;
-            let program = Program::from_artifact(artifact)?;
-            Ok(json!({"listing": JitProgram::compile(&program)?.listing()}))
+            let program = VerifiedProgram::from_artifact(artifact)?;
+            Ok(json!({"listing": JitProgram::compile_verified(&program)?.listing()}))
         }
     }
 }
@@ -466,20 +466,20 @@ fn read_inputs(value: *const c_char) -> Result<Vec<String>> {
     })
 }
 
-fn program_payload(program: Arc<Program>) -> Result<JsonValue> {
+fn program_payload(program: VerifiedProgram) -> Result<JsonValue> {
     Ok(json!({
-        "artifact": program.to_artifact(),
+        "artifact": program.program().to_artifact(),
         "fingerprint": program.fingerprint(),
     }))
 }
 
 fn run_compiled_program(
-    program: Arc<Program>,
+    program: VerifiedProgram,
     mode: &str,
     inputs: Vec<String>,
 ) -> Result<JsonValue> {
     let mut stdout = Vec::new();
-    let report = run_program_report(program, mode, &mut stdout, inputs)?;
+    let report = run_verified_program_report(&program, mode, &mut stdout, inputs)?;
     run_payload(
         stdout,
         report.memory,

@@ -1,9 +1,11 @@
 use std::env;
 use std::io::{self, Read};
-use std::sync::Arc;
 
 use tinyone::{
-    TinyOneError, compile_file, load_artifact, run_program, write_artifact, write_jit_listing,
+    CompileCacheStatus, JitOptions, TinyOneError, compile_file_cached_verified_with_options,
+    compile_file_unoptimized_verified, compile_file_verified, load_verified_artifact,
+    run_verified_program_with_jit_options, write_artifact, write_binary_artifact,
+    write_jit_listing,
 };
 
 #[derive(Debug)]
@@ -17,6 +19,9 @@ struct Args {
     inputs: Vec<String>,
     stdin: bool,
     verbose: bool,
+    optimize: bool,
+    cache: bool,
+    jit_threshold: u16,
     help: bool,
 }
 
@@ -32,6 +37,9 @@ impl Default for Args {
             inputs: Vec::new(),
             stdin: false,
             verbose: false,
+            optimize: true,
+            cache: true,
+            jit_threshold: tinyone::DEFAULT_HOT_BACK_EDGE_THRESHOLD,
             help: false,
         }
     }
@@ -49,6 +57,18 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 if args.mode != "jit" && args.mode != "vm" {
                     return Err("--mode must be 'jit' or 'vm'".to_string());
                 }
+            }
+            "-j" | "--jit" => args.mode = "jit".to_string(),
+            "--vm" => args.mode = "vm".to_string(),
+            "-O0" | "--no-optimize" => args.optimize = false,
+            "-O1" | "--optimize" => args.optimize = true,
+            "--no-cache" => args.cache = false,
+            "--no-jit-quickening" => args.jit_threshold = 0,
+            "--jit-threshold" => {
+                let value = iter.next().ok_or("--jit-threshold requires a value")?;
+                args.jit_threshold = value.parse::<u16>().map_err(|_| {
+                    "--jit-threshold must be an integer from 0 to 65535".to_string()
+                })?;
             }
             "--check" => args.check = true,
             "--emit-bytecode" => {
@@ -82,15 +102,22 @@ fn print_help() {
     println!("usage: tinylang [OPTIONS] [path]");
     println!();
     println!("Options:");
-    println!("  --mode {{jit,vm}}       Execution mode (default: jit)");
-    println!("  --check                Compile only, do not run");
-    println!("  --emit-bytecode PATH   Write a bytecode artifact to PATH");
-    println!("  --emit-jit PATH        Write a JIT listing to PATH");
-    println!("  --run-bytecode PATH    Run a compiled bytecode artifact");
-    println!("  --input VALUE          Supply a program input value (repeatable)");
-    println!("  --stdin                Read input values from stdin");
-    println!("  --verbose              Print program metadata before running");
-    println!("  -h, --help             Show this help message");
+    println!("  --mode {{jit,vm}}        Execution mode (default: jit)");
+    println!("  -j, --jit               Use adaptive JIT mode");
+    println!("  --vm                    Use portable VM mode");
+    println!("  -O0, --no-optimize      Disable bytecode optimization");
+    println!("  -O1, --optimize         Enable bytecode optimization (default)");
+    println!("  --no-cache              Disable the dependency-validated disk compile cache");
+    println!("  --jit-threshold N       Quicken loops after N back edges (default: 8)");
+    println!("  --no-jit-quickening     Disable adaptive JIT quickening");
+    println!("  --check                 Compile only, do not run");
+    println!("  --emit-bytecode PATH    Write JSON, or compact binary when PATH ends in .tob");
+    println!("  --emit-jit PATH         Write a JIT listing to PATH");
+    println!("  --run-bytecode PATH     Run a compiled bytecode artifact");
+    println!("  --input VALUE           Supply a program input value (repeatable)");
+    println!("  --stdin                 Read input values from stdin");
+    println!("  --verbose               Print program metadata before running");
+    println!("  -h, --help              Show this help message");
 }
 
 pub(crate) fn run() -> Result<i32, TinyOneError> {
@@ -107,38 +134,106 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
         args.inputs.extend(text.lines().map(str::to_string));
     }
 
+    let mut cache_status = None;
     let program = if let Some(path) = args.run_bytecode {
-        Arc::new(load_artifact(path)?)
+        load_verified_artifact(path)?
     } else {
         let Some(path) = args.path else {
             return Err(TinyOneError::Compile(
                 "File error: a source path is required".to_string(),
             ));
         };
-        compile_file(path)?
+        if args.cache {
+            let (program, status) = compile_file_cached_verified_with_options(path, args.optimize)?;
+            cache_status = Some(status);
+            program
+        } else if args.optimize {
+            compile_file_verified(path)?
+        } else {
+            compile_file_unoptimized_verified(path)?
+        }
     };
 
     if let Some(path) = args.emit_bytecode {
-        write_artifact(&program, path)?;
+        if path.to_ascii_lowercase().ends_with(".tob") {
+            write_binary_artifact(program.program(), path)?;
+        } else {
+            write_artifact(program.program(), path)?;
+        }
     }
     if let Some(path) = args.emit_jit {
-        write_jit_listing(&program, path)?;
+        write_jit_listing(program.program(), path)?;
     }
     if args.verbose {
         eprintln!(
-            "tinylang: mode={} check={} slots={} functions={} structs={} modules={} fingerprint={}",
+            "tinylang: mode={} optimize={} cache={} jit_threshold={} check={} slots={} functions={} structs={} modules={} fingerprint={}",
             args.mode,
+            args.optimize,
+            match cache_status {
+                Some(CompileCacheStatus::Hit) => "hit",
+                Some(CompileCacheStatus::Incremental) => "incremental",
+                Some(CompileCacheStatus::Miss) => "miss",
+                None => "off",
+            },
+            args.jit_threshold,
             args.check,
-            program.slot_count(),
-            program.functions().len(),
-            program.structs().len(),
-            program.modules().len(),
+            program.program().slot_count(),
+            program.program().functions().len(),
+            program.program().structs().len(),
+            program.program().modules().len(),
             program.fingerprint()
         );
     }
     if !args.check {
         let mut stdout = io::stdout();
-        run_program(program, &args.mode, &mut stdout, args.inputs)?;
+        let jit_options = JitOptions::new().with_hot_back_edge_threshold(args.jit_threshold);
+        run_verified_program_with_jit_options(
+            &program,
+            &args.mode,
+            &mut stdout,
+            args.inputs,
+            jit_options,
+        )?;
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(values: &[&str]) -> Result<Args, String> {
+        parse_args(values.iter().map(|value| (*value).to_string()))
+    }
+
+    #[test]
+    fn ergonomic_execution_and_optimization_flags_parse() {
+        let args = parse(&[
+            "tinylang",
+            "--vm",
+            "-O0",
+            "--jit-threshold",
+            "3",
+            "program.to",
+        ])
+        .unwrap();
+        assert_eq!(args.mode, "vm");
+        assert!(!args.optimize);
+        assert!(args.cache);
+        assert_eq!(args.jit_threshold, 3);
+        assert_eq!(args.path.as_deref(), Some("program.to"));
+
+        let args = parse(&["tinylang", "-j", "--no-jit-quickening", "program.to"]).unwrap();
+        assert_eq!(args.mode, "jit");
+        assert_eq!(args.jit_threshold, 0);
+
+        let args = parse(&["tinylang", "--no-cache", "program.to"]).unwrap();
+        assert!(!args.cache);
+    }
+
+    #[test]
+    fn jit_threshold_rejects_out_of_range_values() {
+        let error = parse(&["tinylang", "--jit-threshold", "65536", "program.to"]).unwrap_err();
+        assert!(error.contains("0 to 65535"));
+    }
 }

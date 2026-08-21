@@ -296,6 +296,37 @@ fn minimal_artifact() -> JsonValue {
     })
 }
 
+fn module_artifact(function_name: &str, exports: &[&str]) -> JsonValue {
+    json!({
+        "format": "tinyone-bytecode",
+        "version": 1,
+        "code": [{"op": "HALT", "arg": 0, "arg2": 0}],
+        "slot_count": 0,
+        "names": [],
+        "functions": [{
+            "name": function_name,
+            "generic_params": [],
+            "param_count": 0,
+            "code": [
+                {"op": "PUSH_INT", "arg": 7, "arg2": 0},
+                {"op": "RETURN", "arg": 0, "arg2": 0}
+            ],
+            "slot_count": 0,
+            "names": []
+        }],
+        "strings": [],
+        "structs": [],
+        "fields": [],
+        "modules": [{
+            "name": "m",
+            "path": "m",
+            "imports": [],
+            "exported_functions": exports,
+            "exported_structs": []
+        }]
+    })
+}
+
 fn expect_artifact_error(artifact: JsonValue, needle: &str) {
     expect_error_contains(Program::from_artifact(artifact), needle);
 }
@@ -692,6 +723,130 @@ fn artifact_rejects_invalid_integer_fields_and_file_size() {
 }
 
 #[test]
+fn artifact_module_visibility_is_enforced_before_execution() {
+    let mut private_call = module_artifact("m.hidden", &[]);
+    private_call["code"] = json!([
+        {"op": "CALL", "arg": 0, "arg2": 0},
+        {"op": "PRINT", "arg": 0, "arg2": 0},
+        {"op": "HALT", "arg": 0, "arg2": 0}
+    ]);
+    expect_artifact_error(private_call, "not visible");
+
+    let mut private_function_value = module_artifact("m.hidden", &[]);
+    private_function_value["code"] = json!([
+        {"op": "PUSH_FUNCTION", "arg": 0, "arg2": 0},
+        {"op": "POP", "arg": 0, "arg2": 0},
+        {"op": "HALT", "arg": 0, "arg2": 0}
+    ]);
+    expect_artifact_error(private_function_value, "not visible");
+
+    let mut public_call = module_artifact("m.visible", &["visible"]);
+    public_call["code"] = json!([
+        {"op": "CALL", "arg": 0, "arg2": 0},
+        {"op": "PRINT", "arg": 0, "arg2": 0},
+        {"op": "HALT", "arg": 0, "arg2": 0}
+    ]);
+    Program::from_artifact(public_call).expect("exported module function should verify");
+}
+
+#[test]
+fn artifact_module_metadata_cannot_forge_members_or_cycles() {
+    let forged_export = module_artifact("m.actual", &["missing"]);
+    expect_artifact_error(forged_export, "exports missing function");
+
+    let mut private_struct = module_artifact("m.visible", &["visible"]);
+    private_struct["structs"] = json!([{"name": "m.Secret", "fields": []}]);
+    private_struct["code"] = json!([
+        {"op": "MAKE_STRUCT", "arg": 0, "arg2": 0},
+        {"op": "POP", "arg": 0, "arg2": 0},
+        {"op": "HALT", "arg": 0, "arg2": 0}
+    ]);
+    expect_artifact_error(private_struct, "not visible");
+
+    let mut root_global = module_artifact("m.visible", &["visible"]);
+    root_global["slot_count"] = json!(1);
+    root_global["names"] = json!(["secret"]);
+    root_global["functions"][0]["code"] = json!([
+        {"op": "LOAD_GLOBAL", "arg": 0, "arg2": 0},
+        {"op": "RETURN", "arg": 0, "arg2": 0}
+    ]);
+    expect_artifact_error(root_global, "cannot access root global slots");
+
+    let mut cycle = module_artifact("m.visible", &["visible"]);
+    cycle["modules"] = json!([
+        {
+            "name": "m",
+            "path": "m",
+            "imports": [{"alias": "n", "path": "n", "module": "n", "resolved": "n"}],
+            "exported_functions": ["visible"],
+            "exported_structs": []
+        },
+        {
+            "name": "n",
+            "path": "n",
+            "imports": [{"alias": "m", "path": "m", "module": "m", "resolved": "m"}],
+            "exported_functions": [],
+            "exported_structs": []
+        }
+    ]);
+    expect_artifact_error(cycle, "cyclic module dependency");
+}
+
+#[test]
+fn artifact_module_calls_require_a_declared_import_edge() {
+    let mut artifact = module_artifact("m.entry", &["entry"]);
+    artifact["functions"] = json!([
+        {
+            "name": "m.entry",
+            "generic_params": [],
+            "param_count": 0,
+            "code": [
+                {"op": "CALL", "arg": 1, "arg2": 0},
+                {"op": "RETURN", "arg": 0, "arg2": 0}
+            ],
+            "slot_count": 0,
+            "names": []
+        },
+        {
+            "name": "n.visible",
+            "generic_params": [],
+            "param_count": 0,
+            "code": [
+                {"op": "PUSH_INT", "arg": 7, "arg2": 0},
+                {"op": "RETURN", "arg": 0, "arg2": 0}
+            ],
+            "slot_count": 0,
+            "names": []
+        }
+    ]);
+    artifact["modules"] = json!([
+        {
+            "name": "m",
+            "path": "m",
+            "imports": [],
+            "exported_functions": ["entry"],
+            "exported_structs": []
+        },
+        {
+            "name": "n",
+            "path": "n",
+            "imports": [],
+            "exported_functions": ["visible"],
+            "exported_structs": []
+        }
+    ]);
+    expect_artifact_error(artifact.clone(), "not visible");
+
+    artifact["modules"][0]["imports"] = json!([{
+        "alias": "dependency",
+        "path": "n",
+        "module": "n",
+        "resolved": "n"
+    }]);
+    Program::from_artifact(artifact).expect("declared exported dependency should verify");
+}
+
+#[test]
 fn verifier_handles_dense_jump_graph_without_path_explosion() {
     let mut code = Vec::new();
     for _ in 0..128 {
@@ -794,7 +949,7 @@ fn map_pointer_keys_do_not_alias_after_heap_generation_reuse() {
 
 #[test]
 fn map_growth_obeys_heap_byte_budget() {
-    // Keep insertion bounded because map_set performs a linear key scan. Fill
+    // Keep insertion bounded so the adversarial budget test stays quick. Fill
     // the remaining heap with one buffer, then assert the next map growth is
     // rejected by the same byte budget.
     let source = r#"
