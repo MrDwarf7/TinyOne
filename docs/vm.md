@@ -102,7 +102,22 @@ The source entry points keep a second cache of verified compilations. Source
 content is bucketed by a 16-byte Blake2 digest and compared byte-for-byte on a
 hit, so digest collisions cannot substitute a different program. This removes
 lexing, parsing, optimization, and verification from repeated
-`JitCache::run_source` calls without weakening first-run validation.
+`JitCache::run_source` calls without weakening first-run validation. Retention
+is bounded by deterministic LRU eviction: the defaults are 128 exact sources
+and 8 MiB of source text. Configure both limits with
+`JitCache::with_source_cache_limits`; zero disables exact-source retention.
+`JitCacheStats` exposes source bytes, hits, misses, compilations, evictions, and
+bypasses in addition to compiled-program statistics.
+
+The lowered JIT also recognizes branch-safe slot-to-slot moves, in-place
+slot/immediate multiply and floor-divide, compare-then-jump, and direct
+zero-jump sequences. Hot variants inspect encoded I64 slots directly and avoid
+the intermediate stack values; non-I64 tags take the same generic numeric or
+truthiness path as ordinary bytecode. Lowering leaves a sequence unfused when
+any branch targets its interior. For opt-in attribution,
+`JitOptions::with_execution_profile(true)` records opcode dispatches and
+operand-stack traffic, while completed runs reuse a bounded pool of cleared
+operand vectors.
 
 Compatibility methods accepting raw `Program` values verify before insertion.
 `compile_verified` and the `run_verified_program*` methods preserve an earlier

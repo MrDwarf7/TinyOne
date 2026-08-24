@@ -14,6 +14,7 @@
 //! All public types are `Send + Sync` and are designed to be shared via [`Arc`].
 
 use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 // ---------------------------------------------------------------------------
@@ -191,6 +192,7 @@ pub trait VmMemoryHook: Send + Sync {
 /// `HookRegistry` is `Send + Sync` and is intended to be shared via [`Arc`].
 pub struct HookRegistry {
     hooks: RwLock<Vec<Arc<dyn VmMemoryHook>>>,
+    hook_count: AtomicUsize,
 }
 
 impl HookRegistry {
@@ -198,6 +200,7 @@ impl HookRegistry {
     pub fn new() -> Self {
         Self {
             hooks: RwLock::new(Vec::new()),
+            hook_count: AtomicUsize::new(0),
         }
     }
 
@@ -207,18 +210,22 @@ impl HookRegistry {
     /// safe to call while no dispatch is in progress (or while another thread
     /// is mid-dispatch — the write will wait until all readers finish).
     pub fn register(&self, hook: Arc<dyn VmMemoryHook>) {
-        self.hooks
+        let mut hooks = self
+            .hooks
             .write()
-            .expect("HookRegistry RwLock poisoned on register")
-            .push(hook);
+            .expect("HookRegistry RwLock poisoned on register");
+        hooks.push(hook);
+        self.hook_count.store(hooks.len(), Ordering::Release);
     }
 
     /// Remove all registered hooks.
     pub fn clear(&self) {
-        self.hooks
+        let mut hooks = self
+            .hooks
             .write()
-            .expect("HookRegistry RwLock poisoned on clear")
-            .clear();
+            .expect("HookRegistry RwLock poisoned on clear");
+        hooks.clear();
+        self.hook_count.store(0, Ordering::Release);
     }
 
     /// Dispatch a [`MemoryEvent`] to all registered hooks.
@@ -228,6 +235,9 @@ impl HookRegistry {
     /// panics is skipped for this event and a message is printed to stderr.
     /// The panic is **not** propagated — the VM remains stable.
     pub fn dispatch(&self, event: MemoryEvent) {
+        if self.hook_count.load(Ordering::Acquire) == 0 {
+            return;
+        }
         let hooks = self
             .hooks
             .read()

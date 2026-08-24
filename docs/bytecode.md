@@ -297,13 +297,25 @@ function chunks are lowered into reserved slots on their first call:
 - `PUSH_INT 42` → `JitOp::PushInt(42i64)`
 - `CALL 1 2` → `JitOp::Call(1usize, 2usize)`
 
-Superinstructions fuse common two- and three-instruction sequences:
+Superinstructions fuse common branch-safe instruction sequences:
 
 | Bytecode sequence | JIT superinstruction |
 | --- | --- |
 | `PUSH_INT n, STORE s` | `StoreInt(s, n)` |
+| `LOAD a, STORE b` | `MoveSlot(a, b)` |
 | `LOAD s, PUSH_INT n, ADD, STORE s` | `AddSlotInt(s, n)` |
 | `LOAD s, PUSH_INT n, SUB, STORE s` | `SubSlotInt(s, n)` |
+| `LOAD s, PUSH_INT n, MUL, STORE s` | `MulSlotInt(s, n)` |
+| `LOAD s, PUSH_INT n, DIV, STORE s` | `DivSlotInt(s, n)` |
+| `LOAD s, PUSH_INT n, MUL` | `PushMulSlotInt(s, n)` |
+| `LOAD s, PUSH_INT n, DIV` | `PushDivSlotInt(s, n)` |
+| `LOAD s, PUSH_INT n, CMP, JUMP_IF_ZERO t` | `CompareSlotIntJumpIfZero(s, n, cmp, t)` |
+| `LOAD s, JUMP_IF_ZERO t` | `JumpIfZeroSlot(s, t)` |
+
+Lowering refuses a fusion whenever another branch targets an instruction
+inside the candidate range. The expression multiply/divide forms leave one
+result on the operand stack; move, in-place arithmetic, and direct branch
+forms avoid the temporary operands entirely.
 
 ### Hot-path quickening
 
@@ -319,13 +331,19 @@ variants:
 | `Mul` | `MulInt` | Same |
 | `Div` | `DivInt` | Same |
 | `Compare(op)` | `CompareInt(op)` | Direct I64 comparison; generic fallback otherwise |
+| `PushMulSlotInt(s, n)` | `PushMulSlotIntHot(s, n)` | Reads an encoded I64 slot directly and performs checked multiplication |
+| `PushDivSlotInt(s, n)` | `PushDivSlotIntHot(s, n)` | Reads an encoded I64 slot directly and preserves floor division and errors |
+| `MulSlotInt(s, n)` | `MulSlotIntHot(s, n)` | Updates an encoded I64 slot in place; generic numeric fallback otherwise |
+| `DivSlotInt(s, n)` | `DivSlotIntHot(s, n)` | Updates an encoded I64 slot in place with checked floor division |
+| `CompareSlotIntJumpIfZero(...)` | `CompareSlotIntJumpIfZeroHot(...)` | Compares an encoded I64 slot and branches without operand-stack traffic |
+| `JumpIfZeroSlot(s, t)` | `JumpIfZeroSlotHot(s, t)` | Tests an encoded I64 slot for zero, with generic truthiness fallback |
 | `Jump(t)` | `JumpHot(t)` | Skips back-edge counter increment |
 | `JumpIfZero(t)` | `JumpIfZeroHot(t)` | Same |
 
 Quickening is in-place and permanent for the lifetime of the `JitProgram`.
 Programs with heterogeneous loop payloads receive quickened ops too; arithmetic
-automatically falls back to the generic numeric implementation when operands
-are not both I64 values.
+and fused slot operations automatically fall back to the generic numeric
+implementation when operands are not I64 values.
 
 The default hot-edge threshold is 8. `JitOptions` can select another `u16`
 threshold for `JitProgram::compile_with_options`, `JitCache::with_options`, or
@@ -337,7 +355,13 @@ the configured runner APIs; zero disables quickening.
 `HashMap<String, JitProgram>`. A cache hit reuses the compiled and potentially
 already-quickened program, so hot ranges from a previous run carry over.
 Source-based cache calls additionally reuse an exact-source `VerifiedProgram`;
-the first call still compiles and verifies normally.
+the first call still compiles and verifies normally. That source cache is a
+deterministic least-recently-used cache bounded by both entry count and retained
+source bytes (128 entries and 8 MiB by default). Configure it with
+`JitCache::with_source_cache_limits`; setting either limit to zero disables
+source retention without disabling the fingerprint-keyed compiled-program
+cache. `JitCacheStats` reports source hits, misses, compilations, evictions,
+bypasses, and currently retained source bytes.
 
 Compatibility methods accepting `Program` verify before insertion. The
 `compile_verified` and `run_verified_program*` methods accept the capability

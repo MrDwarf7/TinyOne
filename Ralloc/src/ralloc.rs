@@ -169,7 +169,10 @@ pub(crate) fn reallocate_aligned(ptr: *mut c_void, size: usize, align: usize) ->
     // SAFETY: `new_ptr` is a fresh allocation of at least `size` bytes, `ptr`
     // was validated as a live allocation of `old_size` bytes, and allocator
     // ownership rules make overlapping live allocations invalid.
-    unsafe { ptr::copy_nonoverlapping(ptr.cast::<u8>(), new_ptr, cmp::min(old_size, size)) };
+    let copied = cmp::min(old_size, size);
+    unsafe { ptr::copy_nonoverlapping(ptr.cast::<u8>(), new_ptr, copied) };
+    #[cfg(any(test, feature = "testing-hooks"))]
+    crate::instrumentation::record_bytes_copied(copied);
 
     deallocate(ptr);
     new_ptr.cast::<c_void>()

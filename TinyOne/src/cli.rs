@@ -5,7 +5,7 @@ use tinyone::{
     CompileCacheStatus, JitOptions, TinyOneError, compile_file_cached_verified_with_options,
     compile_file_unoptimized_verified, compile_file_verified, load_verified_artifact,
     run_verified_program_with_jit_options, write_artifact, write_binary_artifact,
-    write_jit_listing,
+    write_verified_jit_listing,
 };
 
 #[derive(Debug)]
@@ -162,7 +162,7 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
         }
     }
     if let Some(path) = args.emit_jit {
-        write_jit_listing(program.program(), path)?;
+        write_verified_jit_listing(&program, path)?;
     }
     if args.verbose {
         eprintln!(
@@ -173,6 +173,7 @@ pub(crate) fn run() -> Result<i32, TinyOneError> {
                 Some(CompileCacheStatus::Hit) => "hit",
                 Some(CompileCacheStatus::Incremental) => "incremental",
                 Some(CompileCacheStatus::Miss) => "miss",
+                Some(CompileCacheStatus::Bypassed) => "bypassed",
                 None => "off",
             },
             args.jit_threshold,

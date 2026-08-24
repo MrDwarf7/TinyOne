@@ -4,6 +4,7 @@ pub(crate) mod builtins;
 pub(crate) mod context;
 pub(crate) mod format;
 pub(crate) mod heap;
+pub(crate) mod instrumentation;
 pub(crate) mod limits;
 pub(crate) mod memory;
 pub(crate) mod minifloat;

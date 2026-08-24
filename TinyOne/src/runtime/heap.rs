@@ -45,9 +45,13 @@ pub(crate) struct MapData {
 
 impl MapData {
     fn new(entries: RallocVec) -> Self {
+        // Avoid the first few host-side index rehashes while keeping empty and
+        // small maps compact. The payload itself remains Ralloc-owned and
+        // grows independently.
+        const INITIAL_INDEX_CAPACITY: usize = 16;
         Self {
             entries,
-            index: HashMap::new(),
+            index: HashMap::with_capacity(INITIAL_INDEX_CAPACITY),
             pointer_indices: Vec::new(),
         }
     }
@@ -267,7 +271,10 @@ pub(crate) struct TinyHeap {
     pub(crate) generations: Vec<u64>,
     pub(crate) stats: TinyHeapStats,
     pub(crate) shutdown: bool,
-    allocator: Option<Arc<crate::tiny_allocator::TinyAllocator>>,
+    /// One fixed-width cell payload retained across free/reallocate churn.
+    /// The cache is bounded to one 64-byte slot and remains protected by the
+    /// heap mutex; logical heap accounting still follows live objects only.
+    spare_cell: Option<RallocBytes>,
 }
 
 impl std::fmt::Debug for TinyHeap {
@@ -278,10 +285,7 @@ impl std::fmt::Debug for TinyHeap {
             .field("generations", &self.generations)
             .field("stats", &self.stats)
             .field("shutdown", &self.shutdown)
-            .field(
-                "allocator",
-                &self.allocator.as_ref().map(|_| "<TinyAllocator>"),
-            )
+            .field("spare_cell", &self.spare_cell.as_ref().map(|_| "<cached>"))
             .finish()
     }
 }
@@ -311,12 +315,8 @@ impl TinyHeap {
             generations: vec![0],
             stats: TinyHeapStats::default(),
             shutdown: false,
-            allocator: None,
+            spare_cell: None,
         }
-    }
-
-    pub fn set_allocator(&mut self, allocator: Arc<crate::tiny_allocator::TinyAllocator>) {
-        self.allocator = Some(allocator);
     }
 
     pub(crate) fn alloc(&mut self, object: HeapObject) -> Result<HeapRef> {
@@ -324,7 +324,6 @@ impl TinyHeap {
             return Err(TinyOneError::runtime("Heap is already shut down"));
         }
         let bytes = heap_object_bytes(&object);
-        let alloc_kind = heap_data_alloc_kind(&object.data);
         self.ensure_can_allocate(bytes)?;
         if let Some(address) = self.free.pop() {
             let generation = {
@@ -339,18 +338,6 @@ impl TinyHeap {
             })?;
             *target = Some(object);
             self.record_alloc(bytes)?;
-            if bytes > 0
-                && let Some(ref alloc) = self.allocator
-            {
-                let result = if ralloc_owns_bytes(alloc_kind) {
-                    alloc.allocate_owned(address, generation, alloc_kind, bytes, 0)
-                } else {
-                    alloc.allocate(address, generation, alloc_kind, bytes, 0)
-                };
-                if let Err(e) = result {
-                    eprintln!("TinyAllocator tracking error: {:?}", e);
-                }
-            }
             Ok(HeapRef {
                 address,
                 generation,
@@ -366,18 +353,6 @@ impl TinyHeap {
             self.generations.push(1);
             let generation = 1u64;
             self.record_alloc(bytes)?;
-            if bytes > 0
-                && let Some(ref alloc) = self.allocator
-            {
-                let result = if ralloc_owns_bytes(alloc_kind) {
-                    alloc.allocate_owned(address, generation, alloc_kind, bytes, 0)
-                } else {
-                    alloc.allocate(address, generation, alloc_kind, bytes, 0)
-                };
-                if let Err(e) = result {
-                    eprintln!("TinyAllocator tracking error: {:?}", e);
-                }
-            }
             Ok(HeapRef {
                 address,
                 generation,
@@ -439,8 +414,7 @@ impl TinyHeap {
 
     pub(crate) fn grow_array(&mut self, target: &Value, value: Value) -> Result<usize> {
         let reference = expect_heap_ref(target)?;
-        self.get_address(reference.address, reference.generation)?;
-        let object = self.current_object(reference.address)?;
+        let object = self.get_address(reference.address, reference.generation)?;
         let HeapData::Array(values) = &object.data else {
             return Err(TinyOneError::runtime(format!(
                 "push() expects an array, got {}",
@@ -455,7 +429,13 @@ impl TinyHeap {
         self.ensure_can_allocate_delta(VALUE_BYTES)?;
         let encoded = value_codec::encode_value(&value)?;
         let len = {
-            let object = self.get_address_mut(reference.address, reference.generation)?;
+            // The generation and variant were validated above while this
+            // exclusive heap borrow remained live, so no occupant can change.
+            let object = self
+                .objects
+                .get_mut(reference.address)
+                .and_then(Option::as_mut)
+                .expect("validated array slot remains live");
             let HeapData::Array(values) = &mut object.data else {
                 return Err(TinyOneError::runtime(
                     "push() target stopped being an array",
@@ -470,27 +450,32 @@ impl TinyHeap {
 
     pub(crate) fn shrink_array(&mut self, target: &Value) -> Result<Value> {
         let reference = expect_heap_ref(target)?;
-        self.get_address(reference.address, reference.generation)?;
-        let object = self.current_object(reference.address)?;
+        let object = self.get_address(reference.address, reference.generation)?;
         let HeapData::Array(_) = &object.data else {
             return Err(TinyOneError::runtime(format!(
                 "pop() expects an array, got {}",
                 object.kind()
             )));
         };
-        let encoded = {
-            let object = self.get_address_mut(reference.address, reference.generation)?;
+        let value = {
+            // The generation and variant were validated above while this
+            // exclusive heap borrow remained live, so no occupant can change.
+            let object = self
+                .objects
+                .get_mut(reference.address)
+                .and_then(Option::as_mut)
+                .expect("validated array slot remains live");
             let HeapData::Array(values) = &mut object.data else {
                 return Err(TinyOneError::runtime("pop() target stopped being an array"));
             };
             values
-                .pop()
+                .pop_with(|encoded| {
+                    value_codec::decode_value(encoded.try_into().expect("encoded value stride"))
+                })
                 .ok_or_else(|| TinyOneError::runtime("pop() cannot pop from an empty array"))?
         };
         self.record_shrink(VALUE_BYTES)?;
-        Ok(value_codec::decode_value(
-            encoded.as_slice().try_into().unwrap(),
-        ))
+        Ok(value)
     }
 
     pub(crate) fn ensure_can_allocate_delta(&self, bytes: usize) -> Result<()> {
@@ -573,8 +558,13 @@ impl TinyHeap {
 
     pub(crate) fn alloc_cell(&mut self, value: Value) -> Result<HeapRef> {
         let encoded = value_codec::encode_value(&value)?;
-        let bytes = RallocBytes::from_slice(&encoded)
-            .map_err(|e| TinyOneError::runtime(format!("Failed to allocate cell: {e}")))?;
+        let bytes = if let Some(mut bytes) = self.spare_cell.take() {
+            bytes.as_mut_slice().copy_from_slice(&encoded);
+            bytes
+        } else {
+            RallocBytes::from_slice(&encoded)
+                .map_err(|e| TinyOneError::runtime(format!("Failed to allocate cell: {e}")))?
+        };
         self.alloc_data(HeapData::Cell(bytes))
     }
 
@@ -719,7 +709,11 @@ impl TinyHeap {
 
     pub(crate) fn get_address(&self, address: usize, generation: u64) -> Result<&HeapObject> {
         let obj = self.current_object(address)?;
-        let current_generation = self.current_generation(address)?;
+        let current_generation = self
+            .generations
+            .get(address)
+            .copied()
+            .ok_or_else(|| TinyOneError::runtime(format!("Invalid heap pointer {address}")))?;
         if generation != 0 && current_generation != generation {
             return Err(TinyOneError::runtime(format!(
                 "Stale heap pointer {address}"
@@ -734,7 +728,11 @@ impl TinyHeap {
         generation: u64,
     ) -> Result<&mut HeapObject> {
         self.current_object(address)?;
-        let current_generation = self.current_generation(address)?;
+        let current_generation = self
+            .generations
+            .get(address)
+            .copied()
+            .ok_or_else(|| TinyOneError::runtime(format!("Invalid heap pointer {address}")))?;
         if generation != 0 && current_generation != generation {
             return Err(TinyOneError::runtime(format!(
                 "Stale heap pointer {address}"
@@ -769,15 +767,19 @@ impl TinyHeap {
         let target = self.objects.get_mut(reference.address).ok_or_else(|| {
             TinyOneError::runtime(format!("Invalid heap pointer {}", reference.address))
         })?;
-        *target = None;
+        let object = target.take().ok_or_else(|| {
+            TinyOneError::runtime(format!(
+                "Use after free for heap pointer {}",
+                reference.address
+            ))
+        })?;
+        if self.spare_cell.is_none()
+            && let HeapData::Cell(bytes) = object.data
+        {
+            self.spare_cell = Some(bytes);
+        }
         self.free.push(reference.address);
         self.record_free(bytes)?;
-        if bytes > 0
-            && let Some(ref alloc) = self.allocator
-            && let Err(e) = alloc.free(reference.address, reference.generation, 0)
-        {
-            eprintln!("TinyAllocator tracking error: {:?}", e);
-        }
         Ok(())
     }
 
@@ -798,9 +800,7 @@ impl TinyHeap {
         self.stats.live_bytes = 0;
         self.stats.total_frees += live_objects as u64;
         self.stats.shutdown_frees += live_objects as u64;
-        if let Some(ref alloc) = self.allocator {
-            let _report = alloc.shutdown_drain(0);
-        }
+        self.spare_cell = None;
         self.shutdown = true;
         self.stats
     }
@@ -846,61 +846,6 @@ pub(crate) fn heap_object_bytes(object: &HeapObject) -> usize {
         }
         HeapData::FileDescriptor(_) => std::mem::size_of::<i32>(),
     }
-}
-
-fn heap_data_alloc_kind(data: &HeapData) -> crate::alloc_table::AllocKind {
-    use crate::alloc_table::AllocKind;
-    match data {
-        HeapData::String(_) => AllocKind::String,
-        HeapData::Array(_) => AllocKind::Array,
-        HeapData::Buffer(_) => AllocKind::Buffer,
-        HeapData::Struct(_) => AllocKind::Struct,
-        HeapData::Cell(_) => AllocKind::Cell,
-        HeapData::Map(_) => AllocKind::Map,
-        HeapData::Mutex(_) => AllocKind::Mutex,
-        HeapData::Atomic(_) => AllocKind::Atomic,
-        HeapData::Thread(_) => AllocKind::Thread,
-        HeapData::Char(_) => AllocKind::Char,
-        HeapData::CharBuffer(_) => AllocKind::CharBuffer,
-        HeapData::Vec(_) => AllocKind::Vec,
-        HeapData::Record(_) => AllocKind::Record,
-        HeapData::Dictionary(_) => AllocKind::Dictionary,
-        HeapData::Box(_) => AllocKind::Box,
-        HeapData::Alloc { .. } => AllocKind::Raw,
-        HeapData::Closure { .. } => AllocKind::Closure,
-        HeapData::Sum { .. } => AllocKind::Sum,
-        HeapData::Enum(_) => AllocKind::Enum,
-        HeapData::TaggedUnion { .. } => AllocKind::TaggedUnion,
-        HeapData::Result { .. } => AllocKind::Result,
-        HeapData::Option { .. } => AllocKind::Option,
-        HeapData::Dyn { .. } => AllocKind::Dyn,
-        HeapData::FileDescriptor(_) => AllocKind::FileDescriptor,
-    }
-}
-
-/// Whether `kind`'s `HeapData` payload already owns a real
-/// `ralloc::VmAllocation` directly (via [`crate::tiny_allocator::RallocBytes`]),
-/// as opposed to living in an ordinary Rust `Vec`/`String` that
-/// `TinyAllocator` shadow-tracks with its own separate allocation.
-///
-/// Kinds where this is `true` must be recorded via
-/// [`crate::tiny_allocator::TinyAllocator::allocate_owned`] rather than
-/// [`crate::tiny_allocator::TinyAllocator::allocate`], or the real memory
-/// would be booked against Ralloc's arena twice.
-fn ralloc_owns_bytes(kind: crate::alloc_table::AllocKind) -> bool {
-    use crate::alloc_table::AllocKind;
-    matches!(
-        kind,
-        AllocKind::String
-            | AllocKind::Buffer
-            | AllocKind::CharBuffer
-            | AllocKind::Cell
-            | AllocKind::Array
-            | AllocKind::Struct
-            | AllocKind::Enum
-            | AllocKind::Map
-            | AllocKind::Raw
-    )
 }
 
 /// Packs `chars` into little-endian bytes for storage in a `CharBuffer`'s
@@ -1004,11 +949,13 @@ pub(crate) fn decode_map_entries(vec: &RallocVec) -> Vec<(Value, Value)> {
         .collect()
 }
 
-pub(crate) fn decode_map_entry(vec: &RallocVec, index: usize) -> Option<(Value, Value)> {
-    let pair = vec.get(index)?;
-    let key = value_codec::decode_value(pair[..ENCODED_VALUE_BYTES].try_into().unwrap());
-    let value = value_codec::decode_value(pair[ENCODED_VALUE_BYTES..].try_into().unwrap());
-    Some((key, value))
+pub(crate) fn encoded_map_key(vec: &RallocVec, index: usize) -> Option<&[u8; ENCODED_VALUE_BYTES]> {
+    vec.get_part(index, 0, ENCODED_VALUE_BYTES)?.try_into().ok()
+}
+
+pub(crate) fn decode_map_value(vec: &RallocVec, index: usize) -> Option<Value> {
+    let encoded = vec.get_part(index, ENCODED_VALUE_BYTES, ENCODED_VALUE_BYTES)?;
+    Some(value_codec::decode_value(encoded.try_into().ok()?))
 }
 
 #[cfg(test)]
@@ -1128,5 +1075,32 @@ mod tests {
         let hr = heap.alloc_atomic(7).unwrap();
         let obj = heap.get_address(hr.address, hr.generation).unwrap();
         assert_eq!(obj.kind(), "atomic");
+    }
+
+    #[test]
+    fn recycled_cell_payload_preserves_generation_and_accounting() {
+        let mut heap = TinyHeap::new();
+        let first = heap.alloc_cell(Value::I64(7)).unwrap();
+        heap.free(&Value::Heap(first)).unwrap();
+        assert_eq!(heap.stats.live_objects, 0);
+        assert_eq!(heap.stats.live_bytes, 0);
+        assert!(heap.spare_cell.is_some());
+
+        let second = heap.alloc_cell(Value::I64(9)).unwrap();
+        assert_eq!(second.address, first.address);
+        assert!(second.generation > first.generation);
+        assert!(heap.get_address(first.address, first.generation).is_err());
+        let object = heap.get_address(second.address, second.generation).unwrap();
+        let HeapData::Cell(bytes) = &object.data else {
+            panic!("reused object should remain a cell");
+        };
+        assert_eq!(decode_value_slot(bytes), Value::I64(9));
+        assert_eq!(heap.stats.live_objects, 1);
+        assert_eq!(heap.stats.live_bytes, VALUE_BYTES);
+        assert!(heap.spare_cell.is_none());
+
+        heap.free(&Value::Heap(second)).unwrap();
+        heap.shutdown();
+        assert!(heap.spare_cell.is_none());
     }
 }

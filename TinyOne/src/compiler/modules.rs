@@ -29,6 +29,7 @@ pub(crate) struct ModuleResolver {
     inputs: BTreeMap<PathBuf, Option<[u8; 16]>>,
     canonical_resolutions: BTreeMap<PathBuf, PathBuf>,
     module_names: BTreeMap<PathBuf, String>,
+    existing_input_bytes: usize,
 }
 
 impl ModuleResolver {
@@ -58,16 +59,23 @@ impl ModuleResolver {
             .resolve_manifest_import(&base, import_path)?
             .unwrap_or_else(|| base.join(import_path));
         reject_native_library_import(&candidate)?;
-        let path = candidate
-            .canonicalize()
-            .map_err(|error| TinyOneError::compile(format!("Import error: {error}")))?;
+        let path = if let Some(path) = self.canonical_resolutions.get(&candidate) {
+            path.clone()
+        } else {
+            let path = candidate
+                .canonicalize()
+                .map_err(|error| TinyOneError::compile(format!("Import error: {error}")))?;
+            self.canonical_resolutions
+                .insert(candidate.clone(), path.clone());
+            path
+        };
         reject_native_library_import(&path)?;
-        self.canonical_resolutions.insert(candidate, path.clone());
         let source = if let Some(source) = self.sources.get(&path) {
             source.clone()
         } else {
             let source = read_source_file(&path)
                 .map_err(|error| TinyOneError::compile(format!("Import error: {error}")))?;
+            self.existing_input_bytes = self.existing_input_bytes.saturating_add(source.len());
             self.inputs
                 .insert(path.clone(), Some(content_digest(source.as_bytes())));
             self.sources.insert(path.clone(), source.clone());
@@ -111,6 +119,7 @@ impl ModuleResolver {
             } else {
                 let bytes =
                     read_limited_file(manifest_path, MAX_MANIFEST_BYTES, "Package manifest")?;
+                self.existing_input_bytes = self.existing_input_bytes.saturating_add(bytes.len());
                 self.inputs
                     .insert(manifest_path.to_path_buf(), Some(content_digest(&bytes)));
                 let text = String::from_utf8(bytes).map_err(|error| {
@@ -172,6 +181,14 @@ impl ModuleResolver {
             .iter()
             .map(|(path, name)| (path.clone(), name.clone()))
             .collect()
+    }
+
+    pub(crate) fn module_count(&self) -> usize {
+        self.module_names.len()
+    }
+
+    pub(crate) fn existing_input_bytes(&self) -> usize {
+        self.existing_input_bytes
     }
 }
 

@@ -4,9 +4,11 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::{
-    JitChunk, JitOptions, JitStats, JitVm, Program, Result, TinyMemory, TinyOneError,
-    TinyRunReport, VerifiedProgram,
+    JitChunk, JitExecutionProfile, JitOp, JitOptions, JitStats, JitVm, Program, Result, TinyMemory,
+    TinyOneError, TinyRunReport, Value, VerifiedProgram,
 };
+
+const MAX_REUSABLE_OPERAND_STACKS: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct JitProgram {
@@ -15,6 +17,8 @@ pub struct JitProgram {
     pub(crate) chunks: Vec<Option<JitChunk>>,
     pub(crate) options: JitOptions,
     pub(crate) stats: JitStats,
+    pub(crate) execution_profile: Option<JitExecutionProfile>,
+    operand_stacks: Vec<Vec<Value>>,
 }
 
 impl JitProgram {
@@ -62,6 +66,12 @@ impl JitProgram {
                 compiled_ops,
                 ..JitStats::default()
             },
+            execution_profile: if options.execution_profile_enabled() {
+                Some(JitExecutionProfile::default())
+            } else {
+                None
+            },
+            operand_stacks: Vec::new(),
         })
     }
 
@@ -71,6 +81,18 @@ impl JitProgram {
 
     pub fn stats(&self) -> JitStats {
         self.stats
+    }
+
+    /// Returns optional dispatch and stack attribution collected when this
+    /// program was compiled with `JitOptions::with_execution_profile(true)`.
+    pub fn execution_profile(&self) -> Option<&JitExecutionProfile> {
+        self.execution_profile.as_ref()
+    }
+
+    pub fn reset_execution_profile(&mut self) {
+        if let Some(profile) = &mut self.execution_profile {
+            *profile = JitExecutionProfile::default();
+        }
     }
 
     pub fn listing(&self) -> String {
@@ -204,10 +226,51 @@ impl JitProgram {
             self.stats.quickened_ops += changed;
         }
     }
+
+    pub(crate) fn take_operand_stack(&mut self, required_capacity: usize) -> Vec<Value> {
+        if let Some(index) = self
+            .operand_stacks
+            .iter()
+            .position(|stack| stack.capacity() >= required_capacity)
+        {
+            self.stats.operand_stack_reuses = self.stats.operand_stack_reuses.saturating_add(1);
+            return self.operand_stacks.swap_remove(index);
+        }
+        if required_capacity != 0 {
+            self.stats.operand_stack_allocations =
+                self.stats.operand_stack_allocations.saturating_add(1);
+        }
+        Vec::with_capacity(required_capacity)
+    }
+
+    pub(crate) fn recycle_operand_stack(&mut self, mut stack: Vec<Value>) {
+        stack.clear();
+        if stack.capacity() == 0 || self.operand_stacks.len() >= MAX_REUSABLE_OPERAND_STACKS {
+            return;
+        }
+        self.operand_stacks.push(stack);
+        self.stats.cached_operand_stacks = self.operand_stacks.len();
+        self.stats.cached_operand_stack_capacity =
+            self.operand_stacks.iter().map(Vec::capacity).sum();
+    }
+
+    pub(crate) fn record_execution_op(&mut self, op: JitOp, stack_depth: usize) {
+        if let Some(profile) = &mut self.execution_profile {
+            profile.record(op, stack_depth);
+        }
+    }
 }
 
 pub fn write_jit_listing(program: &Program, path: impl AsRef<Path>) -> Result<()> {
-    let mut compiled = JitProgram::compile(program)?;
+    let verified = VerifiedProgram::verify(program.clone())?;
+    write_verified_jit_listing(&verified, path)
+}
+
+pub fn write_verified_jit_listing(
+    verified: &VerifiedProgram,
+    path: impl AsRef<Path>,
+) -> Result<()> {
+    let mut compiled = JitProgram::compile_verified(verified)?;
     compiled.compile_all()?;
     fs::write(path, compiled.listing())
         .map_err(|error| TinyOneError::compile(format!("JIT listing write error: {error}")))

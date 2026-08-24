@@ -39,6 +39,34 @@ pub struct TestJitInspection {
     pub op_count: usize,
 }
 
+/// Process-wide counters for isolating runtime collection costs in tests.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TestRuntimeCostCounters {
+    /// Calls that acquired the shared TinyLang heap mutex.
+    pub heap_lock_acquisitions: u64,
+    /// Fixed-width value encoding attempts.
+    pub value_encodes: u64,
+    /// Fixed-width value decodes.
+    pub value_decodes: u64,
+    /// Successful Ralloc buffer growth operations.
+    pub ralloc_growth_events: u64,
+    /// Bytes copied while Ralloc moved live allocations during growth.
+    pub ralloc_bytes_copied: u64,
+}
+
+/// Returns the current process-wide runtime cost counters.
+pub fn runtime_cost_counters() -> TestRuntimeCostCounters {
+    internal_testing::runtime_cost_counters().into()
+}
+
+/// Resets all process-wide runtime cost counters.
+///
+/// Call this only when the surrounding harness owns an exclusive measurement
+/// interval; concurrent runtime work contributes to the same counters.
+pub fn reset_runtime_cost_counters() {
+    internal_testing::reset_runtime_cost_counters();
+}
+
 pub fn compile_fixture(path: impl AsRef<Path>) -> Result<Arc<Program>> {
     internal_testing::compile_fixture(path)
 }
@@ -114,6 +142,18 @@ impl From<internal_testing::JitInspection> for TestJitInspection {
             listing: value.listing,
             chunk_count: value.chunk_count,
             op_count: value.op_count,
+        }
+    }
+}
+
+impl From<internal_testing::RuntimeCostInspection> for TestRuntimeCostCounters {
+    fn from(value: internal_testing::RuntimeCostInspection) -> Self {
+        Self {
+            heap_lock_acquisitions: value.heap_lock_acquisitions,
+            value_encodes: value.value_encodes,
+            value_decodes: value.value_decodes,
+            ralloc_growth_events: value.ralloc_growth_events,
+            ralloc_bytes_copied: value.ralloc_bytes_copied,
         }
     }
 }

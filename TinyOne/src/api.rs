@@ -116,29 +116,59 @@ pub fn compile_file_cached_verified_with_options(
         .as_ref()
         .canonicalize()
         .map_err(|error| TinyOneError::compile(format!("File error: {error}")))?;
-    if let Some(program) = compile_cache::try_load(&path, optimize)? {
-        return Ok((program, CompileCacheStatus::Hit));
+    if compile_cache::should_bypass_filesystem(&path) {
+        let (program, _, _) = compile_canonical_file(&path, optimize)?;
+        return Ok((program, CompileCacheStatus::Bypassed));
     }
-    if let Some(mut candidate) = compile_cache::try_load_incremental(&path, optimize)?
-        && let Ok((replacement, resolver)) =
-            compile_module_fragment(&candidate.module_path, &candidate.module_name, optimize)
-    {
-        let cached = candidate
-            .program
-            .take()
-            .ok_or_else(|| TinyOneError::compile("Incremental cache program missing"))?;
-        if let Ok(program) = crate::patch_module(cached, &replacement, &candidate.module_name) {
-            let _ = compile_cache::store_incremental(
-                &path,
-                optimize,
-                &program,
-                candidate,
-                &resolver.borrow(),
-            );
-            return Ok((program, CompileCacheStatus::Incremental));
+    if compile_cache::is_known_bypass(&path, optimize) {
+        let (program, _, _) = compile_canonical_file(&path, optimize)?;
+        return Ok((program, CompileCacheStatus::Bypassed));
+    }
+    match compile_cache::lookup(&path, optimize)? {
+        compile_cache::CacheLookup::Hit(program) => {
+            return Ok((program, CompileCacheStatus::Hit));
         }
+        compile_cache::CacheLookup::Incremental(mut candidate) => {
+            let module_source = candidate
+                .module_source
+                .take()
+                .ok_or_else(|| TinyOneError::compile("Incremental cache source missing"))?;
+            if let Ok((replacement, resolver)) = compile_module_fragment(
+                &candidate.module_path,
+                &candidate.module_name,
+                module_source,
+                optimize,
+            ) {
+                let cached = candidate
+                    .program
+                    .take()
+                    .ok_or_else(|| TinyOneError::compile("Incremental cache program missing"))?;
+                if let Ok(program) =
+                    crate::patch_module(cached, &replacement, &candidate.module_name)
+                {
+                    let _ = compile_cache::store_incremental(
+                        &path,
+                        optimize,
+                        &program,
+                        *candidate,
+                        &resolver.borrow(),
+                    );
+                    return Ok((program, CompileCacheStatus::Incremental));
+                }
+            }
+        }
+        compile_cache::CacheLookup::Bypass => {
+            let (program, _, _) = compile_canonical_file(&path, optimize)?;
+            compile_cache::remember_bypass(&path, optimize);
+            return Ok((program, CompileCacheStatus::Bypassed));
+        }
+        compile_cache::CacheLookup::Miss => {}
     }
     let (program, source, resolver) = compile_canonical_file(&path, optimize)?;
+    if compile_cache::should_bypass(&source, &resolver.borrow()) {
+        compile_cache::remember_bypass(&path, optimize);
+        return Ok((program, CompileCacheStatus::Bypassed));
+    }
     // A cache write is an optimization. Read-only source trees and transient
     // cache failures must not prevent a correctly compiled program from
     // running.
@@ -149,9 +179,9 @@ pub fn compile_file_cached_verified_with_options(
 fn compile_module_fragment(
     path: &Path,
     module_name: &str,
+    source: String,
     optimize: bool,
 ) -> Result<(Program, Rc<RefCell<ModuleResolver>>)> {
-    let source = read_source_file(path)?;
     let shared = Rc::new(RefCell::new(CompilerSharedState::default()));
     let resolver = Rc::new(RefCell::new(ModuleResolver::default()));
     let mut compiler = Compiler::new(
