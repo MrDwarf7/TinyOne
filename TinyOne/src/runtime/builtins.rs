@@ -10,11 +10,33 @@ use crate::{
     validate_pointer_base,
 };
 
+pub(crate) fn runtime_len(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
+    let heap = context.heap();
+    let object = heap.get(target)?;
+    let len = match &object.data {
+        HeapData::Array(values) => values.len(),
+        HeapData::String(text) => crate::runtime::heap::heap_str(text)?.chars().count(),
+        HeapData::Buffer(data) => data.len(),
+        HeapData::Struct(fields) => fields.len(),
+        HeapData::Map(entries) => entries.len(),
+        HeapData::Cell(_) => {
+            return Err(TinyOneError::runtime("len() does not support cell"));
+        }
+        _ => {
+            return Err(TinyOneError::runtime(format!(
+                "len() does not support {}",
+                object.kind()
+            )));
+        }
+    };
+    Ok(Value::I64(len as i64))
+}
+
 pub(crate) fn runtime_call_builtin(
     context: &mut TinyRuntimeContext,
     global_memory: &TinyMemory,
     builtin_index: usize,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> Result<Value> {
     let builtin = BUILTINS
         .get(builtin_index)
@@ -29,27 +51,7 @@ pub(crate) fn runtime_call_builtin(
         )));
     }
     match builtin.name {
-        "len" => {
-            let heap = context.heap();
-            let object = heap.get(&args[0])?;
-            let len = match &object.data {
-                HeapData::Array(values) => values.len(),
-                HeapData::String(text) => crate::runtime::heap::heap_str(text)?.chars().count(),
-                HeapData::Buffer(data) => data.len(),
-                HeapData::Struct(fields) => fields.len(),
-                HeapData::Map(entries) => entries.len(),
-                HeapData::Cell(_) => {
-                    return Err(TinyOneError::runtime("len() does not support cell"));
-                }
-                _ => {
-                    return Err(TinyOneError::runtime(format!(
-                        "len() does not support {}",
-                        object.kind()
-                    )));
-                }
-            };
-            Ok(Value::I64(len as i64))
-        }
+        "len" => runtime_len(context, &args[0]),
         "array" => {
             let count = checked_bounded_len(
                 expect_int(&args[0], "array")?,
@@ -129,7 +131,7 @@ pub(crate) fn runtime_call_builtin(
                 })?))
             }
         },
-        "ptr" => runtime_make_pointer(context, &args),
+        "ptr" => runtime_make_pointer(context, args),
         "fieldptr" => runtime_make_field_pointer(context, &args[0], &args[1]),
         "ptr_addr" => runtime_pointer_address(context, &args[0]),
         "ptr_at" => runtime_pointer_at(context, &args[0]),

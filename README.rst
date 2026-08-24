@@ -15,7 +15,7 @@ optimizer, verifier, portable VM, heap/runtime model, bytecode artifact
 support, adaptive execution support, host integration surfaces, CLI tooling,
 and early allocator-integration scaffolding.
 
-Current crate version: 1.3.0`` (the implementation is now managed as the
+Current crate version: 1.4.0`` (the implementation is now managed as the
 public v1 release line while language work proceeds internally under v2).
 
 The current Rust crate lives in ``TinyOne/`` in this checkout. TinyLang is the
@@ -246,14 +246,66 @@ The runtime includes:
 * raw pointer values with runtime provenance checks
 * explicit manual deallocation through unsafe operations
 * checked arithmetic and checked division
-* resource limits for arrays, buffers, heap payload, heap object slots, nested
-  calls, artifacts, verifier work, and filesystem reads
 * shutdown heap draining through report APIs
 
 TinyLang does not use a tracing garbage collector. The current runtime uses a
 VM-owned heap with generation validation and explicit unsafe deallocation. Heap
 payloads, VM locals/globals, and allocator-side backing are Ralloc-owned;
 allocation-table bookkeeping and shutdown remain deterministic.
+
+Hard Resource Limits
+--------------------
+
+TinyOne rejects inputs that exceed the following enforced v1 caps. These are
+current implementation limits, not sizing recommendations; users who generate
+source or bytecode should stay within them. Every loaded artifact is verified
+before VM execution or JIT lowering.
+
+Bytecode artifacts
+~~~~~~~~~~~~~~~~~~
+
+The following limits apply when loading either JSON bytecode or compact
+``.tob`` bytecode (and to JSON artifact text passed through the C FFI):
+
+* artifact size: 8 MiB
+* functions: 4,096; structs: 4,096; modules: 256
+* code operations: 65,536 in each main/function chunk and 262,144 across the
+  complete program
+* slots and parameters: 65,536 per main/function chunk
+* strings, field-table entries, and names in each name table: 65,536 each
+* imports per module: 4,096; function exports per module: 4,096; struct
+  exports per module: 4,096
+* fields per struct: 256
+* operand-stack depth during bytecode verification: 65,536; verifier work:
+  10,000,000 graph steps
+* metadata text: each individual name/path/string is at most 1 MiB, and the
+  combined text in each string-list field is at most 1 MiB
+
+Compact binary artifacts additionally support at most 4,096 enum variants and
+256 fields per variant. JSON artifacts do not currently serialize enum
+variants, so JSON artifacts containing enum construction are rejected by
+verification. The decoder applies its table and instruction bounds before it
+builds each program table; the full verifier budget check completes before
+execution.
+
+Runtime, source, and FFI
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+* dynamic arrays contain at most 65,536 elements; a single buffer allocation
+  is at most 1 MiB
+* total live heap payload is at most 4 MiB, with at most 1,000,000 live heap
+  object slots; TinyLang call nesting is limited to 16 calls
+* ``fs_read`` reads at most 1 MiB; ``fs_list_dir`` returns at most 65,536
+  entries and at most 1 MiB of entry-name text
+* each source file, imported source file, and ``tinyone.json`` manifest read
+  from disk is at most 1 MiB
+* C-FFI source text is at most 1 MiB, file paths 32 KiB, execution modes
+  16 bytes, and ``inputs_json`` 8 MiB (each excludes its trailing NUL). The
+  sandboxed C-FFI execution APIs have a five-second deadline and a 16 MiB
+  response cap.
+* a field-pointer or reference stored in an array, struct, or other fixed-width
+  container may name a field of at most 27 UTF-8 bytes. Stack-resident raw
+  pointers are not subject to this representation limit.
 
 VM and JIT
 ----------
@@ -431,6 +483,7 @@ Useful commands::
     ./TinyOne/target/release/tinylang-bench --quick --repeats 1
     ./TinyOne/target/release/tinylang-bench --filter runtime.jit
     ./TinyOne/target/release/tinylang-bench --save-baseline tinyone-baseline.json
+    ./TinyOne/target/release/tinylang-bench --save-baseline-auto
     ./TinyOne/target/release/tinylang-bench --baseline tinyone-baseline.json
 
 The benchmark runner checks VM/JIT output parity before measuring and reports
@@ -440,13 +493,19 @@ Linux uses ``CLOCK_THREAD_CPUTIME_ID`` plus the TSC cycle counter on x86/x86_64.
 Runtime rows reuse verified programs, keeping compiler and verifier work out of
 dispatch timings. Its paired rows are meant to make optimization work
 attributable: ``allocator.*`` isolates Ralloc,
-``compiler.file_modules_*`` compares full module compilation with a validated
-disk-cache hit, ``runtime.vm_*`` and ``runtime.jit_*`` compare execution tiers,
+``compiler.file_modules_*`` compares full module compilation with the
+size-aware disk-cache policy, ``runtime.vm_*`` and ``runtime.jit_*`` compare execution tiers,
 and the paired ``runtime.jit_hot_loop_4096_*`` rows isolate the adaptive JIT's
 quickening benefit over a controlled 4,096-iteration loop. Collection and
-heap-churn rows exercise Ralloc-backed vectors, maps, generational slot reuse,
-and explicit frees. Run the suite from an optimized build; debug-profile timing
-is not representative.
+heap phase rows cover 16, 256, and 4,096-entry workloads, individual map and
+vector operations, generational slot reuse, and explicit frees. Automatic
+baselines are written under ``TinyOne/target/perf/<platform>/`` with machine,
+toolchain, Git, filesystem, and benchmark-option metadata. Run the suite from
+an optimized build; debug-profile timing is not representative.
+
+File-backed benchmark fixtures default to the operating-system temporary
+directory. Set ``TINYONE_BENCH_FIXTURE_ROOT`` to compare a particular
+filesystem, such as WSL ``/mnt/c`` versus native ``/tmp``.
 
 When Windows and WSL share this checkout through ``/mnt/c``, give Linux its
 own Cargo artifact directory before building or testing::

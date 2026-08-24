@@ -38,6 +38,35 @@ pub(crate) struct JitInspection {
     pub(crate) op_count: usize,
 }
 
+#[cfg(feature = "testing-hooks")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeCostInspection {
+    pub(crate) heap_lock_acquisitions: u64,
+    pub(crate) value_encodes: u64,
+    pub(crate) value_decodes: u64,
+    pub(crate) ralloc_growth_events: u64,
+    pub(crate) ralloc_bytes_copied: u64,
+}
+
+#[cfg(feature = "testing-hooks")]
+pub(crate) fn runtime_cost_counters() -> RuntimeCostInspection {
+    let runtime = crate::runtime::instrumentation::snapshot();
+    let allocator = ralloc::testing::instrumentation_snapshot();
+    RuntimeCostInspection {
+        heap_lock_acquisitions: runtime.heap_lock_acquisitions,
+        value_encodes: runtime.value_encodes,
+        value_decodes: runtime.value_decodes,
+        ralloc_growth_events: allocator.growth_events,
+        ralloc_bytes_copied: allocator.bytes_copied,
+    }
+}
+
+#[cfg(feature = "testing-hooks")]
+pub(crate) fn reset_runtime_cost_counters() {
+    crate::runtime::instrumentation::reset();
+    ralloc::testing::reset_instrumentation();
+}
+
 pub(crate) fn compile_fixture(path: impl AsRef<std::path::Path>) -> Result<Arc<Program>> {
     compile_file(path)
 }

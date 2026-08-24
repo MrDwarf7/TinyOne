@@ -18,9 +18,14 @@ pub(crate) struct TinyRuntimeContext {
 
 impl TinyRuntimeContext {
     pub(crate) fn new(inputs: impl IntoIterator<Item = String>) -> Self {
-        let allocator = Arc::new(crate::tiny_allocator::TinyAllocator::with_defaults());
-        let mut heap = TinyHeap::new();
-        heap.set_allocator(Arc::clone(&allocator));
+        // Heap reports are the runtime accounting contract. Heap payloads own
+        // their Ralloc allocations directly, while TinyAllocator's table,
+        // hook registry, and log are diagnostic facilities with no runtime
+        // consumer. Do not shadow-track every ordinary VM allocation: that
+        // adds multiple independent locks to alloc/free churn without
+        // changing language-visible safety or accounting. Standalone
+        // TinyAllocator users retain its full default diagnostics.
+        let heap = TinyHeap::new();
         Self {
             heap_arc: Arc::new(Mutex::new(heap)),
             program_arc: None,
@@ -37,8 +42,7 @@ impl TinyRuntimeContext {
 
     /// Construct a context that shares an existing heap. Used by spawned threads.
     ///
-    /// The shared heap owns its allocator handle, so every context observes
-    /// the same allocation bookkeeping without a duplicate sidecar handle.
+    /// All contexts observe the same runtime accounting and spare-cell cache.
     pub(crate) fn with_heap(heap_arc: Arc<Mutex<TinyHeap>>) -> Self {
         Self {
             heap_arc,
@@ -59,6 +63,7 @@ impl TinyRuntimeContext {
     /// is not torn across a Rust panic boundary at these call sites.
     #[inline]
     pub(crate) fn heap(&self) -> MutexGuard<'_, TinyHeap> {
+        crate::runtime::instrumentation::record_heap_lock_acquisition();
         self.heap_arc.lock().unwrap_or_else(|e| e.into_inner())
     }
 

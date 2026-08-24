@@ -9,6 +9,8 @@ mod arena;
 mod backend;
 mod block;
 mod buffer;
+#[cfg(any(test, feature = "testing-hooks"))]
+mod instrumentation;
 mod page;
 mod ralloc;
 mod region;
@@ -18,3 +20,5 @@ mod vm;
 pub use buffer::{RallocBox, RallocBuffer, RallocError};
 pub use ralloc::{ralloc_aligned_alloc, ralloc_calloc, ralloc_free, ralloc_malloc, ralloc_realloc};
 pub use vm::{VmAllocation, VmAllocator};
+#[cfg(feature = "testing-hooks")]
+pub mod testing;

@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tinyone::{
-    BytecodeVerifier, CompileCacheStatus, Function, Instr, JitCache, JitProgram, Op, Program,
-    RuntimeValue, StructDef, TinyMemory, TinyOneError, TypeKind, compile_file,
+    BytecodeVerifier, CompileCacheStatus, Function, Instr, JitCache, JitOptions, JitProgram, Op,
+    Program, RuntimeValue, StructDef, TinyMemory, TinyOneError, TypeKind, compile_file,
     compile_file_cached_verified_with_status, compile_source, compile_source_verified,
     load_artifact, run_program, run_program_report, run_verified_program, write_artifact,
-    write_binary_artifact, write_jit_listing,
+    write_binary_artifact, write_jit_listing, write_verified_jit_listing,
 };
 
 fn run_compiled(
@@ -430,6 +430,20 @@ fn write_jit_listing_emits_inspectable_file() {
 }
 
 #[test]
+fn write_verified_jit_listing_emits_inspectable_file() {
+    let program = compile_source_verified("let x = 6 * 7 print x").expect("source should compile");
+    let temp = TestDir::new("verified-jit-listing");
+    let path = temp.path().join("verified-program.tjit");
+
+    write_verified_jit_listing(&program, &path).expect("write verified jit listing");
+    let listing = fs::read_to_string(path).expect("read verified jit listing");
+
+    assert!(listing.contains("tinyone adaptive-jit"));
+    assert!(listing.contains(".chunk 0 main"));
+    assert!(listing.contains("store.i 0 42"));
+}
+
+#[test]
 fn jit_quickens_hot_back_edges_after_warm_runs() {
     let program = compile_source(
         r#"
@@ -460,7 +474,304 @@ fn jit_quickens_hot_back_edges_after_warm_runs() {
 
     let listing = cache.compile(&program).expect("jit compile").listing();
     assert!(listing.contains("add.int"));
+    assert!(listing.contains("slot.cmp.lt.i.jz.hot"));
     assert!(listing.contains("jmp.hot"));
+}
+
+#[test]
+fn quickened_slot_ops_fall_back_for_unsigned_and_float_values() {
+    for (source, expected) in [
+        (
+            r#"
+            let i = u8(0)
+            while i < 16 {
+              i = i * 1
+              i = i / 1
+              i = i + 1
+            }
+            print i
+            "#,
+            "16\n",
+        ),
+        (
+            r#"
+            let i = fp64(0.0)
+            while i < 16 {
+              i = i * 1
+              i = i / 1
+              i = i + 1
+            }
+            print i
+            "#,
+            "16.0\n",
+        ),
+    ] {
+        let verified = compile_source_verified(source).expect("fallback source should compile");
+
+        let mut vm_stdout = Vec::new();
+        run_verified_program(&verified, "vm", &mut vm_stdout, Vec::new())
+            .expect("VM fallback source should run");
+        assert_eq!(expected, String::from_utf8(vm_stdout).expect("UTF-8"));
+
+        let mut cold = JitProgram::compile_verified_with_options(
+            &verified,
+            JitOptions::new().with_hot_back_edge_threshold(0),
+        )
+        .expect("cold JIT should compile");
+        let mut cold_stdout = Vec::new();
+        cold.run(&mut cold_stdout, Vec::new())
+            .expect("cold JIT fallback source should run");
+        assert_eq!(expected, String::from_utf8(cold_stdout).expect("UTF-8"));
+
+        let mut quickened = JitProgram::compile_verified_with_options(
+            &verified,
+            JitOptions::new().with_hot_back_edge_threshold(1),
+        )
+        .expect("quickened JIT should compile");
+        let mut quickened_stdout = Vec::new();
+        quickened
+            .run(&mut quickened_stdout, Vec::new())
+            .expect("quickened JIT fallback source should run");
+        assert_eq!(
+            expected,
+            String::from_utf8(quickened_stdout).expect("UTF-8")
+        );
+        assert!(quickened.listing().contains("slot.cmp.lt.i.jz.hot"));
+        assert!(quickened.listing().contains("slot.mul.i.hot"));
+        assert!(quickened.listing().contains("slot.div.i.hot"));
+    }
+}
+
+#[test]
+fn jit_profiles_dispatch_stack_traffic_and_reuses_operand_stacks() {
+    let verified = compile_source_verified(
+        r#"
+        let seed = 7
+        let value = seed
+        while value < 12 {
+          value = value * 2
+          value = value / 2
+          value = value + 1
+        }
+        print value
+        "#,
+    )
+    .expect("profile source should compile");
+    let options = JitOptions::new()
+        .with_hot_back_edge_threshold(1)
+        .with_execution_profile(true);
+    let mut program =
+        JitProgram::compile_verified_with_options(&verified, options).expect("JIT should compile");
+
+    for _ in 0..2 {
+        let mut stdout = Vec::new();
+        program
+            .run(&mut stdout, Vec::new())
+            .expect("JIT should run");
+        assert_eq!(b"12\n", stdout.as_slice());
+    }
+
+    let stats = program.stats();
+    assert_eq!(1, stats.operand_stack_allocations);
+    assert!(stats.operand_stack_reuses >= 1);
+    assert_eq!(1, stats.cached_operand_stacks);
+    assert!(stats.cached_operand_stack_capacity > 0);
+
+    let profile = program
+        .execution_profile()
+        .expect("profile should be enabled");
+    assert!(profile.dispatches > 0);
+    assert!(profile.operand_stack_pushes > 0);
+    assert!(profile.operand_stack_pops > 0);
+    assert!(profile.max_operand_stack_depth > 0);
+    assert!(
+        profile
+            .opcodes
+            .get("slot.move")
+            .is_some_and(|entry| entry.dispatches > 0)
+    );
+    assert!(
+        profile
+            .opcodes
+            .get("slot.mul.i.hot")
+            .is_some_and(|entry| entry.dispatches > 0)
+    );
+    assert!(
+        profile
+            .opcodes
+            .get("slot.div.i.hot")
+            .is_some_and(|entry| entry.dispatches > 0)
+    );
+}
+
+#[test]
+fn quickened_in_place_slot_arithmetic_preserves_checked_error_parity() {
+    let cases = [
+        (
+            "addition overflow",
+            "out of range for i64 in Addition",
+            r#"
+            let value = math_const("MAX_I64")
+            let round = 0
+            while round < 2 {
+              round = round + 1
+              if round == 2 {
+                value = value + 1
+              }
+            }
+            "#,
+            "slot.add.i",
+        ),
+        (
+            "multiplication overflow",
+            "out of range for i64 in Multiplication",
+            r#"
+            let value = math_const("MAX_I64")
+            let round = 0
+            while round < 2 {
+              round = round + 1
+              if round == 2 {
+                value = value * 2
+              }
+            }
+            "#,
+            "slot.mul.i.hot",
+        ),
+        (
+            "floor division overflow",
+            "Division overflow",
+            r#"
+            let value = math_const("MIN_I64")
+            let round = 0
+            while round < 2 {
+              round = round + 1
+              if round == 2 {
+                value = value / -1
+              }
+            }
+            "#,
+            "slot.div.i.hot",
+        ),
+        (
+            "division by zero",
+            "Division by zero",
+            r#"
+            let value = 1
+            let round = 0
+            while round < 2 {
+              round = round + 1
+              if round == 2 {
+                value = value / 0
+              }
+            }
+            "#,
+            "slot.div.i.hot",
+        ),
+    ];
+
+    for (name, expected_error, source, hot_op) in cases {
+        let verified = compile_source_verified(source).expect("error source should compile");
+        let vm = run_verified_program(&verified, "vm", &mut Vec::new(), Vec::new());
+        assert!(vm.is_err(), "{name}: VM should fail, got {vm:?}");
+        assert_error_contains(vm, expected_error);
+
+        let mut cold = JitProgram::compile_verified_with_options(
+            &verified,
+            JitOptions::new().with_hot_back_edge_threshold(0),
+        )
+        .expect("cold JIT should compile");
+        let cold_result = cold.run(&mut Vec::new(), Vec::new());
+        assert!(
+            cold_result.is_err(),
+            "{name}: cold JIT should fail, got {cold_result:?}"
+        );
+        assert_error_contains(cold_result, expected_error);
+
+        let mut quickened = JitProgram::compile_verified_with_options(
+            &verified,
+            JitOptions::new().with_hot_back_edge_threshold(1),
+        )
+        .expect("quickened JIT should compile");
+        let quickened_result = quickened.run(&mut Vec::new(), Vec::new());
+        assert!(
+            quickened_result.is_err(),
+            "{name}: quickened JIT should fail, got {quickened_result:?}"
+        );
+        assert_error_contains(quickened_result, expected_error);
+        assert!(quickened.listing().contains(hot_op), "{name}");
+    }
+}
+
+#[test]
+fn quickened_slot_zero_jump_and_floor_division_match_vm_for_all_numeric_paths() {
+    let cases = [
+        (
+            r#"
+            let value = -7
+            let round = 0
+            while round < 2 {
+              round = round + 1
+              if round == 2 {
+                value = value / 3
+              }
+            }
+            print value
+            "#,
+            "-3\n",
+            "slot.div.i.hot",
+        ),
+        (
+            r#"
+            let value = u8(3)
+            while value {
+              value = value - 1
+            }
+            print value
+            "#,
+            "0\n",
+            "slot.jz.hot",
+        ),
+        (
+            r#"
+            let value = fp64(3.0)
+            while value {
+              value = value - 1
+            }
+            print value
+            "#,
+            "0.0\n",
+            "slot.jz.hot",
+        ),
+    ];
+
+    for (source, expected, hot_op) in cases {
+        let verified = compile_source_verified(source).expect("numeric source should compile");
+        let mut vm_stdout = Vec::new();
+        run_verified_program(&verified, "vm", &mut vm_stdout, Vec::new()).expect("VM should run");
+        assert_eq!(expected.as_bytes(), vm_stdout.as_slice());
+
+        let mut cold = JitProgram::compile_verified_with_options(
+            &verified,
+            JitOptions::new().with_hot_back_edge_threshold(0),
+        )
+        .expect("cold JIT should compile");
+        let mut cold_stdout = Vec::new();
+        cold.run(&mut cold_stdout, Vec::new())
+            .expect("cold JIT should run");
+        assert_eq!(expected.as_bytes(), cold_stdout.as_slice());
+
+        let mut quickened = JitProgram::compile_verified_with_options(
+            &verified,
+            JitOptions::new().with_hot_back_edge_threshold(1),
+        )
+        .expect("quickened JIT should compile");
+        let mut quickened_stdout = Vec::new();
+        quickened
+            .run(&mut quickened_stdout, Vec::new())
+            .expect("quickened JIT should run");
+        assert_eq!(expected.as_bytes(), quickened_stdout.as_slice());
+        assert!(quickened.listing().contains(hot_op));
+    }
 }
 
 #[test]
@@ -964,8 +1275,8 @@ fn binary_artifact_roundtrips_modules_and_runs_both_backends() {
 }
 
 #[test]
-fn disk_compile_cache_hits_and_invalidates_changed_modules() {
-    let temp = TestDir::new("compile-cache");
+fn disk_compile_cache_bypasses_tiny_source_graphs() {
+    let temp = TestDir::new("compile-cache-bypass");
     let module_path = temp.path().join("math.to");
     fs::write(&module_path, "export fn answer() { return 41 }\n").expect("write module");
     let main_path = temp.path().join("main.to");
@@ -974,6 +1285,61 @@ fn disk_compile_cache_hits_and_invalidates_changed_modules() {
         "import \"math.to\" as math\nprint math.answer()\n",
     )
     .expect("write main");
+
+    for _ in 0..2 {
+        let (program, status) = compile_file_cached_verified_with_status(&main_path)
+            .expect("compile bypassed source graph");
+        assert_eq!(CompileCacheStatus::Bypassed, status);
+        let mut stdout = Vec::new();
+        run_verified_program(&program, "jit", &mut stdout, Vec::new())
+            .expect("run bypassed source graph");
+        assert_eq!("41\n", String::from_utf8(stdout).expect("UTF-8"));
+    }
+    assert!(!temp.path().join(".tinyone-cache").exists());
+}
+
+#[test]
+fn disk_compile_cache_applies_windows_medium_bypass_policy() {
+    let temp = TestDir::new("compile-cache-medium-policy");
+    let mut main_source = String::new();
+    for index in 0..16 {
+        let name = format!("module_{index:03}");
+        fs::write(
+            temp.path().join(format!("{name}.to")),
+            format!("export fn value(input) {{ return input + {index} }}\n"),
+        )
+        .expect("write medium policy module");
+        main_source.push_str(&format!("import \"{name}.to\" as {name}\n"));
+    }
+    main_source.push_str("let total = 0\n");
+    let main_path = temp.path().join("main.to");
+    fs::write(&main_path, main_source).expect("write medium policy root");
+
+    let (_, first_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("compile medium policy graph");
+    let (_, second_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("repeat medium policy graph");
+    if cfg!(windows) {
+        assert_eq!(CompileCacheStatus::Bypassed, first_status);
+        assert_eq!(CompileCacheStatus::Bypassed, second_status);
+        assert!(!temp.path().join(".tinyone-cache").exists());
+    } else {
+        assert_eq!(CompileCacheStatus::Miss, first_status);
+        assert_eq!(CompileCacheStatus::Hit, second_status);
+    }
+}
+
+#[test]
+fn disk_compile_cache_hits_and_invalidates_changed_modules() {
+    let temp = TestDir::new("compile-cache");
+    let module_path = temp.path().join("math.to");
+    fs::write(&module_path, "export fn answer() { return 41 }\n").expect("write module");
+    let main_path = temp.path().join("main.to");
+    let main_source = format!(
+        "import \"math.to\" as math\nprint math.answer()\n{}",
+        "\n".repeat(5_000)
+    );
+    fs::write(&main_path, main_source).expect("write main");
 
     let (first, first_status) =
         compile_file_cached_verified_with_status(&main_path).expect("first compile");
@@ -999,7 +1365,64 @@ fn disk_compile_cache_hits_and_invalidates_changed_modules() {
         compile_file_cached_verified_with_status(&main_path).expect("reuse repaired cache");
     assert_eq!(CompileCacheStatus::Hit, repaired_status);
 
+    let metadata = fs::read_dir(&cache_dir)
+        .expect("read cache")
+        .map(|entry| entry.expect("cache entry").path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .expect("cached metadata");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&metadata).expect("read cached metadata"))
+            .expect("decode cached metadata");
+    record["compiler_version"] = serde_json::Value::String("incompatible-version".to_string());
+    fs::write(
+        &metadata,
+        serde_json::to_vec(&record).expect("encode cached metadata"),
+    )
+    .expect("tamper compiler version");
+    let (_, version_status) = compile_file_cached_verified_with_status(&main_path)
+        .expect("recover incompatible compiler cache");
+    assert_eq!(CompileCacheStatus::Miss, version_status);
+    let (_, repaired_version_status) = compile_file_cached_verified_with_status(&main_path)
+        .expect("reuse compiler-version repair");
+    assert_eq!(CompileCacheStatus::Hit, repaired_version_status);
+
+    // Spoof the cheap metadata identity after a same-length content edit. The
+    // cache must still digest the file and refuse the old artifact.
     fs::write(&module_path, "export fn answer() { return 42 }\n").expect("change module");
+    let module_file_metadata = fs::metadata(&module_path).expect("stat changed module");
+    let modified_unix_nanos = module_file_metadata
+        .modified()
+        .expect("read changed module timestamp")
+        .duration_since(UNIX_EPOCH)
+        .expect("changed module timestamp after epoch")
+        .as_nanos();
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&metadata).expect("read cached metadata"))
+            .expect("decode cached metadata");
+    let inputs = record["inputs"]
+        .as_array_mut()
+        .expect("cached metadata inputs");
+    let input = inputs
+        .iter_mut()
+        .find(|input| {
+            input["path"]
+                .as_str()
+                .is_some_and(|path| Path::new(path).file_name() == Some("math.to".as_ref()))
+        })
+        .expect("changed module cache input");
+    input["identity"] = serde_json::json!({
+        "size_bytes": module_file_metadata.len(),
+        "modified_unix_nanos": u64::try_from(modified_unix_nanos)
+            .expect("changed module timestamp fits cache identity"),
+    });
+    fs::write(
+        &metadata,
+        serde_json::to_vec(&record).expect("encode spoofed cache metadata"),
+    )
+    .expect("write spoofed cache metadata");
     let (changed, changed_status) =
         compile_file_cached_verified_with_status(&main_path).expect("recompile changed module");
     assert_eq!(CompileCacheStatus::Incremental, changed_status);
@@ -1022,6 +1445,45 @@ fn disk_compile_cache_hits_and_invalidates_changed_modules() {
     let mut stdout = Vec::new();
     run_verified_program(&rebuilt, "jit", &mut stdout, Vec::new()).expect("run rebuilt graph");
     assert_eq!("43\n", String::from_utf8(stdout).expect("UTF-8"));
+}
+
+#[test]
+fn disk_compile_cache_invalidates_manifest_resolution_changes() {
+    let temp = TestDir::new("compile-cache-resolution");
+    fs::write(
+        temp.path().join("first.to"),
+        "export fn answer() { return 41 }\n",
+    )
+    .expect("write first module");
+    fs::write(
+        temp.path().join("second.to"),
+        "export fn answer() { return 42 }\n",
+    )
+    .expect("write second module");
+    let manifest = temp.path().join("tinyone.json");
+    fs::write(&manifest, r#"{"modules":{"math":"first.to"}}"#).expect("write first manifest");
+    let main_path = temp.path().join("main.to");
+    let main_source = format!(
+        "import \"math\" as math\nprint math.answer()\n{}",
+        "\n".repeat(5_000)
+    );
+    fs::write(&main_path, main_source).expect("write main");
+
+    let (_, first_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("prime resolution cache");
+    assert_eq!(CompileCacheStatus::Miss, first_status);
+    let (_, hit_status) =
+        compile_file_cached_verified_with_status(&main_path).expect("hit resolution cache");
+    assert_eq!(CompileCacheStatus::Hit, hit_status);
+
+    fs::write(&manifest, r#"{"modules":{"math":"second.to"}}"#)
+        .expect("change manifest resolution");
+    let (changed, changed_status) = compile_file_cached_verified_with_status(&main_path)
+        .expect("invalidate changed resolution");
+    assert_eq!(CompileCacheStatus::Miss, changed_status);
+    let mut stdout = Vec::new();
+    run_verified_program(&changed, "jit", &mut stdout, Vec::new()).expect("run changed resolution");
+    assert_eq!("42\n", String::from_utf8(stdout).expect("UTF-8"));
 }
 
 #[test]

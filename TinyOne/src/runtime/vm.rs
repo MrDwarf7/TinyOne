@@ -335,14 +335,19 @@ impl VM {
                 Op::Builtin => {
                     let builtin_index = checked_non_negative_usize(instr.arg, "builtin index")?;
                     let arg_count = checked_non_negative_usize(instr.arg2, "builtin arity")?;
-                    let args = pop_args(&mut stack, arg_count)?;
+                    let args_start = stack
+                        .len()
+                        .checked_sub(arg_count)
+                        .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
                     let globals = global_memory.unwrap_or(&*memory);
-                    stack.push(runtime_call_builtin(
+                    let result = runtime_call_builtin(
                         &mut self.context,
                         globals,
                         builtin_index,
-                        args,
-                    )?);
+                        &stack[args_start..],
+                    )?;
+                    stack.truncate(args_start);
+                    stack.push(result);
                 }
                 Op::Return => return Ok(Some(vm_pop(&mut stack)?)),
                 Op::Print => {

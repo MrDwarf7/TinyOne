@@ -47,10 +47,12 @@ pub use error::{Result, TinyOneError};
 #[doc(hidden)]
 pub use ffi::sandbox_worker_main;
 pub use jit::{
-    DEFAULT_HOT_BACK_EDGE_THRESHOLD, JitCache, JitCacheStats, JitOptions, JitProgram, JitStats,
-    write_jit_listing,
+    DEFAULT_HOT_BACK_EDGE_THRESHOLD, DEFAULT_SOURCE_CACHE_MAX_BYTES,
+    DEFAULT_SOURCE_CACHE_MAX_ENTRIES, JitCache, JitCacheStats, JitExecutionProfile,
+    JitOpcodeProfile, JitOptions, JitProgram, JitStats, write_jit_listing,
+    write_verified_jit_listing,
 };
-pub(crate) use jit::{JitChunk, JitOp, JitVm};
+pub(crate) use jit::{JitBuiltin, JitChunk, JitOp, JitVm};
 pub use runner::{
     run_program, run_program_report, run_program_with_env, run_program_with_env_and_jit_options,
     run_program_with_jit_options, run_source, run_source_report, run_verified_program,

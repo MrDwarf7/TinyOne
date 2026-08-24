@@ -15,7 +15,7 @@
 //! multi-byte integers by hand elsewhere in this codebase.
 
 use crate::runtime::value::{CastKind, PointerKind};
-use crate::{HeapRef, RawPointer, Result, TinyOneError, TypeKind, Value};
+use crate::{HeapRef, Op, RawPointer, Result, TinyOneError, TypeKind, Value, floor_div};
 
 /// Total encoded width of one `Value`, in bytes.
 pub(crate) const ENCODED_VALUE_BYTES: usize = 64;
@@ -81,6 +81,11 @@ fn read_i64(bytes: &[u8; ENCODED_VALUE_BYTES], offset: usize) -> i64 {
 }
 
 pub(crate) fn encode_i64(value: i64) -> [u8; ENCODED_VALUE_BYTES] {
+    crate::runtime::instrumentation::record_value_encode();
+    encode_i64_raw(value)
+}
+
+fn encode_i64_raw(value: i64) -> [u8; ENCODED_VALUE_BYTES] {
     let mut out = [0u8; ENCODED_VALUE_BYTES];
     out[0] = TAG_I64;
     write_i64(&mut out, OFF_SCALAR, value);
@@ -91,9 +96,10 @@ pub(crate) fn add_i64_in_place(bytes: &mut [u8; ENCODED_VALUE_BYTES], value: i64
     if bytes[0] != TAG_I64 {
         return Ok(false);
     }
-    let next = read_i64(bytes, OFF_SCALAR)
-        .checked_add(value)
-        .ok_or_else(|| TinyOneError::runtime("Addition overflow"))?;
+    let next = checked_i64_result(
+        i128::from(read_i64(bytes, OFF_SCALAR)) + i128::from(value),
+        "Addition",
+    )?;
     write_i64(bytes, OFF_SCALAR, next);
     Ok(true)
 }
@@ -102,11 +108,110 @@ pub(crate) fn sub_i64_in_place(bytes: &mut [u8; ENCODED_VALUE_BYTES], value: i64
     if bytes[0] != TAG_I64 {
         return Ok(false);
     }
-    let next = read_i64(bytes, OFF_SCALAR)
-        .checked_sub(value)
-        .ok_or_else(|| TinyOneError::runtime("Subtraction overflow"))?;
+    let next = checked_i64_result(
+        i128::from(read_i64(bytes, OFF_SCALAR)) - i128::from(value),
+        "Subtraction",
+    )?;
     write_i64(bytes, OFF_SCALAR, next);
     Ok(true)
+}
+
+pub(crate) fn compare_i64(
+    bytes: &[u8; ENCODED_VALUE_BYTES],
+    value: i64,
+    op: Op,
+) -> Result<Option<bool>> {
+    if bytes[0] != TAG_I64 {
+        return Ok(None);
+    }
+    let stored = read_i64(bytes, OFF_SCALAR);
+    let result = match op {
+        Op::Lt => stored < value,
+        Op::Lte => stored <= value,
+        Op::Gt => stored > value,
+        Op::Gte => stored >= value,
+        Op::Eq => stored == value,
+        Op::Ne => stored != value,
+        _ => {
+            return Err(TinyOneError::runtime(format!(
+                "Unsupported comparison opcode {op:?}"
+            )));
+        }
+    };
+    Ok(Some(result))
+}
+
+pub(crate) fn is_i64_zero(bytes: &[u8; ENCODED_VALUE_BYTES]) -> Option<bool> {
+    (bytes[0] == TAG_I64).then(|| read_i64(bytes, OFF_SCALAR) == 0)
+}
+
+pub(crate) fn mul_i64(bytes: &[u8; ENCODED_VALUE_BYTES], value: i64) -> Result<Option<i64>> {
+    if bytes[0] != TAG_I64 {
+        return Ok(None);
+    }
+    checked_i64_product(read_i64(bytes, OFF_SCALAR), value).map(Some)
+}
+
+pub(crate) fn div_i64(bytes: &[u8; ENCODED_VALUE_BYTES], value: i64) -> Result<Option<i64>> {
+    if bytes[0] != TAG_I64 {
+        return Ok(None);
+    }
+    if value == 0 {
+        return Err(TinyOneError::runtime("Division by zero"));
+    }
+    floor_div(read_i64(bytes, OFF_SCALAR), value)
+        .map(Some)
+        .ok_or_else(|| TinyOneError::runtime("Division overflow"))
+}
+
+pub(crate) fn mul_i64_in_place(bytes: &mut [u8; ENCODED_VALUE_BYTES], value: i64) -> Result<bool> {
+    if bytes[0] != TAG_I64 {
+        return Ok(false);
+    }
+    let next = checked_i64_product(read_i64(bytes, OFF_SCALAR), value)?;
+    write_i64(bytes, OFF_SCALAR, next);
+    Ok(true)
+}
+
+fn checked_i64_product(lhs: i64, rhs: i64) -> Result<i64> {
+    checked_i64_result(i128::from(lhs) * i128::from(rhs), "Multiplication")
+}
+
+fn checked_i64_result(value: i128, operation: &str) -> Result<i64> {
+    i64::try_from(value).map_err(|_| {
+        TinyOneError::runtime(format!(
+            "Runtime.Memory_Overflow: {value} out of range for i64 in {operation}"
+        ))
+    })
+}
+
+pub(crate) fn div_i64_in_place(bytes: &mut [u8; ENCODED_VALUE_BYTES], value: i64) -> Result<bool> {
+    if bytes[0] != TAG_I64 {
+        return Ok(false);
+    }
+    if value == 0 {
+        return Err(TinyOneError::runtime("Division by zero"));
+    }
+    let next = floor_div(read_i64(bytes, OFF_SCALAR), value)
+        .ok_or_else(|| TinyOneError::runtime("Division overflow"))?;
+    write_i64(bytes, OFF_SCALAR, next);
+    Ok(true)
+}
+
+/// Reads only the heap identity needed to validate an encoded pointer key.
+/// This deliberately avoids allocating/decoding its field-name payload.
+pub(crate) fn encoded_pointer_base(
+    bytes: &[u8; ENCODED_VALUE_BYTES],
+) -> Option<(usize, u64, PointerKind)> {
+    if bytes[0] != TAG_POINTER {
+        return None;
+    }
+    let kind = PointerKind::from_u8(bytes[OFF_POINTER_KIND])?;
+    Some((
+        read_u64(bytes, OFF_ADDRESS) as usize,
+        read_u64(bytes, OFF_GENERATION),
+        kind,
+    ))
 }
 
 fn encode_pointer(out: &mut [u8; ENCODED_VALUE_BYTES], pointer: &RawPointer) -> Result<()> {
@@ -150,6 +255,7 @@ fn decode_pointer(bytes: &[u8; ENCODED_VALUE_BYTES]) -> RawPointer {
 /// Fails only if `value` is a `Pointer`/`Reference` whose field name exceeds
 /// [`MAX_INLINE_FIELD_BYTES`] — every other `Value` variant always succeeds.
 pub(crate) fn encode_value(value: &Value) -> Result<[u8; ENCODED_VALUE_BYTES]> {
+    crate::runtime::instrumentation::record_value_encode();
     let mut out = [0u8; ENCODED_VALUE_BYTES];
     match value {
         Value::I8(v) => {
@@ -165,7 +271,7 @@ pub(crate) fn encode_value(value: &Value) -> Result<[u8; ENCODED_VALUE_BYTES]> {
             out[OFF_SCALAR..OFF_SCALAR + 4].copy_from_slice(&v.to_le_bytes());
         }
         Value::I64(v) => {
-            return Ok(encode_i64(*v));
+            return Ok(encode_i64_raw(*v));
         }
         Value::U8(v) => {
             out[0] = TAG_U8;
@@ -230,6 +336,7 @@ pub(crate) fn encode_value(value: &Value) -> Result<[u8; ENCODED_VALUE_BYTES]> {
 /// out-of-range `PointerKind`/`CastKind`/UTF-8 field byte) — this is always
 /// a bug in the caller, not a condition a well-formed container can reach.
 pub(crate) fn decode_value(bytes: &[u8; ENCODED_VALUE_BYTES]) -> Value {
+    crate::runtime::instrumentation::record_value_decode();
     match bytes[0] {
         TAG_I8 => Value::I8(bytes[OFF_SCALAR] as i8),
         TAG_I16 => Value::I16(i16::from_le_bytes(
@@ -309,6 +416,83 @@ mod tests {
         let mut encoded = encode_value(&Value::I8(7)).unwrap();
         assert!(!add_i64_in_place(&mut encoded, 1).unwrap());
         assert_eq!(decode_value(&encoded), Value::I8(7));
+    }
+
+    #[test]
+    fn specialized_i64_comparison_handles_all_relations_and_declines_other_kinds() {
+        let encoded = encode_i64(3);
+        for (op, expected) in [
+            (Op::Lt, true),
+            (Op::Lte, true),
+            (Op::Gt, false),
+            (Op::Gte, false),
+            (Op::Eq, false),
+            (Op::Ne, true),
+        ] {
+            assert_eq!(compare_i64(&encoded, 4, op).unwrap(), Some(expected));
+        }
+
+        for value in [
+            Value::I8(3),
+            Value::U64(3),
+            Value::Float {
+                kind: TypeKind::Fp64,
+                bits: 3.0,
+            },
+        ] {
+            let encoded = encode_value(&value).unwrap();
+            assert_eq!(compare_i64(&encoded, 4, Op::Lt).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn specialized_i64_zero_test_declines_other_value_kinds() {
+        assert_eq!(is_i64_zero(&encode_i64(0)), Some(true));
+        assert_eq!(is_i64_zero(&encode_i64(-1)), Some(false));
+        let encoded = encode_value(&Value::U8(0)).unwrap();
+        assert_eq!(is_i64_zero(&encoded), None);
+    }
+
+    #[test]
+    fn specialized_i64_mul_and_floor_div_preserve_errors_and_decline_other_kinds() {
+        let encoded = encode_i64(-7);
+        assert_eq!(mul_i64(&encoded, 6).unwrap(), Some(-42));
+        assert_eq!(div_i64(&encoded, 3).unwrap(), Some(-3));
+        assert!(div_i64(&encoded, 0).is_err());
+
+        let maximum = encode_i64(i64::MAX);
+        assert!(mul_i64(&maximum, 2).is_err());
+        let minimum = encode_i64(i64::MIN);
+        assert!(div_i64(&minimum, -1).is_err());
+
+        for value in [
+            Value::I8(3),
+            Value::U64(3),
+            Value::Float {
+                kind: TypeKind::Fp64,
+                bits: 3.0,
+            },
+        ] {
+            let encoded = encode_value(&value).unwrap();
+            assert_eq!(mul_i64(&encoded, 2).unwrap(), None);
+            assert_eq!(div_i64(&encoded, 2).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn specialized_i64_mul_and_floor_div_updates_are_in_place_and_checked() {
+        let mut encoded = encode_i64(-7);
+        assert!(mul_i64_in_place(&mut encoded, 6).unwrap());
+        assert_eq!(decode_value(&encoded), Value::I64(-42));
+        assert!(div_i64_in_place(&mut encoded, 5).unwrap());
+        assert_eq!(decode_value(&encoded), Value::I64(-9));
+
+        let mut maximum = encode_i64(i64::MAX);
+        assert!(mul_i64_in_place(&mut maximum, 2).is_err());
+        assert_eq!(decode_value(&maximum), Value::I64(i64::MAX));
+        let mut minimum = encode_i64(i64::MIN);
+        assert!(div_i64_in_place(&mut minimum, -1).is_err());
+        assert_eq!(decode_value(&minimum), Value::I64(i64::MIN));
     }
 
     #[test]

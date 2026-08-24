@@ -77,6 +77,13 @@ impl RallocVec {
         Some(&mut self.bytes.as_mut_slice()[start..start + self.stride])
     }
 
+    /// Returns a checked byte range within one logical element.
+    pub(crate) fn get_part(&self, index: usize, offset: usize, len: usize) -> Option<&[u8]> {
+        let element = self.get(index)?;
+        let end = offset.checked_add(len)?;
+        element.get(offset..end)
+    }
+
     /// Appends one `stride`-byte element, growing (amortized doubling) if
     /// the vector is at capacity.
     ///
@@ -89,10 +96,17 @@ impl RallocVec {
             "RallocVec::push: element size mismatch"
         );
         if self.len == self.capacity() {
-            let new_capacity = if self.capacity() == 0 {
+            let capacity = self.capacity();
+            let new_capacity = if capacity == 0 {
                 4
             } else {
-                self.capacity() * 2
+                capacity
+                    // Fewer Ralloc reallocations are materially cheaper for
+                    // collection-heavy programs than holding the bounded extra
+                    // slack between growths. Exact logical length and heap-byte
+                    // accounting remain unchanged.
+                    .checked_mul(4)
+                    .ok_or_else(|| TinyOneError::runtime("container capacity overflow"))?
             };
             let new_byte_len = new_capacity
                 .checked_mul(self.stride)
@@ -107,14 +121,15 @@ impl RallocVec {
         Ok(())
     }
 
-    /// Removes and returns the last element, if any.
-    pub(crate) fn pop(&mut self) -> Option<Vec<u8>> {
+    /// Removes the last element and maps its borrowed bytes before returning.
+    /// The callback keeps fixed-width runtime slots off the host allocator.
+    pub(crate) fn pop_with<T>(&mut self, map: impl FnOnce(&[u8]) -> T) -> Option<T> {
         if self.len == 0 {
             return None;
         }
         self.len -= 1;
         let start = self.len * self.stride;
-        Some(self.bytes.as_slice()[start..start + self.stride].to_vec())
+        Some(map(&self.bytes.as_slice()[start..start + self.stride]))
     }
 
     /// Removes the element at `index`, shifting later elements down to keep
@@ -182,9 +197,9 @@ mod tests {
         let mut v = RallocVec::with_capacity(4, 4).unwrap();
         v.push(&elem(1, 4)).unwrap();
         v.push(&elem(2, 4)).unwrap();
-        assert_eq!(v.pop(), Some(elem(2, 4)));
-        assert_eq!(v.pop(), Some(elem(1, 4)));
-        assert_eq!(v.pop(), None);
+        assert_eq!(v.pop_with(<[u8]>::to_vec), Some(elem(2, 4)));
+        assert_eq!(v.pop_with(<[u8]>::to_vec), Some(elem(1, 4)));
+        assert_eq!(v.pop_with(<[u8]>::to_vec), None);
         assert_eq!(v.len(), 0);
     }
 
@@ -194,6 +209,16 @@ mod tests {
         v.push(&elem(1, 4)).unwrap();
         v.get_mut(0).unwrap().copy_from_slice(&elem(9, 4));
         assert_eq!(v.get(0), Some(&elem(9, 4)[..]));
+    }
+
+    #[test]
+    fn get_part_checks_element_and_subrange_boundaries() {
+        let mut v = RallocVec::with_capacity(8, 1).unwrap();
+        v.push(&[0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
+        assert_eq!(v.get_part(0, 2, 3), Some(&[2, 3, 4][..]));
+        assert_eq!(v.get_part(1, 0, 1), None);
+        assert_eq!(v.get_part(0, 7, 2), None);
+        assert_eq!(v.get_part(0, usize::MAX, 2), None);
     }
 
     #[test]

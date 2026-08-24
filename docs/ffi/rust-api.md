@@ -38,9 +38,13 @@ memoized fingerprint across clones.
 
 `compile_file_cached_verified_with_options(path, optimize)` additionally uses
 the dependency-validated disk cache and returns `(VerifiedProgram,
-CompileCacheStatus)`. Status is `Hit`, `Incremental`, or `Miss`. The shorter
-`compile_file_cached` and `compile_file_cached_verified` variants use optimized
-compilation and omit status where appropriate.
+CompileCacheStatus)`. Status is `Hit`, `Incremental`, `Miss`, or `Bypassed`.
+`Bypassed` means the graph was deliberately compiled from current source
+because it falls below the size-aware cache threshold or resides on a
+WSL-mounted Windows drive where validation is slower; it does not mean stale
+output was reused. The shorter `compile_file_cached` and
+`compile_file_cached_verified` variants use optimized compilation and omit
+status where appropriate.
 
 ### `compile_file(path: impl AsRef<Path>) -> Result<Arc<Program>>`
 
@@ -153,6 +157,11 @@ tinyone::run_program_with_jit_options(
 )?;
 ```
 
+For diagnostic attribution, append `.with_execution_profile(true)` and read
+`JitProgram::execution_profile()` after a run. The returned profile is opt-in
+and reports lowered-opcode dispatches plus operand-stack pushes, pops, and peak
+depth; normal JIT execution leaves it disabled.
+
 ---
 
 ## Artifacts
@@ -199,6 +208,18 @@ Use `JitCache::with_options(options)` to configure the cache. A hot-back-edge
 threshold of zero disables adaptive quickening while keeping lowering,
 superinstructions, caching, and JIT execution enabled.
 
+Exact-source verified compilations use a separate bounded LRU cache. It
+defaults to 128 entries and 8 MiB of retained source text. Configure it while
+constructing the cache:
+
+```rust
+let cache = tinyone::JitCache::with_options(options)
+    .with_source_cache_limits(64, 4 * 1024 * 1024);
+```
+
+Either limit may be zero to disable exact-source retention without disabling
+the fingerprint-keyed compiled JIT cache.
+
 Key methods on `JitCache`:
 
 - `JitCache::with_options(options) -> JitCache` — create a configured cache
@@ -207,6 +228,9 @@ Key methods on `JitCache`:
 - `JitCache::new() -> JitCache` — create an empty cache
 - `cache.len() -> usize` — number of cached programs
 - `cache.source_cache_len() -> usize` — number of exact sources with a cached verified compilation
+- `cache.source_cache_bytes() -> usize` — retained exact-source text bytes
+- `cache.source_cache_max_entries() -> usize` — configured entry limit
+- `cache.source_cache_byte_limit() -> usize` — configured retained-source byte limit
 - `cache.is_empty() -> bool` — true when the cache holds no programs
 - `cache.compile(program: &Program) -> Result<&JitProgram>` — compile and cache without running; verifies the program first
 - `cache.compile_verified(program: &VerifiedProgram) -> Result<&JitProgram>` — compile without duplicate verification or hashing
@@ -218,6 +242,10 @@ Key methods on `JitCache`:
 - `cache.run_source_report(source, stdout, inputs) -> Result<TinyRunReport>` — same, with heap statistics
 - `cache.stats() -> JitCacheStats` — aggregate stats across all cached programs
 
+Source-cache statistics include `source_bytes`, `source_hits`,
+`source_misses`, `source_compilations`, `source_evictions`, and
+`source_bypasses`.
+
 ### `write_jit_listing(program: &Program, path: impl AsRef<Path>) -> Result<()>`
 
 Compile `program` through the JIT and write the human-readable assembly listing to `path`.
@@ -225,6 +253,11 @@ Compile `program` through the JIT and write the human-readable assembly listing 
 ```rust
 tinyone::write_jit_listing(&program, std::path::Path::new("listing.txt"))?;
 ```
+
+Use `write_verified_jit_listing(&verified, path)` when a trusted compiler or
+artifact loader already returned `VerifiedProgram`; it reuses the capability
+and memoized fingerprint instead of verifying again. The raw-program function
+continues to verify before lowering.
 
 ---
 
@@ -259,3 +292,22 @@ Key methods on `VerifiedProgram`:
 - `VerifiedProgram::verify(program: Program) -> Result<VerifiedProgram>` — verify and wrap; takes an owned `Program`, not `Arc<Program>`
 - `verified.program() -> &Program` — borrow the inner program
 - `verified.into_program() -> Program` — consume and return the inner program
+
+### Feature-gated runtime cost counters
+
+With the `testing-hooks` feature enabled, external performance harnesses can
+measure heap-lock acquisitions, value encodes/decodes, Ralloc growth events,
+and allocator bytes copied:
+
+```rust
+use tinyone::testing::{reset_runtime_cost_counters, runtime_cost_counters};
+
+reset_runtime_cost_counters();
+// Run one isolated workload here.
+let costs = runtime_cost_counters();
+println!("{costs:?}");
+```
+
+These counters are process-wide and include spawned runtime threads. Reset
+them only when the harness owns an exclusive measurement interval; they are a
+diagnostic testing surface, not part of the production runtime API.

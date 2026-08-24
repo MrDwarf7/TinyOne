@@ -1,6 +1,9 @@
 use crate::runtime::value_codec::{self, ENCODED_VALUE_BYTES};
 use crate::tiny_allocator::RallocBytes;
-use crate::{Result, TinyOneError, Value, runtime_add_int, runtime_sub_int};
+use crate::{
+    Op, Result, TinyOneError, Value, checked_div_int, runtime_add_int, runtime_mul_int,
+    runtime_sub_int,
+};
 
 /// VM locals/globals backed by Ralloc-owned storage.
 ///
@@ -54,12 +57,7 @@ impl TinyMemory {
     }
 
     pub fn load(&self, slot: usize) -> Result<Value> {
-        let range = self.slot_range(slot)?;
-        Ok(value_codec::decode_value(
-            self.bytes.as_ref().unwrap().as_slice()[range]
-                .try_into()
-                .expect("VM slot width is fixed"),
-        ))
+        Ok(value_codec::decode_value(self.slot_bytes(slot)?))
     }
 
     pub fn store(&mut self, slot: usize, value: Value) -> Result<()> {
@@ -96,6 +94,36 @@ impl TinyMemory {
             return Ok(());
         }
         self.update_int_slot(slot, value, runtime_sub_int)
+    }
+
+    pub(crate) fn compare_int(&self, slot: usize, value: i64, op: Op) -> Result<Option<bool>> {
+        value_codec::compare_i64(self.slot_bytes(slot)?, value, op)
+    }
+
+    pub(crate) fn is_int_zero(&self, slot: usize) -> Result<Option<bool>> {
+        Ok(value_codec::is_i64_zero(self.slot_bytes(slot)?))
+    }
+
+    pub(crate) fn mul_int(&self, slot: usize, value: i64) -> Result<Option<i64>> {
+        value_codec::mul_i64(self.slot_bytes(slot)?, value)
+    }
+
+    pub(crate) fn div_int(&self, slot: usize, value: i64) -> Result<Option<i64>> {
+        value_codec::div_i64(self.slot_bytes(slot)?, value)
+    }
+
+    pub(crate) fn mul_int_assign(&mut self, slot: usize, value: i64) -> Result<()> {
+        if value_codec::mul_i64_in_place(self.slot_bytes_mut(slot)?, value)? {
+            return Ok(());
+        }
+        self.update_int_slot(slot, value, runtime_mul_int)
+    }
+
+    pub(crate) fn div_int_assign(&mut self, slot: usize, value: i64) -> Result<()> {
+        if value_codec::div_i64_in_place(self.slot_bytes_mut(slot)?, value)? {
+            return Ok(());
+        }
+        self.update_int_slot(slot, value, checked_div_int)
     }
 
     pub fn snapshot(&self) -> Vec<Value> {
@@ -137,6 +165,12 @@ impl TinyMemory {
         Ok((&mut bytes[range])
             .try_into()
             .expect("VM slot width is fixed"))
+    }
+
+    fn slot_bytes(&self, slot: usize) -> Result<&[u8; ENCODED_VALUE_BYTES]> {
+        let range = self.slot_range(slot)?;
+        let bytes = self.bytes.as_ref().unwrap().as_slice();
+        Ok((&bytes[range]).try_into().expect("VM slot width is fixed"))
     }
 }
 

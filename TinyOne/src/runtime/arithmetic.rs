@@ -192,10 +192,9 @@ fn runtime_numeric_as_f64(value: &Value, operation: &str) -> Result<f64> {
 
 pub(crate) fn runtime_add_int(lhs: Value, rhs: Value) -> Result<Value> {
     match (lhs, rhs) {
-        (Value::I64(lhs), Value::I64(rhs)) => lhs
-            .checked_add(rhs)
-            .map(Value::I64)
-            .ok_or_else(|| TinyOneError::runtime("Addition overflow")),
+        (Value::I64(lhs), Value::I64(rhs)) => {
+            checked_fast_i64_result(i128::from(lhs) + i128::from(rhs), "Addition")
+        }
         (lhs, rhs) => runtime_add(lhs, rhs),
     }
 }
@@ -221,10 +220,9 @@ pub(crate) fn runtime_add(lhs: Value, rhs: Value) -> Result<Value> {
 
 pub(crate) fn runtime_sub_int(lhs: Value, rhs: Value) -> Result<Value> {
     match (lhs, rhs) {
-        (Value::I64(lhs), Value::I64(rhs)) => lhs
-            .checked_sub(rhs)
-            .map(Value::I64)
-            .ok_or_else(|| TinyOneError::runtime("Subtraction overflow")),
+        (Value::I64(lhs), Value::I64(rhs)) => {
+            checked_fast_i64_result(i128::from(lhs) - i128::from(rhs), "Subtraction")
+        }
         (lhs, rhs) => runtime_sub(lhs, rhs),
     }
 }
@@ -250,12 +248,19 @@ pub(crate) fn runtime_sub(lhs: Value, rhs: Value) -> Result<Value> {
 
 pub(crate) fn runtime_mul_int(lhs: Value, rhs: Value) -> Result<Value> {
     match (lhs, rhs) {
-        (Value::I64(lhs), Value::I64(rhs)) => lhs
-            .checked_mul(rhs)
-            .map(Value::I64)
-            .ok_or_else(|| TinyOneError::runtime("Multiplication overflow")),
+        (Value::I64(lhs), Value::I64(rhs)) => {
+            checked_fast_i64_result(i128::from(lhs) * i128::from(rhs), "Multiplication")
+        }
         (lhs, rhs) => runtime_mul(lhs, rhs),
     }
+}
+
+fn checked_fast_i64_result(value: i128, operation: &str) -> Result<Value> {
+    i64::try_from(value).map(Value::I64).map_err(|_| {
+        TinyOneError::runtime(format!(
+            "Runtime.Memory_Overflow: {value} out of range for i64 in {operation}"
+        ))
+    })
 }
 
 pub(crate) fn runtime_mul(lhs: Value, rhs: Value) -> Result<Value> {
