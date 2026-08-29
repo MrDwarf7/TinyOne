@@ -1,3 +1,7 @@
+---
+title: Performance
+---
+
 # TinyOne performance workflow
 
 `tinylang-bench` is the performance regression and optimization-targeting
@@ -31,8 +35,8 @@ correctness was skipped, `--quick` was used, there are fewer than seven
 repeats, or any row exceeds its CV limit:
 
 ```text
-cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
-./TinyOne/target/release/tinylang-bench --repeats 7
+cargo build --release -p tinylang --bin tinylang-bench
+./target/release/tinylang-bench --repeats 7
 ```
 
 Hot-loop decision rows use a stricter 5 percent coefficient-of-variation
@@ -41,10 +45,10 @@ limit. The harness marks rows above their applicable limit with `!`. A normal
 cannot support an optimization claim if either side is not decision-grade.
 
 Save machine-local baselines under the platform-specific
-`TinyOne/target/perf/` tree with:
+`target/perf/` tree with:
 
 ```text
-./TinyOne/target/release/tinylang-bench --repeats 7 \
+./target/release/tinylang-bench --repeats 7 \
   --machine-label workstation --power-policy performance \
   --save-baseline-auto
 ```
@@ -61,9 +65,9 @@ with an all-row, normalized capture (increase `--sample-scale` if a row is
 noisy, and keep it identical for each side of a pair):
 
 ```text
-./TinyOne/target/release/tinylang-bench --priority-3-only --repeats 7 \
+./target/release/tinylang-bench --priority-3-only --repeats 7 \
   --sample-scale 16 \
-  --baseline TinyOne/target/perf/<platform>/baseline-<commit>-<time>.json \
+  --baseline target/perf/<platform>/baseline-<commit>-<time>.json \
   --priority-3-gate
 ```
 
@@ -80,14 +84,14 @@ The baseline must have matching platform, machine-label, power-policy, repeat,
 and sample-scale metadata, and must record `priority_5_only: true`:
 
 ```text
-./TinyOne/target/release/tinylang-bench --priority-5-only --repeats 7 \
+./target/release/tinylang-bench --priority-5-only --repeats 7 \
   --sample-scale 4 --machine-label workstation --power-policy performance \
-  --save-baseline TinyOne/target/perf/windows-native/priority-5-guardrails-baseline-final.json
+  --save-baseline target/perf/windows-native/priority-5-guardrails-baseline-final.json
 
-./TinyOne/target/release/tinylang-bench --priority-5-only --priority-5-gate \
+./target/release/tinylang-bench --priority-5-only --priority-5-gate \
   --repeats 7 --sample-scale 4 --machine-label workstation --power-policy performance \
-  --baseline TinyOne/target/perf/windows-native/priority-5-guardrails-baseline-final.json \
-  --save-baseline TinyOne/target/perf/windows-native/priority-5-guardrails-current-final.json
+  --baseline target/perf/windows-native/priority-5-guardrails-baseline-final.json \
+  --save-baseline target/perf/windows-native/priority-5-guardrails-current-final.json
 ```
 
 The accepted Windows-native and Arch WSL pairs both used `--sample-scale 4`.
@@ -102,7 +106,7 @@ separate even though they share the source tree. From WSL at the repository
 root, set:
 
 ```text
-export CARGO_TARGET_DIR="$PWD/TinyOne/target/linux"
+export CARGO_TARGET_DIR="$PWD/target/linux"
 ```
 
 Then use `$CARGO_TARGET_DIR/release/tinylang-bench` as the benchmark binary.

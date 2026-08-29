@@ -1,0 +1,11 @@
+[toolchain]
+channel = "stable"
+components = [
+  "cargo",
+  "clippy",
+  # "llvm-tools",
+  # "miri", # nightly only
+  "rust-analyzer",
+  # "rustc-codegen-cranelift", # nightly + cargo-features = ["codegen-backend"] + [profile.*] codegen-backend
+  "rustfmt",
+]

@@ -1,0 +1,66 @@
+name: "Nightly"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "rust-toolchain.toml"
+      - ".github/workflows/nightly.yml"
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: "always"
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  nightly:
+    name: "Nightly - ${{ matrix.target }} (${{ matrix.task }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: "ubuntu-latest"
+            target: "x86_64-unknown-linux-gnu"
+            task: "check"
+            run: "cargo check --workspace --all-targets"
+          - os: "ubuntu-latest"
+            target: "x86_64-unknown-linux-gnu"
+            task: "clippy"
+            run: "cargo clippy --workspace --all-targets -- -D warnings"
+          - os: "windows-latest"
+            target: "x86_64-pc-windows-msvc"
+            task: "check"
+            run: "cargo check --workspace --all-targets"
+    runs-on: "${{ matrix.os }}"
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      # IMPORTANT: nightly must not respect rust-toolchain.toml (stable). Remove it so
+      # rustup respects the explicit toolchain input. See docs/CI_CD.md.
+      - name: "Remove stable toolchain pin"
+        shell: "bash"
+        run: rm -f rust-toolchain.toml
+
+      - name: "Setup Rust (nightly)"
+        uses: "./.github/actions/setup-rust"
+        with:
+          target: "${{ matrix.target }}"
+          toolchain: "nightly"
+
+      - name: "${{ matrix.task }} (nightly)"
+        shell: "bash"
+        run: "${{ matrix.run }}"
+
+      - name: "cargo test (nightly)"
+        shell: "bash"
+        run: cargo test --workspace

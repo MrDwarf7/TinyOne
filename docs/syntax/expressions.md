@@ -1,3 +1,7 @@
+---
+title: Syntax - Expressions
+---
+
 # Expressions
 
 Expressions produce a value and appear on the right side of `let` and

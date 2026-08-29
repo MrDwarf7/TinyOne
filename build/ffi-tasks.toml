@@ -1,0 +1,45 @@
+[env]
+# ffi-tasks local env: strictly ffi-scoped
+# Uses CARGO_TARGET_DIR directly (adaptive, not redefined) and ROOT/SCRIPT_DIR from Makefile.toml
+
+[tasks.ffi-build-cdylib]
+description = "Build cdylib (tinylang cdylib) for consumer fixtures"
+command = "cargo"
+args = ["build"]
+
+[tasks.ffi-consumer-compile-c]
+description = "Compile C consumer fixture via dispatcher"
+command = "bash"
+args = ["${SCRIPT_DIR}/consumer_compile.sh", "c"]
+
+[tasks.ffi-consumer-compile-cpp]
+description = "Compile C++ consumer fixture via dispatcher"
+command = "bash"
+args = ["${SCRIPT_DIR}/consumer_compile.sh", "cpp"]
+
+[tasks.ffi-consumer-compile-rust]
+description = "Compile Rust consumer fixture via dispatcher"
+command = "bash"
+args = ["${SCRIPT_DIR}/consumer_compile.sh", "rust"]
+
+[tasks.ffi-consumer-compile]
+description = "Compile all consumer fixtures (c + cpp + rust)"
+dependencies = [
+  "ffi-consumer-compile-c",
+  "ffi-consumer-compile-cpp",
+  "ffi-consumer-compile-rust",
+]
+
+[tasks.ffi-consumer-smoke]
+description = "Compile + run C smoke consumer (real work in scripts/consumer_smoke.sh)"
+command = "bash"
+args = ["${SCRIPT_DIR}/consumer_smoke.sh"]
+
+[tasks.ffi-msvc-smoke]
+description = "Windows MSVC C smoke (cl.exe path, requires setup-msvc)"
+command = "bash"
+args = ["${SCRIPT_DIR}/consumer_smoke_msvc.sh"]
+
+[tasks.ffi-abi-drift]
+description = "Alias to ci-abi-drift for ffi workflow reuse"
+run_task = { name = ["ci-abi-drift"] }

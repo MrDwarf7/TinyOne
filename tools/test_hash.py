@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hash as hash_tool
+
+
+class HashToolTests(unittest.TestCase):
+    def test_default_excludes_match_workspace_target(self) -> None:
+        excludes = hash_tool.defaulted_exclude_patterns((), use_defaults=True)
+
+        self.assertIn("target", excludes)
+        self.assertNotIn("crates/tinyone_core/target", excludes)
+        self.assertNotIn("crates/tinyone_ralloc/target", excludes)
+
+    def test_tree_hash_skips_workspace_build_outputs_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "crates" / "tinyone_core" / "src").mkdir(parents=True)
+            (root / "target" / "debug").mkdir(parents=True)
+            (root / "crates" / "tinyone_core" / "src" / "lib.rs").write_text(
+                "pub fn ok() {}\n", encoding="utf-8"
+            )
+            (root / "target" / "debug" / "tinylang").write_text("drop\n", encoding="utf-8")
+
+            result = hash_tool.build_tree_result(
+                root,
+                "sha256",
+                hash_tool.DEFAULT_CHUNK_SIZE,
+                hash_tool.normalize_suffixes(()),
+                hash_tool.defaulted_exclude_patterns((), use_defaults=True),
+                "error",
+                None,
+                True,
+            )
+
+            self.assertEqual(
+                [file.path for file in result.files or ()],
+                ["crates/tinyone_core/src/lib.rs"],
+            )
+
+    def test_manifest_check_reports_all_entries_without_aborting_on_missing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            present = root / "present.txt"
+            missing = root / "missing.txt"
+            present.write_text("release\n", encoding="utf-8")
+            good = hash_tool.hash_file(present, "sha256", hash_tool.DEFAULT_CHUNK_SIZE)
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {
+                            "mode": "file",
+                            "name": "present",
+                            "path": str(present),
+                            "algorithm": "sha256",
+                            "digest": good,
+                        },
+                        {
+                            "mode": "file",
+                            "name": "missing",
+                            "path": str(missing),
+                            "algorithm": "sha256",
+                            "digest": good,
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            results = hash_tool.verify_manifest(manifest, hash_tool.DEFAULT_CHUNK_SIZE)
+
+            self.assertEqual([result.ok for result in results], [True, False])
+            self.assertIn("not a file", results[1].message)
+
+
+if __name__ == "__main__":
+    unittest.main()

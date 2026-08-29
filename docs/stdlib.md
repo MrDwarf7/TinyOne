@@ -1,3 +1,7 @@
+---
+title: Standard Library
+---
+
 # TinyLang Standard Library Reference
 
 TinyLang has two layers of builtin functions in the current TinyOne

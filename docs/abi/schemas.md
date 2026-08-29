@@ -1,3 +1,7 @@
+---
+title: ABI Schemas
+---
+
 # ABI Response Schemas
 
 This document specifies the exact JSON schema of the `"value"` object

@@ -1,0 +1,73 @@
+name: "Cranelift"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "rust-toolchain.toml"
+      - "crates/**"
+      - ".github/workflows/cranelift.yml"
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: "always"
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  cranelift:
+    name: "Cranelift - ${{ matrix.target }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: "ubuntu-latest"
+            target: "x86_64-unknown-linux-gnu"
+          - os: "windows-latest"
+            target: "x86_64-pc-windows-msvc"
+    runs-on: "${{ matrix.os }}"
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Setup Rust nightly with Cranelift codegen"
+        uses: "./.github/actions/setup-rust"
+        with:
+          target: "${{ matrix.target }}"
+          toolchain: "nightly"
+          components: "rustc-codegen-cranelift"
+
+      - name: "Assert Cranelift backend loads"
+        shell: "bash"
+        env:
+          RUSTUP_TOOLCHAIN: "nightly"
+        run: |
+          probe_dir="$(mktemp -d)"
+          trap 'rm -rf "$probe_dir"' EXIT
+          probe_bin="${probe_dir}/cranelift-probe"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            probe_bin="${probe_bin}.exe"
+          fi
+          printf 'fn main() {}\n' > "${probe_dir}/main.rs"
+          rustc -Zcodegen-backend=cranelift "${probe_dir}/main.rs" -o "${probe_bin}"
+          "${probe_bin}"
+
+      - name: "Build with cranelift backend"
+        shell: "bash"
+        env:
+          RUSTUP_TOOLCHAIN: "nightly"
+          RUSTFLAGS: "-Zcodegen-backend=cranelift"
+        run: cargo build --workspace
+
+      - name: "Test with cranelift backend"
+        shell: "bash"
+        env:
+          RUSTUP_TOOLCHAIN: "nightly"
+          RUSTFLAGS: "-Zcodegen-backend=cranelift"
+        run: cargo test --workspace

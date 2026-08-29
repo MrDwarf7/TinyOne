@@ -1,0 +1,32 @@
+# CODEOWNERS for TinyOne -- owner first, maintainer second.
+# Last matching pattern wins (GitHub + Graphite semantics).
+# Keep docs owned by @ConnerAdamsMaine; build system owned by @mrdwarf7 so
+# Connor's laziness doesn't break a working makefile. Owner can still override via CODEOWNERS file itself.
+#
+# See:
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# https://graphite.com/guides/in-depth-guide-github-codeowners
+
+*                           @ConnerAdamsMaine @mrdwarf7
+
+# Docs are wholly Connor's responsibility
+/docs/                      @ConnerAdamsMaine
+*.md                        @ConnerAdamsMaine
+LICENSE*                    @ConnerAdamsMaine
+License*                    @ConnerAdamsMaine
+
+# Build system is mrdwarf7-owned (do not give Connor easy write without review)
+# This is intentional friction; owner can still push via CODEOWNERS but review is required.
+/build/                     @mrdwarf7
+/Makefile.toml              @mrdwarf7
+/.cargo/                    @mrdwarf7
+
+# CI/actions: both, but mrdwarf7 primary for infra
+/.github/                   @mrdwarf7 @ConnerAdamsMaine
+/.github/workflows/         @mrdwarf7 @ConnerAdamsMaine
+/.github/actions/           @mrdwarf7
+
+# Config / toolchain pins: version bumps need cross-check vs CI_CD.md
+/rust-toolchain.toml         @mrdwarf7 @ConnerAdamsMaine
+/.python-version             @mrdwarf7 @ConnerAdamsMaine
+/Config.toml                 @ConnerAdamsMaine @mrdwarf7

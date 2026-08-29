@@ -1,0 +1,51 @@
+name: "Setup GCC/Clang"
+description: "Optionally install pinned GCC/Clang versions for C consumer builds. Empty inputs retain runner defaults."
+
+inputs:
+  gcc-version:
+    description: "GCC major version to install (Ubuntu only). Empty = use runner default."
+    required: false
+    default: ""
+  clang-version:
+    description: "Clang major version (Ubuntu only). Empty = use runner default."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    # AGENT NOTE: When configured, compiler pins affect C ABI consumer artifacts.
+    # Keep the workflow and docs/CI_CD.md aligned with whether it uses explicit
+    # versions or the runner defaults.
+    - name: "Install GCC (Ubuntu, pinned)"
+      if: "${{ runner.os == 'Linux' && inputs.gcc-version != '' }}"
+      shell: "bash"
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq "gcc-${{ inputs.gcc-version }}" "g++-${{ inputs.gcc-version }}"
+        sudo update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-${{ inputs.gcc-version }}" 100
+        sudo update-alternatives --install /usr/bin/g++ g++ "/usr/bin/g++-${{ inputs.gcc-version }}" 100
+        gcc --version
+        g++ --version
+
+    - name: "Install Clang (Ubuntu, pinned)"
+      if: "${{ runner.os == 'Linux' && inputs.clang-version != '' }}"
+      shell: "bash"
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq "clang-${{ inputs.clang-version }}"
+        clang --version
+
+    - name: "Show toolchain (all OS)"
+      shell: "bash"
+      run: |
+        echo "--- cc ---"
+        cc --version 2>&1 | head -n 1 || echo "cc not found"
+        echo "--- gcc ---"
+        gcc --version 2>&1 | head -n 1 || echo "gcc not found"
+        echo "--- clang ---"
+        clang --version 2>&1 | head -n 1 || echo "clang not found"
+        echo "--- cl (MSVC) ---"
+        cl 2>&1 | head -n 5 || echo "cl not found (expected on non-Windows)"

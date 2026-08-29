@@ -1,0 +1,103 @@
+[env]
+# ci-tasks local env: strictly ci-scoped, not hoisted to Makefile.toml
+PYTHON_VERSION = "3.12"
+
+# ---------------------------------------------------------------------------
+# fmt / lint / check - strict CI variants (no wrappers, hard-exit on failure)
+# ---------------------------------------------------------------------------
+
+[tasks.ci-fmt-check]
+description = "CI: cargo fmt --all --check + taplo lint (fail hard, no fallback)"
+env.RUSTUP_TOOLCHAIN = "nightly"
+command = "cargo"
+args = ["fmt", "--all", "--check"]
+
+[tasks.ci-fmt-check-deps]
+dependencies = ["ci-fmt-check", "taplo_lint"]
+
+[tasks.ci-check]
+description = "CI: cargo check --workspace --all-targets"
+command = "cargo"
+args = ["check", "--workspace", "--all-targets"]
+
+[tasks.ci-clippy]
+description = "CI: cargo clippy --workspace --all-targets -- -D warnings"
+command = "cargo"
+args = ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+
+[tasks.ci-test]
+description = "CI: cargo test --workspace"
+command = "cargo"
+args = ["test", "--workspace"]
+
+[tasks.ci-test-hooks]
+description = "CI: language suite with testing-hooks"
+command = "cargo"
+args = [
+  "test",
+  "-p",
+  "tinylang",
+  "--features",
+  "testing-hooks",
+  "--test",
+  "language_suite",
+]
+
+# ---------------------------------------------------------------------------
+# Python tooling - pinned to PYTHON_VERSION, fail hard, no || fallback
+# ---------------------------------------------------------------------------
+
+[tasks.ci-python-tools]
+description = "CI: python tool unit tests via uv (pinned python 3.12)"
+command = "uv"
+args = [
+  "run",
+  "--no-project",
+  "--python",
+  "${PYTHON_VERSION}",
+  "python",
+  "-m",
+  "unittest",
+  "discover",
+  "-s",
+  "${TOOL_DIR}",
+  "-p",
+  "test_*.py",
+]
+
+[tasks.ci-abi-drift]
+description = "CI: ABI drift check (hard fail, no fallback)"
+command = "uv"
+args = [
+  "run",
+  "--no-project",
+  "--python",
+  "${PYTHON_VERSION}",
+  "python",
+  "${TOOL_DIR}/abi_manifest.py",
+  "check",
+]
+
+# ---------------------------------------------------------------------------
+# Aggregators - short aliases remain in Makefile.toml, these are the impls
+# ---------------------------------------------------------------------------
+
+[tasks.ci-lint]
+description = "CI lint gate: fmt + clippy"
+dependencies = ["ci-fmt-check", "ci-clippy"]
+
+[tasks.ci-gate]
+description = "Full CI gate (lint + check + test + python + abi). No script wrapper."
+dependencies = [
+  "ci-fmt-check",
+  "ci-check",
+  "ci-clippy",
+  "ci-test",
+  "ci-test-hooks",
+  "ci-python-tools",
+  "ci-abi-drift",
+]
+
+[tasks.ci-gate-fast]
+description = "Fast local gate: check + test only"
+dependencies = ["ci-check", "ci-test"]

@@ -1,3 +1,7 @@
+---
+title: Bytecode Reference
+---
+
 # TinyOne Bytecode Reference
 
 This document covers the TinyOne bytecode instruction set, the JSON artifact

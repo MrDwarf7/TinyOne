@@ -1,3 +1,7 @@
+---
+title: Community Forum
+---
+
 # TinyLang Community Forum
 
 TinyOne uses three public document types to handle change requests, community proposals, and implementation notices without forcing every discussion through the same process.

@@ -1,0 +1,47 @@
+# cargo-features = ["codegen-backend", "trim-paths"]
+# Requires nightly for codegen-backend / trim-paths; see docs/CI_CD.md and [profile.*] comments
+[workspace]
+members         = [ "crates/tinyone_*", "crates/xtask" ]
+exclude         = [ ".archive" ]
+default-members = [ "crates/tinyone_core" ]
+resolver        = "3"
+
+[profile.dev]
+opt-level     = 1
+codegen-units = 256
+incremental   = true
+# codegen-backend = "cranelift" # May break deps. Requires nightly + cargo-features = ["codegen-backend"]
+debug            = "line-tables-only"
+debug-assertions = true
+overflow-checks  = true
+strip            = "none"
+panic            = "unwind"
+lto              = "off"
+# trim-paths = "none" # requires cargo-features = ["trim-paths"] + nightly
+
+[profile.release]
+opt-level     = 3
+codegen-units = 1
+incremental   = false
+# codegen-backend = "cranelift" # May break deps. Requires nightly + cargo-features = ["codegen-backend"]
+debug            = "none"
+debug-assertions = false
+overflow-checks  = false
+strip            = "symbols"
+panic            = "unwind"
+lto              = "off"
+# trim-paths = ["diagnostics", "object"] # requires cargo-features = ["trim-paths"] + nightly
+
+[profile.dev.package."*"]
+inherits = "release"
+# codegen-backend = "cranelift"
+
+[profile.release.package."*"]
+inherits = "release"
+# codegen-backend = "cranelift"
+
+[workspace.lints.rust]
+unsafe_code = { level = "forbid", priority = 0 }
+
+[workspace.lints.clippy]
+enum_glob_use = { level = "warn", priority = 2 }

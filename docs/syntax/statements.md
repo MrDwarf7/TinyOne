@@ -1,3 +1,7 @@
+---
+title: Syntax - Statements
+---
+
 # Statements
 
 Statements are separated by newlines or whitespace; there is no semicolon.

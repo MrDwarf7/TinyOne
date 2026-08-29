@@ -1,3 +1,7 @@
+---
+title: Rust API
+---
+
 # Rust Crate API Reference
 
 Add `tinyone` to your `Cargo.toml` dependencies (path or crate source),

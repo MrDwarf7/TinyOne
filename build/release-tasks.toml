@@ -1,0 +1,122 @@
+env.CHANGELOG_ARGS_BASE = "--repository https://github.com/${GITHUB_USER}/${REPO_NAME} --commit-path . --sort newest --strip all --with-commit"
+
+# Git-cliff based version bumping
+# git-cliff --bump calculates the new version and updates changelog
+# We use cargo set-version (from cargo-edit) to update Cargo.toml
+# If cargo-edit not available, fall back to sed
+
+# --- patch bump (e.g. 1.0.0 -> 1.0.1) ---
+[tasks.bump_patch]
+description = "Bump patch version (1.0.0 -> 1.0.1), update changelog, commit + tag"
+run_task = { name = [
+  "bump_patch_version",
+  "gen_changelog_patch",
+  "commit_version_patch",
+], parallel = false }
+
+[tasks.bump_patch_version]
+command = "sh"
+args = [
+  "-c",
+  "if command -v cargo-set-version >/dev/null 2>&1; then cargo set-version --manifest-path crates/tinyone_core/Cargo.toml --bump patch; else manifest=crates/tinyone_core/Cargo.toml; version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*\"\\([0-9][0-9]*\\)\\.\\([0-9][0-9]*\\)\\.\\([0-9][0-9]*\\)\".*/\\1 \\2 \\3/p' \"$manifest\"); set -- $version; [ \"$#\" -eq 3 ] || { echo \"invalid version in $manifest\" >&2; exit 1; }; sed -i \"s/^[[:space:]]*version[[:space:]]*=.*/version      = \\\"$1.$2.$(($3 + 1))\\\"/\" \"$manifest\"; fi",
+]
+description = "Bump patch version in crates/tinyone_core/Cargo.toml"
+
+[tasks.gen_changelog_patch]
+command = "${CHANGELOG_TOOL}"
+args = [
+  "${CHANGELOG_ARGS_BASE}",
+  "--tag-pattern \"v*\"",
+  "--output CHANGELOG.md",
+  "--bump patch",
+]
+description = "Generate changelog for patch release using git-cliff"
+dependencies = ["bump_patch_version"]
+
+[tasks.commit_version_patch]
+command = "git"
+args = ["add", "crates/tinyone_core/Cargo.toml", "CHANGELOG.md"]
+dependencies = ["gen_changelog_patch"]
+# Note: follow up with: git commit -m "chore(release): vX.Y.Z" && git tag "vX.Y.Z"
+
+# --- minor bump (e.g. 1.0.0 -> 1.1.0) ---
+[tasks.bump_minor]
+description = "Bump minor version (1.0.0 -> 1.1.0), update changelog, commit + tag"
+run_task = { name = [
+  "bump_minor_version",
+  "gen_changelog_minor",
+  "commit_version_minor",
+], parallel = false }
+
+[tasks.bump_minor_version]
+command = "sh"
+args = [
+  "-c",
+  "if command -v cargo-set-version >/dev/null 2>&1; then cargo set-version --manifest-path crates/tinyone_core/Cargo.toml --bump minor; else manifest=crates/tinyone_core/Cargo.toml; version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*\"\\([0-9][0-9]*\\)\\.\\([0-9][0-9]*\\)\\.\\([0-9][0-9]*\\)\".*/\\1 \\2 \\3/p' \"$manifest\"); set -- $version; [ \"$#\" -eq 3 ] || { echo \"invalid version in $manifest\" >&2; exit 1; }; sed -i \"s/^[[:space:]]*version[[:space:]]*=.*/version      = \\\"$1.$(($2 + 1)).0\\\"/\" \"$manifest\"; fi",
+]
+description = "Bump minor version in crates/tinyone_core/Cargo.toml"
+
+[tasks.gen_changelog_minor]
+command = "${CHANGELOG_TOOL}"
+args = [
+  "${CHANGELOG_ARGS_BASE}",
+  "--tag-pattern \"v*\"",
+  "--output CHANGELOG.md",
+  "--bump minor",
+]
+description = "Generate changelog for minor release using git-cliff"
+dependencies = ["bump_minor_version"]
+
+[tasks.commit_version_minor]
+command = "git"
+args = ["add", "crates/tinyone_core/Cargo.toml", "CHANGELOG.md"]
+dependencies = ["gen_changelog_minor"]
+
+# --- major bump (e.g. 1.0.0 -> 2.0.0) ---
+[tasks.bump_major]
+description = "Bump major version (1.0.0 -> 2.0.0), update changelog, commit + tag"
+run_task = { name = [
+  "bump_major_version",
+  "gen_changelog_major",
+  "commit_version_major",
+], parallel = false }
+
+[tasks.bump_major_version]
+command = "sh"
+args = [
+  "-c",
+  "if command -v cargo-set-version >/dev/null 2>&1; then cargo set-version --manifest-path crates/tinyone_core/Cargo.toml --bump major; else manifest=crates/tinyone_core/Cargo.toml; version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*\"\\([0-9][0-9]*\\)\\.\\([0-9][0-9]*\\)\\.\\([0-9][0-9]*\\)\".*/\\1 \\2 \\3/p' \"$manifest\"); set -- $version; [ \"$#\" -eq 3 ] || { echo \"invalid version in $manifest\" >&2; exit 1; }; sed -i \"s/^[[:space:]]*version[[:space:]]*=.*/version      = \\\"$(($1 + 1)).0.0\\\"/\" \"$manifest\"; fi",
+]
+description = "Bump major version in crates/tinyone_core/Cargo.toml"
+
+[tasks.gen_changelog_major]
+command = "${CHANGELOG_TOOL}"
+args = [
+  "${CHANGELOG_ARGS_BASE}",
+  "--tag-pattern \"v*\"",
+  "--output CHANGELOG.md",
+  "--bump major",
+]
+description = "Generate changelog for major release"
+dependencies = ["bump_major_version"]
+
+[tasks.commit_version_major]
+command = "git"
+args = ["add", "crates/tinyone_core/Cargo.toml", "CHANGELOG.md"]
+dependencies = ["gen_changelog_major"]
+
+# --- Unified entry point (defaults to patch) ---
+[tasks.bump]
+description = "Bump version (patch by default). Use: makers bump, makers bump_minor, makers bump_major"
+run_task = { name = ["bump_patch"], parallel = false }
+
+# --- changelog generation without version bump ---
+[tasks.changelog]
+description = "Generate/update CHANGELOG.md from git history"
+command = "${CHANGELOG_TOOL}"
+args = ["${CHANGELOG_ARGS_BASE}", "--output CHANGELOG.md"]
+
+[tasks.changelog_check]
+description = "Preview changelog without writing"
+command = "${CHANGELOG_TOOL}"
+args = ["${CHANGELOG_ARGS_BASE}"]

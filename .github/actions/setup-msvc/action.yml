@@ -1,0 +1,42 @@
+name: "Setup MSVC"
+description: "Setup MSVC toolchain (ilammy/msvc-dev-cmd) and fix Git Bash shadowing of link.exe. Windows only; no-op on other runners."
+inputs:
+  arch:
+    description: "MSVC architecture (e.g. x64, x86)"
+    required: false
+    default: "x64"
+runs:
+  using: "composite"
+  steps:
+    - name: "Setup MSVC (msvc-dev-cmd)"
+      if: "${{ runner.os == 'Windows' }}"
+      uses: "ilammy/msvc-dev-cmd@v1"
+      with:
+        arch: "${{ inputs.arch }}"
+
+    # Git for Windows ships C:\Program Files\Git\usr\bin\link.exe (MSYS GNU link)
+    # which shadows MSVC's link.exe and breaks rustc build-script linking.
+    # Original ci.yml had only the pwsh PATH filter, but bash's /usr/bin is
+    # injected via /etc/profile and still shadows. Fix both:
+    # 1) filter Windows PATH (SearchPathW)
+    # 2) delete the MSYS link file so `which link` finds MSVC
+    - name: "Remove Git usr/bin from PATH (Windows)"
+      if: "${{ runner.os == 'Windows' }}"
+      shell: pwsh
+      run: |
+        $filtered = ($env:PATH -split ';' | Where-Object { $_ -notlike '*Git\usr\bin*' }) -join ';'
+        "PATH=$filtered" >> $env:GITHUB_ENV
+        $orig = ($env:PATH -split ';').Count
+        $next = ($filtered -split ';').Count
+        Write-Host "Filtered Git usr/bin from Windows PATH (entries: $orig -> $next)"
+
+    - name: "Remove MSYS link.exe shadowing MSVC"
+      if: "${{ runner.os == 'Windows' }}"
+      shell: bash
+      run: |
+        set -euo pipefail
+        for p in "/usr/bin/link.exe" "/usr/bin/link" "C:/Program Files/Git/usr/bin/link.exe"; do
+          if [ -e "$p" ]; then echo "Removing $p"; rm -f "$p" || true; fi
+        done
+        echo "which link -> $(which link 2>&1 || echo 'not found')"
+        ls -l "/c/Program Files/Git/usr/bin/link.exe" 2>&1 | head -n 2 || echo "Git link.exe gone"

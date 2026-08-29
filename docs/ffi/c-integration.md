@@ -1,3 +1,7 @@
+---
+title: C Integration
+---
+
 # TinyOne C FFI Integration Guide
 
 TinyOne builds as a `cdylib` alongside the CLI binary. All public entry points
@@ -17,19 +21,19 @@ forum](https://tl.404connernotfound.dev).
 
 ```sh
 # Debug (for development and testing)
-cargo build --manifest-path TinyOne/Cargo.toml
+cargo build -p tinylang
 
 # Release (for embedding; includes the sandbox worker)
-cargo build --release --manifest-path TinyOne/Cargo.toml
+cargo build --release -p tinylang
 ```
 
 Output locations:
 
-| Platform | Debug | Release |
-| --- | --- | --- |
-| Linux | `TinyOne/target/debug/libtinyone.so` | `TinyOne/target/release/libtinyone.so` |
-| macOS | `TinyOne/target/debug/libtinyone.dylib` | `TinyOne/target/release/libtinyone.dylib` |
-| Windows | `TinyOne/target/debug/tinyone.dll` | `TinyOne/target/release/tinyone.dll` |
+| Platform | Debug                                               | Release                                               |
+| -------- | --------------------------------------------------- | ----------------------------------------------------- |
+| Linux    | `target/debug/libtinyone.so`    | `target/release/libtinyone.so`    |
+| macOS    | `target/debug/libtinyone.dylib` | `target/release/libtinyone.dylib` |
+| Windows  | `target/debug/tinyone.dll`      | `target/release/tinyone.dll`      |
 
 The `tinyone-sandbox-worker` executable produced in the same target directory
 must be shipped beside the host executable (or configured with
@@ -39,11 +43,11 @@ must be shipped beside the host executable (or configured with
 
 ```sh
 # Linux
-cc -std=c11 your_app.c -I/path/to/repo -L/path/to/TinyOne/target/release \
-   -Wl,-rpath,/path/to/TinyOne/target/release -ltinyone -o your_app
+cc -std=c11 your_app.c -I/path/to/repo -L/path/to/repo/target/release \
+   -Wl,-rpath,/path/to/repo/target/release -ltinyone -o your_app
 
 # macOS
-cc -std=c11 your_app.c -I/path/to/repo -L/path/to/TinyOne/target/release \
+cc -std=c11 your_app.c -I/path/to/repo -L/path/to/repo/target/release \
    -rpath @loader_path -ltinyone -o your_app
 ```
 
@@ -63,10 +67,10 @@ ordinary header work.
 `TINYONE_ABI_VERSION` is the matching header constant. Both are `1` for the
 declared ABI.
 
-Before changing `TinyOne/src/ffi.rs` or `tinylang.h`, run:
+Before changing `crates/tinyone_core/src/ffi.rs` or `tinylang.h`, run:
 
 ```sh
-./scripts/check-abi-drift.sh
+./scripts/check_abi_drift.sh
 ```
 
 That command uses only Python's standard library and compares exported
@@ -74,13 +78,13 @@ That command uses only Python's standard library and compares exported
 available for review:
 
 ```sh
-uv run --no-project python Tools/abi_manifest.py manifest
+uv run --no-project python tools/abi_manifest.py manifest
 ```
 
 Header generation is optional and requires a local `cbindgen` binary:
 
 ```sh
-uv run --no-project python Tools/abi_manifest.py generate-header --output tinylang.h
+uv run --no-project python tools/abi_manifest.py generate-header --output tinylang.h
 ```
 
 If `cbindgen` is missing, the tool reports that explicitly and still supports
@@ -158,8 +162,9 @@ char *tinyone_lex_source_json(const char *source);
 Lex `source` and return the number of tokens.
 
 **Success:**
+
 ```json
-{"ok": true, "value": {"tokens": 5}}
+{ "ok": true, "value": { "tokens": 5 } }
 ```
 
 **Error:** compile error or null source pointer.
@@ -176,6 +181,7 @@ Compile `source` through the full pipeline (lex → compile → optimize → ver
 Returns a bytecode artifact and its fingerprint.
 
 **Success:**
+
 ```json
 {
   "ok": true,
@@ -217,6 +223,7 @@ optional JSON array of strings that pre-populate the deterministic input queue
 consumed by `read()`, `read_int()`, and `read_str()`.
 
 **Success:**
+
 ```json
 {
   "ok": true,
@@ -296,6 +303,7 @@ Compile the artifact through the JIT tier and return its assembly listing as
 a text string. The same 8 MiB byte limit applies.
 
 **Success:**
+
 ```json
 {
   "ok": true,

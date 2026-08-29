@@ -1,3 +1,7 @@
+---
+title: ABI Versioning
+---
+
 # ABI Versioning and Stability
 
 **ABI version 1 is frozen for the entire v1 lifecycle.** Consumers must check

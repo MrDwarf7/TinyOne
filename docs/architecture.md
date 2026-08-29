@@ -1,3 +1,7 @@
+---
+title: Architecture
+---
+
 # TinyOne Implementation Architecture
 
 This document describes the current implementation, not a permanent
@@ -60,7 +64,7 @@ cost more than rebuilding them.
 ## Module Map
 
 ```
-TinyOne/src/
+crates/tinyone_core/src/
 ├── lib.rs              Public re-exports; feature gates for testing
 ├── api.rs              compile_source, compile_file, lex_source, optimize_program
 ├── cli.rs              CLI argument parsing and dispatch

@@ -1,3 +1,7 @@
+---
+title: CLI Reference
+---
+
 # CLI Reference
 
 ```
@@ -9,14 +13,13 @@ TinyOne exits with status `0` on success, status `1` on any error.
 Build the CLI executable before using these commands:
 
 ```sh
-cargo build --manifest-path TinyOne/Cargo.toml
+cargo build -p tinylang
 ```
 
-Cargo writes the debug executable to `TinyOne/target/debug/tinylang`
-(`TinyOne/target/debug/tinylang.exe` on Windows). For optimized local use,
-build with `cargo build --release --manifest-path TinyOne/Cargo.toml`; the
-release executable is `TinyOne/target/release/tinylang` or
-`TinyOne/target/release/tinylang.exe`. The examples below assume the executable
+Cargo writes the debug executable to `target/debug/tinylang`
+(`target/debug/tinylang.exe` on Windows). For optimized local use,
+build with `cargo build --release -p tinylang`; the release executable is
+`target/release/tinylang` or `target/release/tinylang.exe`. The examples below assume the executable
 is available on `PATH` as `tinylang`.
 
 ---

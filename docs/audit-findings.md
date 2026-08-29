@@ -2,14 +2,14 @@
 title: V1 Audit Findings
 ---
 
-This audit covers the TinyOne v1 implementation under `TinyOne/`.
+This audit covers the TinyOne v1 implementation under `crates/tinyone_core/`.
 References use repository-relative paths so they remain valid as line
 numbers change.
 
 # Confirmed boundaries
 
 - **FFI panic containment:** All exported JSON entry points in
-  `TinyOne/src/ffi.rs` funnel through the guarded response path. The
+  `crates/tinyone_core/src/ffi.rs` funnel through the guarded response path. The
   committed C header defines string ownership, nullability, input
   limits, and the ABI version check.
 - **Verified execution:** Public VM/JIT dispatch verifies bytecode

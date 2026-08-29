@@ -1,0 +1,111 @@
+name: "Format"
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+env:
+  CARGO_TERM_COLOR: "always"
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  fmt-check:
+    name: "Format - ${{ matrix.target }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: "ubuntu-latest"
+            target: "x86_64-unknown-linux-gnu"
+          - os: "windows-latest"
+            target: "x86_64-pc-windows-msvc"
+    runs-on: "${{ matrix.os }}"
+    if: ${{ !contains(github.event.head_commit.message, 'skip ci') }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: "0"
+
+      - name: "Setup Rust"
+        uses: "./.github/actions/setup-rust"
+        with:
+          target: "${{ matrix.target }}"
+
+      - name: "Setup nightly rustfmt"
+        uses: "./.github/actions/setup-rust"
+        with:
+          toolchain: "nightly"
+          components: "rustfmt"
+          tools: ""
+          use-mold: "false"
+          set-default: "false"
+
+      - name: "Check formatting (cargo fmt)"
+        shell: "bash"
+        env:
+          RUSTUP_TOOLCHAIN: "nightly"
+        run: cargo fmt --all --check
+
+      - name: "Check TOML formatting (taplo)"
+        shell: "bash"
+        run: taplo lint
+
+  # Auto-fix: only on push to base (not PR), pushes formatted tree back to branch.
+  # Uses bash, no pwsh, minimal conditional via job if.
+  fmt-fix-push:
+    name: "Format - fix & push"
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && !contains(github.event.head_commit.message, 'skip ci') }}
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: write
+    needs: [fmt-check]
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: "0"
+
+      - name: "Setup Rust"
+        uses: "./.github/actions/setup-rust"
+        with:
+          target: "x86_64-unknown-linux-gnu"
+
+      - name: "Setup nightly rustfmt"
+        uses: "./.github/actions/setup-rust"
+        with:
+          toolchain: "nightly"
+          components: "rustfmt"
+          tools: ""
+          use-mold: "false"
+          set-default: "false"
+
+      - name: "Format (cargo fmt + taplo)"
+        shell: "bash"
+        env:
+          RUSTUP_TOOLCHAIN: "nightly"
+        run: |
+          cargo fmt --all
+          taplo format || true
+
+      - name: "Push if dirty"
+        shell: "bash"
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No formatting changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "style: auto-format [skip ci]" || exit 0
+          git push

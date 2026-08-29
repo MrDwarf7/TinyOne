@@ -1,3 +1,7 @@
+---
+title: ABI Contract
+---
+
 # TinyOne ABI Contract
 
 These invariants are the frozen ABI version 1 contract. They remain frozen for

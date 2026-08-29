@@ -1,3 +1,7 @@
+---
+title: Syntax - Modules
+---
+
 # Modules
 
 TinyLang's module system separates source files into independently

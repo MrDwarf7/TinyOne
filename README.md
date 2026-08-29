@@ -21,11 +21,12 @@ Current crate version: `1.5.1` (the implementation is now managed as the
 public v1 release line while language work proceeds internally under
 v2).
 
-The current Rust crate lives in `TinyOne/` in this checkout. TinyLang is
-the durable language identity and TinyOne is its v1 implementation
-generation. TinyLang v2 is the active internal language roadmap: v2
-features are developed on the v1 release foundation without creating a
-separate user-facing language.
+The Rust implementation is a Cargo workspace. The language/runtime crate lives
+in `crates/tinyone_core/` and its allocator lives in
+`crates/tinyone_ralloc/`. TinyLang is the durable language identity and TinyOne
+is its v1 implementation generation. TinyLang v2 is the active internal
+language roadmap: v2 features are developed on the v1 release foundation
+without creating a separate user-facing language.
 
 :::: note
 ::: title
@@ -55,7 +56,7 @@ underway include:
 - **Unified Memory Determinism:** Deepening `Ralloc` integration across
   all VM and runtime primitives.
 
-*The frozen v1 ABI remains stable in \`\`TinyOne/\`\` while v2 features
+*The frozen v1 ABI remains stable in `crates/tinyone_core/` while v2 features
 evolve internally.*
 ::::
 
@@ -66,12 +67,13 @@ evolve internally.*
 
 # General Information
 
-- Source crate: `TinyOne/`
+- Workspace manifest: `Cargo.toml`
+- Source crate: `crates/tinyone_core/`
+- Allocator crate: `crates/tinyone_ralloc/`
 - C FFI header: `tinylang.h`
 - Public documentation: `docs/`
-- Design notes and future-direction documents: `Developer/`
-- Developer tools: `Tools/`
-- Allocator work-in-progress: `Ralloc/`
+- Design notes and future-direction documents: `docs/planned/`
+- Developer tools: `tools/`
 
 TinyLang is now in its v1 release line, but v1 and earlier are
 deliberately discovery versions. The syntax, bytecode format, builtin
@@ -133,20 +135,20 @@ should be explicit and checked by the runtime wherever possible.
 
 Build the Rust crate and CLI executable:
 
-    cargo build --manifest-path TinyOne/Cargo.toml
+    cargo build -p tinylang
 
 Run the repo-local CI/release gate from the repository root:
 
-    cargo run --manifest-path xtask/Cargo.toml -- release-gate
+    cargo run --manifest-path crates/xtask/Cargo.toml -- release-gate
 
-The gate checks TinyOne, Ralloc, the developer harness, language
+The gate checks the compiler/runtime, allocator, developer harness, language
 fixtures, formatting, Clippy, benchmark smoke coverage, and Python
-tooling. It requires `uv` for the Python steps. `scripts/ci-gate.sh`
-remains available as a Unix-oriented shell wrapper.
+tooling. It requires `uv` for the Python steps. The CI-equivalent
+`cargo-make` gate is `cargo make ci-gate`; see [CI/CD](docs/CI_CD.md).
 
-This creates the debug executable at `TinyOne/target/debug/tinylang`.
+This creates the debug executable at `target/debug/tinylang`.
 Build with `--release` when you want the optimized executable at
-`TinyOne/target/release/tinylang`. The Windows executable name is
+`target/release/tinylang`. The Windows executable name is
 `tinylang.exe`. The examples below assume the executable is available on
 `PATH` as `tinylang`.
 
@@ -383,17 +385,17 @@ design.
 
 The main documentation tree is `docs/`:
 
-- `docs/index.rst` routes readers by audience
+- `docs/INDEX.md` routes readers by audience
 - `docs/syntax/` describes syntax
 - `docs/abi/` describes ABI contracts and versioning
 - `docs/ffi/` describes C and Rust integration
 - `docs/architecture.md` describes the pipeline and module map
 - `docs/bytecode.md` describes opcodes, artifacts, verifier rules, and
   JIT
-- `docs/memory-model.rst` describes heap handles, pointer checks, and
+- `docs/memory-model.md` describes heap handles, pointer checks, and
   limits
 - `docs/stdlib.md` describes builtins and stdlib bridge behavior
-- `docs/v2-roadmap.rst` tracks the active internal v2 language roadmap
+- `docs/v2-roadmap.md` tracks the active internal v2 language roadmap
 
 The change-document process is defined by the TinyLang
 documentation-change system:
@@ -424,22 +426,22 @@ changes should not skip the TLP stage.
 
 # Developer Tools
 
-`Tools/hash.py`
+`tools/hash.py`
 
 : Stdlib-only file, tree, and manifest hashing tool for release
   manifests, audit checkpoints, and source-tree integrity checks.
 
-`Tools/loc.py`
+`tools/loc.py`
 
 : Small line-count and audit utility for source and documentation files.
 
 Examples:
 
-    python3 Tools/hash.py README.rst
-    python3 Tools/hash.py --tree . --format json --list-files
-    python3 Tools/hash.py --check manifest.json
-    python3 Tools/loc.py --audit --docs --json
-    python3 Tools/loc.py --letters
+    python3 tools/hash.py README.md
+    python3 tools/hash.py --tree . --format json --list-files
+    python3 tools/hash.py --check manifest.json
+    python3 tools/loc.py --audit --docs --json
+    python3 tools/loc.py --letters
 
 # Known Implementation Gaps
 
@@ -462,13 +464,10 @@ revision or release they need.
 
 ## Repository and documentation drift
 
-- The old README referred to `Rust/` and root `stdlib/` paths. The live
-  Rust crate is currently under `TinyOne/`.
-- Some historical planning documents still use `Rust/Cargo.toml` command
-  examples; active user-facing docs use `TinyOne/Cargo.toml`.
-- Historical release-helper examples may still assume `Rust/target` or
-  `Rust/Cargo.toml`. Active tooling should use `TinyOne/` and excludes
-  current `TinyOne/target` and `Ralloc/target` build outputs by default.
+- Active commands and tooling are workspace-aware: use the root `Cargo.toml`,
+  workspace members under `crates/`, and the shared `target/` directory.
+- Historical references may describe pre-workspace releases, but they are not
+  operational instructions for this checkout.
 
 ## Test and verification gaps
 
@@ -495,7 +494,8 @@ revision or release they need.
 
 ## Allocator boundary
 
-- `Ralloc/` is a path dependency of `TinyOne` and is the backend for
+- `crates/tinyone_ralloc/` is a workspace dependency of `crates/tinyone_core/`
+  and is the backend for
   heap payloads, VM locals/globals, and native allocator sidecar
   entries.
 - Transient VM/JIT operand stacks and compiler/JIT metadata still use
@@ -513,16 +513,16 @@ revision or release they need.
 
 Useful commands:
 
-    cargo check --manifest-path TinyOne/Cargo.toml
-    cargo test --manifest-path TinyOne/Cargo.toml
-    cargo test --manifest-path TinyOne/Cargo.toml --features testing-hooks
-    cargo build --release --manifest-path TinyOne/Cargo.toml --bin tinylang-bench
-    ./TinyOne/target/release/tinylang-bench
-    ./TinyOne/target/release/tinylang-bench --quick --repeats 1
-    ./TinyOne/target/release/tinylang-bench --filter runtime.jit
-    ./TinyOne/target/release/tinylang-bench --save-baseline tinyone-baseline.json
-    ./TinyOne/target/release/tinylang-bench --save-baseline-auto
-    ./TinyOne/target/release/tinylang-bench --baseline tinyone-baseline.json
+    cargo check --workspace --all-targets
+    cargo test --workspace
+    cargo test -p tinylang --features testing-hooks --test language_suite
+    cargo build --release -p tinylang --bin tinylang-bench
+    ./target/release/tinylang-bench
+    ./target/release/tinylang-bench --quick --repeats 1
+    ./target/release/tinylang-bench --filter runtime.jit
+    ./target/release/tinylang-bench --save-baseline tinyone-baseline.json
+    ./target/release/tinylang-bench --save-baseline-auto
+    ./target/release/tinylang-bench --baseline tinyone-baseline.json
 
 The benchmark runner checks VM/JIT output parity before measuring and
 reports best time, mean time, coefficient of variation, and per-thread
@@ -538,7 +538,7 @@ compilation with the size-aware disk-cache policy, `runtime.vm_*` and
 quickening benefit over a controlled 4,096-iteration loop. Collection
 and heap phase rows cover 16, 256, and 4,096-entry workloads, individual
 map and vector operations, generational slot reuse, and explicit frees.
-Automatic baselines are written under `TinyOne/target/perf/<platform>/`
+Automatic baselines are written under `target/perf/<platform>/`
 with machine, toolchain, Git, filesystem, and benchmark-option metadata.
 Run the suite from an optimized build; debug-profile timing is not
 representative.
@@ -550,7 +550,7 @@ filesystem, such as WSL `/mnt/c` versus native `/tmp`.
 When Windows and WSL share this checkout through `/mnt/c`, give Linux
 its own Cargo artifact directory before building or testing:
 
-    export CARGO_TARGET_DIR="$PWD/TinyOne/target/linux"
+    export CARGO_TARGET_DIR="$PWD/target/linux"
 
 The Linux benchmark binary is then
 `$CARGO_TARGET_DIR/release/tinylang-bench`. This keeps Linux and Windows
@@ -563,7 +563,7 @@ hardware counters around a filtered row when instruction counts or
 branch behavior matter:
 
     perf stat -e cycles,instructions,branches,branch-misses -- \
-      ./TinyOne/target/release/tinylang-bench \
+      ./target/release/tinylang-bench \
       --filter runtime.jit_hot_loop_4096 --skip-correctness
 
 See `docs/performance.md` for the workload map, measurement rules, and
@@ -571,7 +571,7 @@ the current optimization priority order.
 
 Current state:
 
-- `cargo check --manifest-path TinyOne/Cargo.toml` passes without
+- `cargo check --workspace --all-targets` passes without
   warnings.
 - The default test suite and feature-gated language fixture suite are
   release gates and are expected to pass before changes are pushed.
@@ -579,14 +579,27 @@ Current state:
 # Repository Layout
 
     .
-    |-- README.rst
-    |-- License.rst
+    |-- Cargo.toml
+    |-- Cargo.lock
+    |-- README.md
+    |-- LICENSE.md
     |-- tinylang.h
-    |-- TinyOne/
-    |   |-- Cargo.toml
-    |   |-- src/
-    |   |-- tests/
-    |   `-- Cargo.lock
+    |-- crates/
+    |   |-- tinyone_core/
+    |   |   |-- src/
+    |   |   `-- tests/
+    |   |-- tinyone_ralloc/
+    |   |   |-- include/
+    |   |   |-- src/
+    |   |   `-- tests/
+    |   |-- tinyone_test_support/
+    |   `-- xtask/
+    |-- build/
+    |-- scripts/
+    |-- tools/
+    |   |-- abi_manifest.py
+    |   |-- hash.py
+    |   `-- loc.py
     |-- docs/
     |   |-- abi/
     |   |-- ffi/
@@ -596,28 +609,15 @@ Current state:
     |   |-- memory-model.md
     |   |-- stdlib.md
     |   `-- v2-roadmap.md
-    |-- Developer/
-    |   |-- typing_system.md
-    |   |-- ownership_semantics_and_memory_safety.md
-    |   |-- phase_2.md
-    |   `-- phase_2_allocator.md
-    |-- Tools/
-    |   |-- hash.py
-    |   `-- loc.py
-    `-- Ralloc/
-        |-- Cargo.toml
-        |-- src/
-        |-- include/
-        `-- tests/
+    `-- .github/
+        `-- workflows/
 
-The `TinyOne/` directory name is still present on disk for the Rust
-crate. The user-facing language name is TinyLang. TinyOne names the v1
-release generation of the implementation line; v2 is the active internal
-roadmap.
+The user-facing language name is TinyLang. TinyOne names the v1 release
+generation of the implementation line; v2 is the active internal roadmap.
 
 # Release Direction
 
-Active v2 language development is documented in `docs/v2-roadmap.rst`.
+Active v2 language development is documented in `docs/v2-roadmap.md`.
 The v1 release themes include:
 
 - stable v1 JSON response schemas
@@ -632,7 +632,7 @@ The v1 release themes include:
 
 # License
 
-See `License.rst`.
+See `LICENSE.md`.
 
 # Feedback and Community
 

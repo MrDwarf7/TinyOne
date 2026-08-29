@@ -1,3 +1,7 @@
+---
+title: Syntax - Types
+---
+
 # Types
 
 TinyLang is dynamically typed. Every value at runtime has one of the

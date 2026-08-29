@@ -1,3 +1,7 @@
+---
+title: VM and JIT
+---
+
 # VM and JIT Operation
 
 The TinyOne implementation has two execution backends that share the same verified bytecode:

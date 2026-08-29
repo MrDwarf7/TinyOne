@@ -1,3 +1,7 @@
+---
+title: TinyLang FFI v2
+---
+
 # TinyLang FFI v2 — Unified Typed C ABI
 
 - **Status:** Draft / Planned
@@ -21,7 +25,7 @@ native module execution can be enabled safely.
 
 Today TinyOne's FFI is a single, *inbound* surface: a C host calls
 `tinyone_*_json` functions that take and return JSON-over-C-strings
-(`TinyOne/src/ffi.rs`). That design is correct for coarse, one-shot calls
+(`crates/tinyone_core/src/ffi.rs`). That design is correct for coarse, one-shot calls
 (compile, run) and has a tiny unsafe surface — but it cannot express the two
 things this proposal targets:
 
@@ -412,13 +416,14 @@ Proto for the *wire* only. Start hand-rolled; revisit if that need is real.
 
 ### 8.1 Generation
 
-- Add `cbindgen.toml` to the TinyOne crate and to the Ralloc crate.
+- Keep `cbindgen.toml` at the workspace root and generate headers from the
+  `tinyone_core` and `tinyone_ralloc` crates.
 - Mark every FFI-exposed type `#[repr(C)]` (`TinyValue`, `TinyHandle`,
   `TinyHeapStats`, `TinyRunReport`, the enums). Functions are already
   `#[no_mangle] extern "C"`.
 - Output: TinyOne → **`tinylang.h`** (containing the `tinyone_*` symbols + the
   `repr(C)` types); Ralloc → **`ralloc.h`** (replacing the current hand-written
-  header at `Ralloc/include/ralloc.h`).
+  header at `crates/tinyone_ralloc/include/ralloc.h`).
 
 ### 8.2 Delivery: committed headers + CI drift-check
 
@@ -442,16 +447,9 @@ reference `tinylang.h`.
 ### 8.4 Ralloc is a required dependency — wire it to canonical (P3B-4)
 
 Ralloc is a foundational requirement of the TinyLang system — it underpins the
-IPC safety model (§7.4), not an optional backend. The blocker is *sourcing*. Per
-`phase_2_allocator.md` [P3B-4], the in-repo `TinyOne/Ralloc/` is an **embedded
-git repository** (it has its own `.git`) that is **stale**: its `lib.rs`
-predates the VM API layer and exports no `VmAllocation`/`VmAllocator`/`vm_api`.
-The canonical checkout at `/Desktop/Ralloc/` is the one that contains
-`vm_api.rs`. Generating `ralloc.h` from the embedded copy would ship a header
-for an allocator that lacks the VM API the rest of this design depends on.
-Resolve first — remove the embedded repo and add a submodule (or a
-version-pinned published crate) pointing at canonical Ralloc — then wire
-cbindgen against that.
+IPC safety model (§7.4), not an optional backend. It is now the workspace member
+`crates/tinyone_ralloc/`, so header generation and C artifacts must use that
+crate rather than a nested repository or an external checkout.
 
 ### 8.5 Consumer story
 
