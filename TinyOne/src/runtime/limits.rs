@@ -16,3 +16,36 @@ pub(crate) const MAX_HEAP_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_ARRAY_LENGTH: usize = 65_536;
 pub(crate) const MAX_BUFFER_BYTES: usize = 1024 * 1024;
 pub(crate) const VALUE_BYTES: usize = std::mem::size_of::<RuntimeValue>();
+
+/// Per-program VM policy persisted in bytecode artifacts.
+///
+/// Limits can only tighten the runtime's hard safety ceiling. Keeping the
+/// ceiling in the runtime avoids a project configuration accidentally turning
+/// an embedding application into an unbounded executor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VmSettings {
+    pub(crate) max_call_depth: usize,
+}
+
+impl VmSettings {
+    pub(crate) const fn defaulted() -> Self {
+        Self {
+            max_call_depth: MAX_CALL_DEPTH,
+        }
+    }
+
+    pub(crate) fn with_max_call_depth(max_call_depth: usize) -> crate::Result<Self> {
+        if max_call_depth == 0 || max_call_depth > MAX_CALL_DEPTH {
+            return Err(crate::TinyOneError::compile(format!(
+                "VM max_call_depth must be between 1 and {MAX_CALL_DEPTH}"
+            )));
+        }
+        Ok(Self { max_call_depth })
+    }
+}
+
+impl Default for VmSettings {
+    fn default() -> Self {
+        Self::defaulted()
+    }
+}

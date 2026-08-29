@@ -1,0 +1,107 @@
+# TinyOne project policy. This file is discovered from the entry source path,
+# like Cargo.toml, and is part of the compile-cache dependency set.
+
+[package]
+name = "tinyone"
+version = "1.4.0"
+description = "TinyOne language and VM"
+authors = ["TinyOne contributors"]
+
+[vm]
+# This can tighten, but never raise, the VM hard limit of 16 nested calls.
+max_call_depth = 16
+
+[sandbox]
+# Keep imports inside this project root. Set false only for a deliberately
+# trusted development environment that must import an external .to file.
+enabled = true
+
+[permissions]
+# Capabilities available to the root codebase. Module permissions are always
+# intersected with this list, so this is the project-wide authority ceiling.
+# Aliases: sockets -> network, gpu -> graphics, pipelines -> linux_pipelines.
+codebase = [
+  "filesystem",
+  "environment",
+  "threads",
+  "unsafe_memory",
+  "network",
+  "graphics",
+  "hardware",
+  "linux_pipelines",
+]
+
+[rules]
+# When true, every import must be listed in [modules.<name>].
+require_configured_modules = false
+
+# Modules can replace a legacy tinyone.json mapping. `permissions` is the
+# project approval ceiling; a signed module must declare a subset of it in its
+# own module.toml. For example:
+# [modules.network]
+# path = "modules/network/main.to"
+# permissions = ["sockets"]
+
+[signing]
+# When enabled, every imported module needs module.toml and signature.toml in
+# its directory. module.toml holds its identity, purpose, capability claims,
+# and dependencies. signature.toml supplies source/artifact hashes plus the
+# Ed25519 signature metadata. TinyOne canonicalizes their combined metadata,
+# SHA-256 hashes it, and verifies the 64-byte Ed25519 signature over that
+# digest. Source hash and dependency lock hash are verified independently.
+#
+# `binary_hash` is signed when supplied, but source-only .to modules do not
+# load a binary artifact yet; source_hash is the enforced artifact binding.
+# Self-signed package keys are intentionally not supported. Root source is
+# local project code and is not a module; compiled artifacts retain the
+# compile-time policy.
+require_module_signatures = false
+#
+# A module package uses this non-duplicated layout:
+#
+#   modules/http/module.toml
+#   [module]
+#   name = "http-client"
+#   version = "3.2.1"
+#   publisher = "example-dev"
+#   [purpose]
+#   description = "HTTP client"
+#   [capabilities.network]
+#   outbound = true
+#   listen = false
+#   [capabilities.filesystem]
+#   read = false
+#   write = false
+#   [capabilities.process]
+#   spawn = false
+#   [capabilities.environment]
+#   read = ["HTTP_PROXY", "HTTPS_PROXY"]
+#   [capabilities.ffi]
+#   allowed = false
+#   [dependencies]
+#   tls = "2.4.0"
+#
+#   modules/http/signature.toml
+#   [artifact]
+#   source_hash = "sha256:<64 lowercase hex characters>"
+#   dependency_lock_hash = "sha256:<64 lowercase hex characters>"
+#   compiler_version = "1.4.0"
+#   language_version = "1"
+#   [signing]
+#   authority = "example-dev-authority"
+#   policy_version = "1"
+#   issued_at = 1767225600
+#   expires_at = 1767830400
+#   signing_record_id = "example-record-001"
+#   signature = "<64-byte Ed25519 signature as hex>"
+#
+# A company must be certified by a TinyOne central root before it can appear
+# below. The release build pins central root public keys through
+# TINYONE_CENTRAL_AUTHORITY_ROOTS="tinyone-root-v1=<32-byte-key-hex>".
+# [[signing.authorities]]
+# id = "acme"
+# issuer = "tinyone-root-v1"
+# public_key = "32-byte company Ed25519 public key encoded as hexadecimal"
+# not_before = 1767225600
+# expires = 1798761600
+# certificate = "64-byte central-root Ed25519 signature of its SHA-256 certificate digest, encoded as hexadecimal"

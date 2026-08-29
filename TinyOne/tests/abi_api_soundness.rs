@@ -193,6 +193,8 @@ fn ffi_success_response_schemas_are_frozen() {
         &[
             "format",
             "version",
+            "root_capabilities",
+            "vm",
             "code",
             "slot_count",
             "names",

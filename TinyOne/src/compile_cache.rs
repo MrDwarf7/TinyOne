@@ -12,7 +12,7 @@ use crate::{
     load_verified_artifact, write_binary_artifact,
 };
 
-const CACHE_FORMAT_VERSION: u32 = 4;
+const CACHE_FORMAT_VERSION: u32 = 6;
 const MAX_CACHE_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_CACHE_INPUT_BYTES: usize = 1024 * 1024;
 const SMALL_CACHE_MAX_MODULES: usize = 2;
@@ -175,12 +175,13 @@ fn match_cached_program(path: &Path, expected_fingerprint: &str) -> Option<Verif
 }
 
 pub(crate) fn should_bypass(root_source: &str, resolver: &ModuleResolver) -> bool {
-    should_bypass_shape(
-        resolver.module_count(),
-        root_source
-            .len()
-            .saturating_add(resolver.existing_input_bytes()),
-    )
+    resolver.has_capability_grants()
+        || should_bypass_shape(
+            resolver.module_count(),
+            root_source
+                .len()
+                .saturating_add(resolver.existing_input_bytes()),
+        )
 }
 
 fn should_bypass_shape(module_count: usize, input_bytes: usize) -> bool {

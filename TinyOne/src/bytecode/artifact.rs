@@ -1,8 +1,8 @@
 use serde_json::{Value as JsonValue, json};
 
 use crate::{
-    Function, Instr, ModuleDef, ModuleImportDef, Op, Program, Result, StructDef, TinyOneError,
-    VerifiedProgram,
+    Function, Instr, ModuleCapabilities, ModuleDef, ModuleImportDef, Op, Program, Result,
+    StructDef, TinyOneError, VerifiedProgram, VmSettings,
 };
 
 pub(crate) const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
@@ -17,6 +17,7 @@ const MAX_SLOT_COUNT: usize = 65_536;
 const MAX_MODULES: usize = 256;
 const MAX_MODULE_IMPORTS: usize = 4_096;
 const MAX_MODULE_EXPORTS: usize = 4_096;
+const MAX_MODULE_CAPABILITIES: usize = 8;
 const MAX_STRUCT_FIELDS: usize = 256;
 #[allow(dead_code)]
 const MAX_ENUM_VARIANTS: usize = 65_536;
@@ -28,6 +29,10 @@ impl Program {
         json!({
             "format": "tinyone-bytecode",
             "version": 1,
+            "root_capabilities": self.root_capabilities.names(),
+            "vm": {
+                "max_call_depth": self.vm_settings.max_call_depth,
+            },
             "code": encode_code(&self.code),
             "slot_count": self.slot_count,
             "names": self.names,
@@ -56,6 +61,7 @@ impl Program {
                 })).collect::<Vec<_>>(),
                 "exported_functions": module.exported_functions,
                 "exported_structs": module.exported_structs,
+                "capabilities": module.capabilities.names(),
             })).collect::<Vec<_>>(),
         })
     }
@@ -82,6 +88,33 @@ impl Program {
         let fields = expect_string_list_limited(object.get("fields"), "fields", MAX_FIELDS)?;
         let raw_structs = expect_array_limited(object.get("structs"), "structs", MAX_STRUCTS)?;
         let raw_modules = optional_array_limited(object.get("modules"), "modules", MAX_MODULES)?;
+        let root_capability_names = object
+            .get("root_capabilities")
+            .map(|value| {
+                expect_string_list_limited(
+                    Some(value),
+                    "root_capabilities",
+                    MAX_MODULE_CAPABILITIES,
+                )
+            })
+            .transpose()?
+            .unwrap_or_else(|| ModuleCapabilities::all().names());
+        let root_capabilities = ModuleCapabilities::from_names(&root_capability_names)?;
+        let vm_settings = object
+            .get("vm")
+            .map(|value| {
+                let vm = value.as_object().ok_or_else(|| {
+                    TinyOneError::compile("Artifact field \"vm\" must be an object")
+                })?;
+                let depth = vm
+                    .get("max_call_depth")
+                    .map(|value| expect_usize(Some(value), "vm.max_call_depth"))
+                    .transpose()?
+                    .unwrap_or(crate::MAX_CALL_DEPTH);
+                VmSettings::with_max_call_depth(depth)
+            })
+            .transpose()?
+            .unwrap_or_default();
         let mut total_code_ops = 0usize;
         let functions = raw_functions
             .iter()
@@ -165,6 +198,17 @@ impl Program {
                         "module struct exports",
                         MAX_MODULE_EXPORTS,
                     )?;
+                    let capabilities = obj
+                        .get("capabilities")
+                        .map(|value| {
+                            expect_string_list_limited(
+                                Some(value),
+                                "module capabilities",
+                                MAX_MODULE_CAPABILITIES,
+                            )
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
                     Ok(ModuleDef {
                         name: expect_str(obj.get("name"), "module name")?,
                         path: expect_str(obj.get("path"), "module path")?,
@@ -184,6 +228,7 @@ impl Program {
                             .collect::<Result<Vec<_>>>()?,
                         exported_functions,
                         exported_structs,
+                        capabilities: ModuleCapabilities::from_names(&capabilities)?,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -192,6 +237,8 @@ impl Program {
             // verification (unknown variant index) rather than execute
             // incorrectly. Source-file compilation is unaffected.
             enum_variants: Vec::new(),
+            root_capabilities,
+            vm_settings,
         };
         Ok(program)
     }

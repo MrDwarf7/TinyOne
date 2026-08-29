@@ -738,6 +738,7 @@ pub fn b_atomic_add(context: &TinyRuntimeContext, target: &Value, delta: &Value)
 pub fn b_thread_spawn(
     context: &mut TinyRuntimeContext,
     global_memory: &TinyMemory,
+    caller_function: Option<usize>,
     args: &[Value],
 ) -> Result<Value> {
     let fn_name = {
@@ -759,7 +760,7 @@ pub fn b_thread_spawn(
 
     let fn_args = args[1..].to_vec();
     let (fn_index, fn_param_count) = program_arc
-        .publicly_callable_function(&fn_name)
+        .callable_function_from(caller_function, &fn_name)
         .map(|(index, function)| (index, function.param_count))
         .ok_or_else(|| {
             TinyOneError::runtime(format!(
@@ -994,6 +995,7 @@ fn unsigned_u32(value: &Value, operation: &str) -> Result<u32> {
 
 pub fn b_closure_new(
     context: &mut TinyRuntimeContext,
+    caller_function: Option<usize>,
     function_name: &Value,
     captures: &Value,
 ) -> Result<Value> {
@@ -1013,7 +1015,7 @@ pub fn b_closure_new(
         .as_ref()
         .ok_or_else(|| TinyOneError::runtime("closure_new: runtime has no compiled program"))?;
     let function_id = program
-        .publicly_callable_function(&name)
+        .callable_function_from(caller_function, &name)
         .map(|(index, _)| index)
         .ok_or_else(|| {
             TinyOneError::runtime(format!(

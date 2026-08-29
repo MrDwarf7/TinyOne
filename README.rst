@@ -348,15 +348,15 @@ Documentation
 
 The main documentation tree is ``docs/``:
 
-* ``docs/index.md`` routes readers by audience
+* ``docs/index.rst`` routes readers by audience
 * ``docs/syntax/`` describes syntax
 * ``docs/abi/`` describes ABI contracts and versioning
 * ``docs/ffi/`` describes C and Rust integration
 * ``docs/architecture.md`` describes the pipeline and module map
 * ``docs/bytecode.md`` describes opcodes, artifacts, verifier rules, and JIT
-* ``docs/memory-model.md`` describes heap handles, pointer checks, and limits
+* ``docs/memory-model.rst`` describes heap handles, pointer checks, and limits
 * ``docs/stdlib.md`` describes builtins and stdlib bridge behavior
-* ``docs/v2-roadmap.md`` tracks the active internal v2 language roadmap
+* ``docs/v2-roadmap.rst`` tracks the active internal v2 language roadmap
 
 The change-document process is defined by the TinyLang documentation-change
 system:
@@ -398,6 +398,7 @@ Examples::
     python3 Tools/hash.py --tree . --format json --list-files
     python3 Tools/hash.py --check manifest.json
     python3 Tools/loc.py --audit --docs --json
+    python3 Tools/loc.py --letters
 
 Known Implementation Gaps
 -------------------------
@@ -578,7 +579,7 @@ generation of the implementation line; v2 is the active internal roadmap.
 Release Direction
 -----------------
 
-Active v2 language development is documented in ``docs/v2-roadmap.md``. The v1 release
+Active v2 language development is documented in ``docs/v2-roadmap.rst``. The v1 release
 themes include:
 
 * stable v1 JSON response schemas

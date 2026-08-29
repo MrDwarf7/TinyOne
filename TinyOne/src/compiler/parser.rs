@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::{
-    BUILTINS, EnumVariantDef, Function, Instr, Lexer, ModuleDef, ModuleImportDef, ModuleInfo, Op,
-    Program, Resolver, Result, SharedState, SourceMap, StructDef, SymbolTable, TinyOneError, Token,
-    TokenKind, builtin_index, default_import_alias, module_name_from_import, unique_module_name,
+    BUILTINS, EnumVariantDef, Function, Instr, Lexer, ModuleCapabilities, ModuleDef,
+    ModuleImportDef, ModuleInfo, Op, Program, Resolver, Result, SharedState, SourceMap, StructDef,
+    SymbolTable, TinyOneError, Token, TokenKind, VmSettings, builtin_index, default_import_alias,
+    module_name_from_import, unique_module_name,
 };
 
 #[derive(Debug)]
@@ -41,6 +42,8 @@ pub(crate) struct Compiler {
     loops: Vec<LoopContext>,
     in_function: bool,
     unsafe_depth: usize,
+    root_capabilities: ModuleCapabilities,
+    vm_settings: VmSettings,
 }
 
 impl Compiler {
@@ -50,6 +53,7 @@ impl Compiler {
         resolver: Option<Resolver>,
         module_mode: bool,
         module_name: impl Into<String>,
+        module_capabilities: ModuleCapabilities,
         shared: SharedState,
     ) -> Result<Self> {
         let source = source.into();
@@ -71,6 +75,7 @@ impl Compiler {
                         filename.clone(),
                         ModuleInfo {
                             name: name.clone(),
+                            capabilities: module_capabilities,
                             function_exports: HashMap::new(),
                             struct_exports: HashMap::new(),
                             all_functions: HashSet::new(),
@@ -113,7 +118,22 @@ impl Compiler {
             loops: Vec::new(),
             in_function: false,
             unsafe_depth: 0,
+            root_capabilities: ModuleCapabilities::all(),
+            vm_settings: VmSettings::default(),
         })
+    }
+
+    /// Applies the project policy to the root compilation unit. Nested module
+    /// compilers only contribute definitions to the shared state, so their
+    /// temporary Program values never become executable artifacts.
+    pub(crate) fn with_runtime_policy(
+        mut self,
+        root_capabilities: ModuleCapabilities,
+        vm_settings: VmSettings,
+    ) -> Self {
+        self.root_capabilities = root_capabilities;
+        self.vm_settings = vm_settings;
+        self
     }
 
     pub(crate) fn compile(&mut self) -> Result<Program> {
@@ -161,6 +181,8 @@ impl Compiler {
             fields: state.fields.clone(),
             modules: state.module_defs.clone(),
             enum_variants: state.enum_variants.clone(),
+            root_capabilities: self.root_capabilities,
+            vm_settings: self.vm_settings,
         })
     }
 
@@ -200,6 +222,7 @@ impl Compiler {
                 imports: info.imports.clone(),
                 exported_functions,
                 exported_structs,
+                capabilities: info.capabilities,
             }
         };
         state.module_defs.push(def);
@@ -449,9 +472,10 @@ impl Compiler {
                 path_token.clone(),
             )
         })?;
-        let (module_filename, module_source) = resolver
+        let resolved_module = resolver
             .borrow_mut()
             .resolve_import(&self.filename, &path_token.text)?;
+        let module_filename = resolved_module.filename;
         if self.namespaces.contains_key(&alias) || self.symbols.contains(&alias) {
             return Err(self.error_at(
                 format!("Import namespace {alias:?} is already defined"),
@@ -486,11 +510,12 @@ impl Compiler {
             }
             let compile_result = (|| {
                 let mut compiler = Compiler::new(
-                    module_source,
+                    resolved_module.source,
                     module_filename.clone(),
                     self.resolver.clone(),
                     true,
                     module_name_from_import(&path_token.text, &module_filename),
+                    resolved_module.capabilities,
                     Rc::clone(&self.shared),
                 )?;
                 compiler.compile().map(|_| ())

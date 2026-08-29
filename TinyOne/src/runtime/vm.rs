@@ -3,7 +3,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::{
-    HeapData, Instr, MAX_CALL_DEPTH, Op, Program, Result, TinyHeapStats, TinyMemory, TinyOneError,
+    HeapData, Instr, Op, Program, Result, TinyHeapStats, TinyMemory, TinyOneError,
     TinyRuntimeContext, TypeKind, Value, VerifiedProgram, checked_div, checked_non_negative_usize,
     pop_args, runtime_add, runtime_call_builtin, runtime_compare, runtime_get_field, runtime_index,
     runtime_is_false, runtime_make_array, runtime_make_enum, runtime_make_struct, runtime_mul,
@@ -97,7 +97,7 @@ impl VM {
     pub fn run_report(mut self, stdout: &mut dyn Write) -> Result<TinyRunReport> {
         let mut memory = std::mem::take(&mut self.memory);
         let code = self.program.code.clone();
-        self.run_chunk(&code, &mut memory, stdout, "main", None)?;
+        self.run_chunk(&code, &mut memory, stdout, "main", None, None)?;
         let heap_before_shutdown = self.context.heap_stats();
         let heap_after_shutdown = self.context.shutdown();
         Ok(TinyRunReport {
@@ -125,7 +125,14 @@ impl VM {
             memory.store(i, v)?;
         }
         let global_memory = std::mem::take(&mut self.memory);
-        let result = self.run_chunk(&code, &mut memory, stdout, &fn_name, Some(&global_memory))?;
+        let result = self.run_chunk(
+            &code,
+            &mut memory,
+            stdout,
+            &fn_name,
+            Some(fn_index),
+            Some(&global_memory),
+        )?;
         result.ok_or_else(|| TinyOneError::runtime("thread function returned no value"))
     }
 
@@ -135,8 +142,10 @@ impl VM {
         memory: &mut TinyMemory,
         stdout: &mut dyn Write,
         chunk_name: &str,
+        function_index: Option<usize>,
         global_memory: Option<&TinyMemory>,
     ) -> Result<Option<Value>> {
+        let capabilities = self.program.capabilities_for_function(function_index);
         let mut stack: Vec<Value> = Vec::with_capacity(code.len().min(32));
         let mut pc = 0usize;
         loop {
@@ -344,6 +353,8 @@ impl VM {
                         &mut self.context,
                         globals,
                         builtin_index,
+                        function_index,
+                        capabilities,
                         &stack[args_start..],
                     )?;
                     stack.truncate(args_start);
@@ -416,9 +427,10 @@ impl VM {
                 args.len()
             )));
         }
-        if self.call_depth >= MAX_CALL_DEPTH {
+        let max_call_depth = self.program.max_call_depth();
+        if self.call_depth >= max_call_depth {
             return Err(TinyOneError::runtime(format!(
-                "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
+                "Call stack overflow after {max_call_depth} nested call(s)"
             )));
         }
         let mut memory = TinyMemory::try_new(fn_slot_count)?;
@@ -426,7 +438,14 @@ impl VM {
             memory.store(slot, value)?;
         }
         self.call_depth += 1;
-        let result = self.run_chunk(&fn_code, &mut memory, stdout, &fn_name, Some(global_memory));
+        let result = self.run_chunk(
+            &fn_code,
+            &mut memory,
+            stdout,
+            &fn_name,
+            Some(function_index),
+            Some(global_memory),
+        );
         self.call_depth -= 1;
         result?.ok_or_else(|| {
             TinyOneError::runtime(format!("Function {:?} returned no value", fn_name))

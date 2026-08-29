@@ -4,8 +4,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::{
-    CompileCacheStatus, Compiler, CompilerSharedState, Lexer, ModuleResolver, PeepholeOptimizer,
-    Program, Result, TinyOneError, VerifiedProgram, compile_cache, read_source_file,
+    CompileCacheStatus, Compiler, CompilerSharedState, Lexer, ModuleCapabilities, ModuleResolver,
+    PeepholeOptimizer, Program, Result, TinyOneError, VerifiedProgram, compile_cache,
+    read_source_file,
 };
 
 pub fn compile_source(source: &str) -> Result<Arc<Program>> {
@@ -44,7 +45,15 @@ pub fn compile_source_unoptimized_verified_with_filename(
 
 fn compile_source_unoptimized_program(source: &str, filename: &str) -> Result<Program> {
     let shared = Rc::new(RefCell::new(CompilerSharedState::default()));
-    let mut compiler = Compiler::new(source, filename, None, false, "", shared)?;
+    let mut compiler = Compiler::new(
+        source,
+        filename,
+        None,
+        false,
+        "",
+        ModuleCapabilities::all(),
+        shared,
+    )?;
     compiler.compile()
 }
 
@@ -116,6 +125,10 @@ pub fn compile_file_cached_verified_with_options(
         .as_ref()
         .canonicalize()
         .map_err(|error| TinyOneError::compile(format!("File error: {error}")))?;
+    // The disk cache stores signature-sidecar digests, while this inexpensive
+    // policy load rechecks central authority certificate validity (including
+    // expiry) before a cache hit can be accepted.
+    let _ = ModuleResolver::new(&path)?;
     if compile_cache::should_bypass_filesystem(&path) {
         let (program, _, _) = compile_canonical_file(&path, optimize)?;
         return Ok((program, CompileCacheStatus::Bypassed));
@@ -183,13 +196,14 @@ fn compile_module_fragment(
     optimize: bool,
 ) -> Result<(Program, Rc<RefCell<ModuleResolver>>)> {
     let shared = Rc::new(RefCell::new(CompilerSharedState::default()));
-    let resolver = Rc::new(RefCell::new(ModuleResolver::default()));
+    let resolver = Rc::new(RefCell::new(ModuleResolver::new(path)?));
     let mut compiler = Compiler::new(
         source,
         path.to_string_lossy().to_string(),
         Some(Rc::clone(&resolver)),
         true,
         module_name,
+        ModuleCapabilities::none(),
         shared,
     )?;
     let program = compiler.compile()?;
@@ -207,15 +221,21 @@ fn compile_canonical_file(
 ) -> Result<(VerifiedProgram, String, Rc<RefCell<ModuleResolver>>)> {
     let source = read_source_file(path)?;
     let shared = Rc::new(RefCell::new(CompilerSharedState::default()));
-    let resolver = Rc::new(RefCell::new(ModuleResolver::default()));
+    let resolver = Rc::new(RefCell::new(ModuleResolver::new(path)?));
+    let (root_capabilities, vm_settings) = {
+        let resolver = resolver.borrow();
+        (resolver.root_capabilities(), resolver.vm_settings())
+    };
     let mut compiler = Compiler::new(
         source.clone(),
         path.to_string_lossy().to_string(),
         Some(Rc::clone(&resolver)),
         false,
         "",
+        ModuleCapabilities::all(),
         shared,
-    )?;
+    )?
+    .with_runtime_policy(root_capabilities, vm_settings);
     let program = compiler.compile()?;
     let program = if optimize {
         PeepholeOptimizer::optimize(program)

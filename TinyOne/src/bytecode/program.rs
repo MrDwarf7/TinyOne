@@ -1,6 +1,152 @@
 use blake2::{Blake2b512, Digest};
 
-use crate::Instr;
+use crate::{Instr, Result, TinyOneError, VmSettings};
+
+/// A host resource that an imported module must be explicitly granted.
+///
+/// Capabilities are intentionally module-local: calling an imported function
+/// from a privileged root program does not lend that program's authority to
+/// the module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModuleCapability {
+    Filesystem,
+    Environment,
+    Threads,
+    UnsafeMemory,
+    Network,
+    Graphics,
+    Hardware,
+    LinuxPipelines,
+}
+
+impl ModuleCapability {
+    const ALL: [Self; 8] = [
+        Self::Filesystem,
+        Self::Environment,
+        Self::Threads,
+        Self::UnsafeMemory,
+        Self::Network,
+        Self::Graphics,
+        Self::Hardware,
+        Self::LinuxPipelines,
+    ];
+
+    pub(crate) const fn bit(self) -> u8 {
+        match self {
+            Self::Filesystem => 1 << 0,
+            Self::Environment => 1 << 1,
+            Self::Threads => 1 << 2,
+            Self::UnsafeMemory => 1 << 3,
+            Self::Network => 1 << 4,
+            Self::Graphics => 1 << 5,
+            Self::Hardware => 1 << 6,
+            Self::LinuxPipelines => 1 << 7,
+        }
+    }
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Filesystem => "filesystem",
+            Self::Environment => "environment",
+            Self::Threads => "threads",
+            Self::UnsafeMemory => "unsafe_memory",
+            Self::Network => "network",
+            Self::Graphics => "graphics",
+            Self::Hardware => "hardware",
+            Self::LinuxPipelines => "linux_pipelines",
+        }
+    }
+
+    pub(crate) fn parse(name: &str) -> Result<Self> {
+        match name {
+            "filesystem" => Ok(Self::Filesystem),
+            "environment" => Ok(Self::Environment),
+            "threads" => Ok(Self::Threads),
+            "unsafe_memory" => Ok(Self::UnsafeMemory),
+            "network" | "sockets" => Ok(Self::Network),
+            "graphics" | "gpu" => Ok(Self::Graphics),
+            "hardware" => Ok(Self::Hardware),
+            "linux_pipelines" | "pipelines" => Ok(Self::LinuxPipelines),
+            _ => Err(TinyOneError::compile(format!(
+                "Unknown module capability {name:?}; expected filesystem, environment, threads, unsafe_memory, network (or sockets), graphics (or gpu), hardware, or linux_pipelines"
+            ))),
+        }
+    }
+}
+
+/// Compact, serializable set of granted module capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ModuleCapabilities(u8);
+
+impl ModuleCapabilities {
+    pub(crate) const fn none() -> Self {
+        Self(0)
+    }
+
+    pub(crate) const fn all() -> Self {
+        Self(
+            ModuleCapability::Filesystem.bit()
+                | ModuleCapability::Environment.bit()
+                | ModuleCapability::Threads.bit()
+                | ModuleCapability::UnsafeMemory.bit()
+                | ModuleCapability::Network.bit()
+                | ModuleCapability::Graphics.bit()
+                | ModuleCapability::Hardware.bit()
+                | ModuleCapability::LinuxPipelines.bit(),
+        )
+    }
+
+    pub(crate) fn from_names(names: &[String]) -> Result<Self> {
+        let mut bits = 0u8;
+        for name in names {
+            let capability = ModuleCapability::parse(name)?;
+            if bits & capability.bit() != 0 {
+                return Err(TinyOneError::compile(format!(
+                    "Module capability {name:?} is declared more than once"
+                )));
+            }
+            bits |= capability.bit();
+        }
+        Ok(Self(bits))
+    }
+
+    pub(crate) fn from_bits(bits: u8) -> Result<Self> {
+        let known = Self::all().0;
+        if bits & !known != 0 {
+            return Err(TinyOneError::compile(
+                "Module capabilities contain unknown bits",
+            ));
+        }
+        Ok(Self(bits))
+    }
+
+    pub(crate) const fn allows(self, capability: ModuleCapability) -> bool {
+        self.0 & capability.bit() != 0
+    }
+
+    pub(crate) const fn bits(self) -> u8 {
+        self.0
+    }
+
+    pub(crate) const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    /// Returns whether every capability in `self` was approved by `other`.
+    /// This is used when a signed module's declaration is checked against the
+    /// project-level grant before its code is compiled.
+    pub(crate) const fn is_subset_of(self, other: Self) -> bool {
+        self.0 & !other.0 == 0
+    }
+
+    pub(crate) fn names(self) -> Vec<String> {
+        ModuleCapability::ALL
+            .into_iter()
+            .filter(|capability| self.allows(*capability))
+            .map(|capability| capability.name().to_string())
+            .collect()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
@@ -48,6 +194,7 @@ pub struct ModuleDef {
     pub(crate) imports: Vec<ModuleImportDef>,
     pub(crate) exported_functions: Vec<String>,
     pub(crate) exported_structs: Vec<String>,
+    pub(crate) capabilities: ModuleCapabilities,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +208,11 @@ pub struct Program {
     pub(crate) fields: Vec<String>,
     pub(crate) modules: Vec<ModuleDef>,
     pub(crate) enum_variants: Vec<EnumVariantDef>,
+    /// Authority available to root code. Imported modules retain their own,
+    /// narrower grants even when called by root code.
+    pub(crate) root_capabilities: ModuleCapabilities,
+    /// Per-program limits selected by the project configuration.
+    pub(crate) vm_settings: VmSettings,
 }
 
 impl Program {
@@ -77,6 +229,8 @@ impl Program {
             fields: Vec::new(),
             modules: Vec::new(),
             enum_variants: Vec::new(),
+            root_capabilities: ModuleCapabilities::all(),
+            vm_settings: VmSettings::default(),
         }
     }
 
@@ -94,6 +248,42 @@ impl Program {
     }
     pub fn modules(&self) -> &[ModuleDef] {
         &self.modules
+    }
+
+    /// Host capabilities granted to the root codebase by `Config.toml`.
+    pub fn root_capabilities(&self) -> Vec<String> {
+        self.root_capabilities.names()
+    }
+
+    /// Maximum nested TinyLang function calls permitted by this program.
+    pub fn max_call_depth(&self) -> usize {
+        self.vm_settings.max_call_depth
+    }
+
+    /// Root code retains the embedding application's authority. Imported
+    /// functions execute with only the grants recorded for their owning
+    /// module, even when reached through a privileged caller or closure.
+    pub(crate) fn capabilities_for_function(
+        &self,
+        function_index: Option<usize>,
+    ) -> ModuleCapabilities {
+        let Some(function_index) = function_index else {
+            return self.root_capabilities;
+        };
+        let Some(function) = self.functions.get(function_index) else {
+            return ModuleCapabilities::none();
+        };
+        let Some((module_name, local_name)) = function.name.split_once('.') else {
+            return self.root_capabilities;
+        };
+        if local_name.contains('.') {
+            return ModuleCapabilities::none();
+        }
+        self.modules
+            .iter()
+            .find(|module| module.name == module_name)
+            .map(|module| module.capabilities)
+            .unwrap_or_else(ModuleCapabilities::none)
     }
 
     pub fn with_functions(mut self, functions: Vec<Function>) -> Self {
@@ -116,39 +306,77 @@ impl Program {
         self
     }
 
-    /// Resolve a function name supplied by untrusted runtime data. Root
-    /// functions are callable by name; module functions must be explicitly
-    /// exported by their owning module. Bytecode-level calls are checked by
-    /// the verifier against the more precise caller/import relationship.
-    pub(crate) fn publicly_callable_function(&self, name: &str) -> Option<(usize, &Function)> {
+    /// Resolves a string-selected function using the same ownership rules as
+    /// bytecode calls. This prevents a module from turning a root function
+    /// into a confused deputy through `closure_new` or `thread_spawn`.
+    pub(crate) fn callable_function_from(
+        &self,
+        caller_function: Option<usize>,
+        name: &str,
+    ) -> Option<(usize, &Function)> {
         let (index, function) = self
             .functions
             .iter()
             .enumerate()
             .find(|(_, function)| function.name == name)?;
-        let Some((module_name, local_name)) = name.split_once('.') else {
-            return Some((index, function));
-        };
+        self.can_call_function_from(caller_function, index)
+            .then_some((index, function))
+    }
+
+    fn can_call_function_from(&self, caller_function: Option<usize>, target: usize) -> bool {
+        let caller_module = caller_function.and_then(|index| self.function_module(index));
+        let target_module = self.function_module(target);
+        match (caller_module, target_module) {
+            (None, None) => true,
+            (None, Some(target_module)) => self.module_exports_function(target_module, target),
+            (Some(_), None) => false,
+            (Some(caller_module), Some(target_module)) if caller_module == target_module => true,
+            (Some(caller_module), Some(target_module)) => {
+                self.module_exports_function(target_module, target)
+                    && self.modules[caller_module]
+                        .imports
+                        .iter()
+                        .any(|import| import.resolved == self.modules[target_module].name)
+            }
+        }
+    }
+
+    fn function_module(&self, function_index: usize) -> Option<usize> {
+        let function = self.functions.get(function_index)?;
+        let (module_name, local_name) = function.name.split_once('.')?;
         if local_name.contains('.') {
             return None;
         }
         self.modules
             .iter()
-            .find(|module| module.name == module_name)
-            .filter(|module| {
+            .position(|module| module.name == module_name)
+    }
+
+    fn module_exports_function(&self, module_index: usize, function_index: usize) -> bool {
+        let Some(function) = self.functions.get(function_index) else {
+            return false;
+        };
+        let Some((module_name, local_name)) = function.name.split_once('.') else {
+            return false;
+        };
+        self.modules
+            .get(module_index)
+            .filter(|module| module.name == module_name)
+            .is_some_and(|module| {
                 module
                     .exported_functions
                     .iter()
                     .any(|export| export == local_name)
             })
-            .map(|_| (index, function))
     }
 
     pub fn fingerprint(&self) -> String {
         let mut hasher = Blake2b512::new();
-        hasher.update(b"tinyone-program-fingerprint-v2");
+        hasher.update(b"tinyone-program-fingerprint-v3");
         self.hash_code(&mut hasher, &self.code);
         hasher.update((self.slot_count as u64).to_le_bytes());
+        hasher.update([self.root_capabilities.bits()]);
+        hasher.update((self.vm_settings.max_call_depth as u64).to_le_bytes());
         hash_string_list(&mut hasher, self.names.iter());
         hasher.update((self.functions.len() as u64).to_le_bytes());
         for function in &self.functions {
@@ -185,6 +413,7 @@ impl Program {
             );
             hash_string_list(&mut hasher, module.exported_functions.iter());
             hash_string_list(&mut hasher, module.exported_structs.iter());
+            hasher.update([module.capabilities.bits()]);
         }
         hasher.update((self.enum_variants.len() as u64).to_le_bytes());
         for item in &self.enum_variants {
@@ -263,6 +492,11 @@ impl ModuleDef {
     }
     pub fn exported_structs(&self) -> &[String] {
         &self.exported_structs
+    }
+
+    /// Capabilities granted to this imported module by its package manifest.
+    pub fn capabilities(&self) -> Vec<String> {
+        self.capabilities.names()
     }
 }
 

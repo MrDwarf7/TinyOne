@@ -31,14 +31,14 @@ pub(crate) use arithmetic::{
     runtime_is_false, runtime_mul, runtime_mul_int, runtime_neg, runtime_null, runtime_sub,
     runtime_sub_int,
 };
-pub(crate) use builtins::runtime_call_builtin;
+pub(crate) use builtins::{require_builtin_capability, runtime_call_builtin};
 pub(crate) use context::TinyRuntimeContext;
 pub(crate) use format::runtime_print;
 pub use heap::TinyHeapStats;
 pub(crate) use heap::{HeapData, TinyHeap};
 pub(crate) use limits::{
     MAX_ARRAY_LENGTH, MAX_BUFFER_BYTES, MAX_CALL_DEPTH, MAX_HEAP_BYTES, MAX_HEAP_OBJECTS,
-    VALUE_BYTES,
+    VALUE_BYTES, VmSettings,
 };
 pub use memory::TinyMemory;
 pub(crate) use minifloat::round_to_kind;

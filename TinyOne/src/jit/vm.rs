@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use crate::{
-    HeapData, JitBuiltin, JitOp, JitProgram, MAX_CALL_DEPTH, Result, TinyMemory, TinyOneError,
-    TinyRunReport, TinyRuntimeContext, TypeKind, Value, checked_div, checked_div_int, pop_args,
-    runtime_add, runtime_add_int, runtime_array_pop, runtime_array_push, runtime_call_builtin,
-    runtime_compare, runtime_compare_int, runtime_get_field, runtime_index, runtime_is_false,
-    runtime_make_array, runtime_make_enum, runtime_make_struct, runtime_mul, runtime_mul_int,
-    runtime_neg, runtime_null, runtime_print, runtime_set_field, runtime_set_index, runtime_sub,
-    runtime_sub_int,
+    HeapData, JitBuiltin, JitOp, JitProgram, Result, TinyMemory, TinyOneError, TinyRunReport,
+    TinyRuntimeContext, TypeKind, Value, checked_div, checked_div_int, pop_args,
+    require_builtin_capability, runtime_add, runtime_add_int, runtime_array_pop,
+    runtime_array_push, runtime_call_builtin, runtime_compare, runtime_compare_int,
+    runtime_get_field, runtime_index, runtime_is_false, runtime_make_array, runtime_make_enum,
+    runtime_make_struct, runtime_mul, runtime_mul_int, runtime_neg, runtime_null, runtime_print,
+    runtime_set_field, runtime_set_index, runtime_sub, runtime_sub_int,
 };
 
 fn jit_pop(stack: &mut Vec<Value>) -> Result<Value> {
@@ -27,6 +27,7 @@ fn run_direct_builtin(
     context: &mut TinyRuntimeContext,
     stack: &mut Vec<Value>,
     builtin: JitBuiltin,
+    capabilities: crate::ModuleCapabilities,
 ) -> Result<()> {
     let result = match builtin {
         JitBuiltin::Len => {
@@ -103,6 +104,7 @@ fn run_direct_builtin(
             value
         }
         JitBuiltin::Free => {
+            require_builtin_capability("free", true, capabilities)?;
             let target = jit_pop(stack)?;
             context.heap().free(&target)?;
             Value::I64(0)
@@ -197,6 +199,11 @@ impl<'a> JitVm<'a> {
         global_memory: Option<&TinyMemory>,
         stack: &mut Vec<Value>,
     ) -> Result<Option<Value>> {
+        let capabilities = self
+            .program
+            .verified_program
+            .program()
+            .capabilities_for_function(chunk_index.checked_sub(1));
         let mut pc = 0usize;
         loop {
             let instr = {
@@ -602,7 +609,7 @@ impl<'a> JitVm<'a> {
                     )?);
                 }
                 JitOp::BuiltinDirect(builtin) => {
-                    run_direct_builtin(&mut self.context, stack, builtin)?;
+                    run_direct_builtin(&mut self.context, stack, builtin, capabilities)?;
                 }
                 JitOp::Builtin(builtin_index, arg_count) => {
                     let args_start = stack
@@ -610,10 +617,13 @@ impl<'a> JitVm<'a> {
                         .checked_sub(arg_count)
                         .ok_or_else(|| TinyOneError::runtime("Stack underflow"))?;
                     let globals = global_memory.unwrap_or(&*memory);
+                    let caller_function = chunk_index.checked_sub(1);
                     let result = runtime_call_builtin(
                         &mut self.context,
                         globals,
                         builtin_index,
+                        caller_function,
+                        capabilities,
                         &stack[args_start..],
                     )?;
                     stack.truncate(args_start);
@@ -695,9 +705,10 @@ impl<'a> JitVm<'a> {
                 args.len()
             )));
         }
-        if self.call_depth >= MAX_CALL_DEPTH {
+        let max_call_depth = self.program.verified_program.program().max_call_depth();
+        if self.call_depth >= max_call_depth {
             return Err(TinyOneError::runtime(format!(
-                "Call stack overflow after {MAX_CALL_DEPTH} nested call(s)"
+                "Call stack overflow after {max_call_depth} nested call(s)"
             )));
         }
         let mut memory = TinyMemory::try_new(slot_count)?;

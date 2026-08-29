@@ -1,13 +1,13 @@
 use crate::runtime::stdlib;
 use crate::{
-    BUILTINS, HeapData, MAX_ARRAY_LENGTH, Result, TinyMemory, TinyOneError, TinyRuntimeContext,
-    VALUE_BYTES, Value, checked_bounded_len, checked_payload_bytes, expect_int, expect_pointer,
-    expect_string, runtime_array_pop, runtime_array_push, runtime_cast_pointer,
-    runtime_make_buffer, runtime_make_field_pointer, runtime_make_pointer, runtime_pointer_add,
-    runtime_pointer_address, runtime_pointer_at, runtime_pointer_base, runtime_pointer_eq,
-    runtime_pointer_field, runtime_pointer_kind, runtime_pointer_load, runtime_pointer_offset,
-    runtime_pointer_store, runtime_pointer_type, runtime_read_uint, runtime_write_uint,
-    validate_pointer_base,
+    BUILTINS, HeapData, MAX_ARRAY_LENGTH, ModuleCapabilities, ModuleCapability, Result, TinyMemory,
+    TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, checked_bounded_len,
+    checked_payload_bytes, expect_int, expect_pointer, expect_string, runtime_array_pop,
+    runtime_array_push, runtime_cast_pointer, runtime_make_buffer, runtime_make_field_pointer,
+    runtime_make_pointer, runtime_pointer_add, runtime_pointer_address, runtime_pointer_at,
+    runtime_pointer_base, runtime_pointer_eq, runtime_pointer_field, runtime_pointer_kind,
+    runtime_pointer_load, runtime_pointer_offset, runtime_pointer_store, runtime_pointer_type,
+    runtime_read_uint, runtime_write_uint, validate_pointer_base,
 };
 
 pub(crate) fn runtime_len(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -36,6 +36,8 @@ pub(crate) fn runtime_call_builtin(
     context: &mut TinyRuntimeContext,
     global_memory: &TinyMemory,
     builtin_index: usize,
+    caller_function: Option<usize>,
+    capabilities: ModuleCapabilities,
     args: &[Value],
 ) -> Result<Value> {
     let builtin = BUILTINS
@@ -50,6 +52,7 @@ pub(crate) fn runtime_call_builtin(
             args.len()
         )));
     }
+    require_builtin_capability(builtin.name, builtin.requires_unsafe, capabilities)?;
     match builtin.name {
         "len" => runtime_len(context, &args[0]),
         "array" => {
@@ -248,13 +251,13 @@ pub(crate) fn runtime_call_builtin(
         "u16" => stdlib::b_int_cast(&args[0], crate::TypeKind::U16, "u16"),
         "u32" => stdlib::b_int_cast(&args[0], crate::TypeKind::U32, "u32"),
         "assert" => stdlib::b_assert(&args[0], args.get(1), context),
-        "thread_spawn" => stdlib::b_thread_spawn(context, global_memory, args),
+        "thread_spawn" => stdlib::b_thread_spawn(context, global_memory, caller_function, args),
         "thread_join" => stdlib::b_thread_join(context, args),
         "fp8" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp8, "fp8"),
         "fp16" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp16, "fp16"),
         "fp32" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp32, "fp32"),
         "fp64" => stdlib::b_float_cast(&args[0], crate::TypeKind::Fp64, "fp64"),
-        "closure_new" => stdlib::b_closure_new(context, &args[0], &args[1]),
+        "closure_new" => stdlib::b_closure_new(context, caller_function, &args[0], &args[1]),
         "closure_function" => stdlib::b_closure_function(context, &args[0]),
         "closure_captures" => stdlib::b_closure_captures(context, &args[0]),
         "sum_new" => stdlib::b_sum_new(context, &args[0], args.get(1)),
@@ -282,6 +285,45 @@ pub(crate) fn runtime_call_builtin(
             builtin.name
         ))),
     }
+}
+
+/// Checks the host authority required by a builtin before it can observe or
+/// affect host state. This remains a runtime check so forged artifacts and JIT
+/// lowering cannot bypass manifest policy.
+pub(crate) fn require_builtin_capability(
+    builtin_name: &str,
+    requires_unsafe: bool,
+    capabilities: ModuleCapabilities,
+) -> Result<()> {
+    let required = match builtin_name {
+        "fs_read" | "fs_write" | "fs_exists" | "fs_list_dir" => Some(ModuleCapability::Filesystem),
+        "sys_env_has" | "sys_env_get" => Some(ModuleCapability::Environment),
+        "thread_spawn" | "thread_join" => Some(ModuleCapability::Threads),
+        // Reserved names let future socket and GPU bridge builtins use the
+        // same manifest contract without a policy migration.
+        "socket_connect" | "socket_listen" | "socket_accept" | "socket_read" | "socket_write"
+        | "tcp_connect" | "udp_bind" => Some(ModuleCapability::Network),
+        "gpu_adapter" | "gpu_device" | "gpu_buffer" | "gpu_submit" | "gpu_present" => {
+            Some(ModuleCapability::Graphics)
+        }
+        "hardware_enumerate" | "hardware_open" | "serial_open" | "usb_open" => {
+            Some(ModuleCapability::Hardware)
+        }
+        "pipeline_spawn" | "pipeline_wait" | "pipeline_stdout" => {
+            Some(ModuleCapability::LinuxPipelines)
+        }
+        _ if requires_unsafe => Some(ModuleCapability::UnsafeMemory),
+        _ => None,
+    };
+    if let Some(required) = required
+        && !capabilities.allows(required)
+    {
+        return Err(TinyOneError::runtime(format!(
+            "Module capability denied: builtin {builtin_name:?} requires {:?}",
+            required.name()
+        )));
+    }
+    Ok(())
 }
 
 fn looks_like_int(text: &str) -> bool {

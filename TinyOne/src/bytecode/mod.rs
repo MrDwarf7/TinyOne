@@ -12,4 +12,5 @@ pub use peephole::PeepholeOptimizer;
 pub use program::{
     EnumVariantDef, Function, ModuleDef, ModuleImportDef, Program, StructDef, VerifiedProgram,
 };
+pub(crate) use program::{ModuleCapabilities, ModuleCapability};
 pub use verifier::BytecodeVerifier;

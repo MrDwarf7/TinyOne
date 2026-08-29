@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::{CompilerSharedState, Result, TinyOneError};
+use crate::{CompilerSharedState, ModuleCapabilities, ProjectConfig, Result, TinyOneError};
 
 pub(crate) type Resolver = Rc<RefCell<ModuleResolver>>;
 
@@ -20,29 +20,96 @@ pub(crate) struct ResolverInput {
     pub(crate) digest: Option<[u8; 16]>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedModule {
+    pub(crate) filename: String,
+    pub(crate) source: String,
+    pub(crate) capabilities: ModuleCapabilities,
+}
+
+#[derive(Debug, Clone)]
+struct ManifestModule {
+    path: String,
+    capabilities: ModuleCapabilities,
+}
+
+#[derive(Debug)]
 pub(crate) struct ModuleResolver {
+    sandbox_root: PathBuf,
+    config: ProjectConfig,
     base_dirs: HashMap<String, PathBuf>,
-    resolutions: HashMap<(String, String), (String, String)>,
+    resolutions: HashMap<(String, String), ResolvedModule>,
     sources: HashMap<PathBuf, String>,
-    manifests: HashMap<PathBuf, Option<HashMap<String, String>>>,
+    manifests: HashMap<PathBuf, Option<HashMap<String, ManifestModule>>>,
     inputs: BTreeMap<PathBuf, Option<[u8; 16]>>,
     canonical_resolutions: BTreeMap<PathBuf, PathBuf>,
     module_names: BTreeMap<PathBuf, String>,
+    module_capabilities: HashMap<PathBuf, ModuleCapabilities>,
     existing_input_bytes: usize,
 }
 
 impl ModuleResolver {
+    /// Creates a resolver whose import sandbox is the entry file's directory,
+    /// or the nearest ancestor `Config.toml` project root. Canonicalization
+    /// makes `..`, absolute-path, and symlink escapes fail before their source
+    /// text is read whenever the sandbox is enabled.
+    pub(crate) fn new(root_file: &Path) -> Result<Self> {
+        let root_file = root_file.canonicalize().map_err(|error| {
+            TinyOneError::compile(format!(
+                "File error: could not canonicalize module root: {error}"
+            ))
+        })?;
+        let config = ProjectConfig::load_for_entry(&root_file)?;
+        let sandbox_root = if config.sandbox_enabled() {
+            config.project_root().to_path_buf()
+        } else {
+            root_file
+                .parent()
+                .ok_or_else(|| {
+                    TinyOneError::compile("File error: module root has no parent directory")
+                })?
+                .to_path_buf()
+        };
+        let mut resolver = Self {
+            sandbox_root,
+            config,
+            base_dirs: HashMap::new(),
+            resolutions: HashMap::new(),
+            sources: HashMap::new(),
+            manifests: HashMap::new(),
+            inputs: BTreeMap::new(),
+            canonical_resolutions: BTreeMap::new(),
+            module_names: BTreeMap::new(),
+            module_capabilities: HashMap::new(),
+            existing_input_bytes: 0,
+        };
+        if let Some((path, digest)) = resolver.config.input() {
+            resolver.inputs.insert(path, Some(digest));
+        }
+        Ok(resolver)
+    }
+
     pub(crate) fn resolve_import(
         &mut self,
         from_filename: &str,
         import_path: &str,
-    ) -> Result<(String, String)> {
+    ) -> Result<ResolvedModule> {
         let cache_key = (from_filename.to_string(), import_path.to_string());
         if let Some(resolved) = self.resolutions.get(&cache_key) {
             return Ok(resolved.clone());
         }
-        reject_native_library_import(Path::new(import_path))?;
+        let import = Path::new(import_path);
+        if self.config.sandbox_enabled()
+            && (import.is_absolute()
+                || import
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir)))
+        {
+            return Err(TinyOneError::compile(format!(
+                "Import {import_path:?} escapes the module sandbox"
+            )));
+        }
+        reject_native_library_import(import)?;
         let base = if let Some(base) = self.base_dirs.get(from_filename) {
             base.clone()
         } else {
@@ -55,9 +122,25 @@ impl ModuleResolver {
                 .insert(from_filename.to_string(), base.clone());
             base
         };
-        let candidate = self
-            .resolve_manifest_import(&base, import_path)?
-            .unwrap_or_else(|| base.join(import_path));
+        self.ensure_within_sandbox(&base, "importing module")?;
+        if self.config.require_configured_modules() && self.config.module(import_path).is_none() {
+            return Err(TinyOneError::compile(format!(
+                "Import {import_path:?} is not declared in Config.toml [modules]"
+            )));
+        }
+        let manifest_module = self.resolve_manifest_import(&base, import_path)?;
+        let configured_capabilities = manifest_module
+            .as_ref()
+            .map(|(_, module)| {
+                module
+                    .capabilities
+                    .intersection(self.config.root_capabilities())
+            })
+            .unwrap_or_else(ModuleCapabilities::none);
+        let candidate = manifest_module
+            .map(|(directory, module)| directory.join(module.path))
+            .unwrap_or_else(|| base.join(import));
+        ensure_tinylang_source(&candidate)?;
         reject_native_library_import(&candidate)?;
         let path = if let Some(path) = self.canonical_resolutions.get(&candidate) {
             path.clone()
@@ -69,6 +152,8 @@ impl ModuleResolver {
                 .insert(candidate.clone(), path.clone());
             path
         };
+        self.ensure_within_sandbox(&path, "resolved module")?;
+        ensure_tinylang_source(&path)?;
         reject_native_library_import(&path)?;
         let source = if let Some(source) = self.sources.get(&path) {
             source.clone()
@@ -81,7 +166,42 @@ impl ModuleResolver {
             self.sources.insert(path.clone(), source.clone());
             source
         };
-        let resolved = (path.to_string_lossy().to_string(), source);
+        let capabilities = if let Some(verification) =
+            self.config
+                .verify_module_signature(import_path, &path, &source)?
+        {
+            if !verification
+                .declared_capabilities
+                .is_subset_of(configured_capabilities)
+            {
+                return Err(TinyOneError::compile(format!(
+                    "Signed module {import_path:?} declares capabilities {:?} that are not all approved by Config.toml [modules.{import_path}].permissions",
+                    verification.declared_capabilities.names(),
+                )));
+            }
+            for (signature_input, digest, bytes) in verification.inputs {
+                if self.inputs.insert(signature_input, Some(digest)).is_none() {
+                    self.existing_input_bytes = self.existing_input_bytes.saturating_add(bytes);
+                }
+            }
+            verification.declared_capabilities
+        } else {
+            configured_capabilities
+        };
+        if let Some(existing) = self.module_capabilities.get(&path)
+            && *existing != capabilities
+        {
+            return Err(TinyOneError::compile(format!(
+                "Module {} is imported with conflicting capability grants",
+                path.display()
+            )));
+        }
+        self.module_capabilities.insert(path.clone(), capabilities);
+        let resolved = ResolvedModule {
+            filename: path.to_string_lossy().to_string(),
+            source,
+            capabilities,
+        };
         self.resolutions.insert(cache_key, resolved.clone());
         Ok(resolved)
     }
@@ -90,11 +210,24 @@ impl ModuleResolver {
         &mut self,
         base: &Path,
         import_path: &str,
-    ) -> Result<Option<PathBuf>> {
+    ) -> Result<Option<(PathBuf, ManifestModule)>> {
+        if let Some(module) = self.config.module(import_path) {
+            return Ok(Some((
+                self.config.project_root().to_path_buf(),
+                ManifestModule {
+                    path: module.path,
+                    capabilities: module.capabilities,
+                },
+            )));
+        }
         if !looks_like_module_key(import_path) {
             return Ok(None);
         }
+        let sandbox_root = self.sandbox_root.clone();
         for directory in base.ancestors() {
+            if self.config.sandbox_enabled() && !directory.starts_with(&sandbox_root) {
+                break;
+            }
             let manifest_path = directory.join("tinyone.json");
             let modules = self.read_manifest_modules(&manifest_path)?;
             let Some(modules) = modules else {
@@ -103,7 +236,7 @@ impl ModuleResolver {
             let Some(target) = modules.get(import_path) else {
                 continue;
             };
-            return Ok(Some(directory.join(target)));
+            return Ok(Some((directory.to_path_buf(), target.clone())));
         }
         Ok(None)
     }
@@ -111,14 +244,18 @@ impl ModuleResolver {
     fn read_manifest_modules(
         &mut self,
         manifest_path: &Path,
-    ) -> Result<Option<&HashMap<String, String>>> {
+    ) -> Result<Option<&HashMap<String, ManifestModule>>> {
         if !self.manifests.contains_key(manifest_path) {
             if !manifest_path.exists() {
                 self.inputs.insert(manifest_path.to_path_buf(), None);
                 self.manifests.insert(manifest_path.to_path_buf(), None);
             } else {
+                let canonical_manifest = manifest_path.canonicalize().map_err(|error| {
+                    TinyOneError::compile(format!("Package manifest read error: {error}"))
+                })?;
+                self.ensure_within_sandbox(&canonical_manifest, "package manifest")?;
                 let bytes =
-                    read_limited_file(manifest_path, MAX_MANIFEST_BYTES, "Package manifest")?;
+                    read_limited_file(&canonical_manifest, MAX_MANIFEST_BYTES, "Package manifest")?;
                 self.existing_input_bytes = self.existing_input_bytes.saturating_add(bytes.len());
                 self.inputs
                     .insert(manifest_path.to_path_buf(), Some(content_digest(&bytes)));
@@ -139,13 +276,8 @@ impl ModuleResolver {
                     })?;
                 let mut parsed = HashMap::with_capacity(modules.len());
                 for (name, target) in modules {
-                    let target = target.as_str().ok_or_else(|| {
-                        TinyOneError::compile(format!(
-                            "Package manifest module {name:?} in {} must be a string",
-                            manifest_path.display()
-                        ))
-                    })?;
-                    parsed.insert(name.clone(), target.to_string());
+                    let module = parse_manifest_module(target, name, manifest_path)?;
+                    parsed.insert(name.clone(), module);
                 }
                 self.manifests
                     .insert(manifest_path.to_path_buf(), Some(parsed));
@@ -189,6 +321,118 @@ impl ModuleResolver {
 
     pub(crate) fn existing_input_bytes(&self) -> usize {
         self.existing_input_bytes
+    }
+
+    pub(crate) fn has_capability_grants(&self) -> bool {
+        self.module_capabilities
+            .values()
+            .any(|capabilities| *capabilities != ModuleCapabilities::none())
+    }
+
+    pub(crate) const fn root_capabilities(&self) -> ModuleCapabilities {
+        self.config.root_capabilities()
+    }
+
+    pub(crate) const fn vm_settings(&self) -> crate::VmSettings {
+        self.config.vm_settings()
+    }
+
+    fn ensure_within_sandbox(&self, path: &Path, kind: &str) -> Result<()> {
+        if !self.config.sandbox_enabled() {
+            return Ok(());
+        }
+        if path.starts_with(&self.sandbox_root) {
+            Ok(())
+        } else {
+            Err(TinyOneError::compile(format!(
+                "{kind} {} escapes module sandbox root {}",
+                path.display(),
+                self.sandbox_root.display()
+            )))
+        }
+    }
+}
+
+fn parse_manifest_module(
+    value: &JsonValue,
+    name: &str,
+    manifest_path: &Path,
+) -> Result<ManifestModule> {
+    let (path, capability_values) = if let Some(path) = value.as_str() {
+        (path.to_string(), Vec::new())
+    } else {
+        let object = value.as_object().ok_or_else(|| {
+            TinyOneError::compile(format!(
+                "Package manifest module {name:?} in {} must be a source path string or object",
+                manifest_path.display()
+            ))
+        })?;
+        let path = object
+            .get("path")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| {
+                TinyOneError::compile(format!(
+                    "Package manifest module {name:?} in {} must contain a string path",
+                    manifest_path.display()
+                ))
+            })?;
+        let capability_values = object
+            .get("capabilities")
+            .map(|value| {
+                value.as_array().ok_or_else(|| {
+                    TinyOneError::compile(format!(
+                        "Package manifest module {name:?} capabilities in {} must be a list",
+                        manifest_path.display()
+                    ))
+                })
+            })
+            .transpose()?
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| item.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                        TinyOneError::compile(format!(
+                            "Package manifest module {name:?} capabilities in {} must contain strings",
+                            manifest_path.display()
+                        ))
+                    }))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        (path.to_string(), capability_values)
+    };
+    let target = Path::new(&path);
+    if target.is_absolute()
+        || target
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(TinyOneError::compile(format!(
+            "Package manifest module {name:?} in {} has an escaping path {path:?}",
+            manifest_path.display()
+        )));
+    }
+    reject_native_library_import(target)?;
+    ensure_tinylang_source(target)?;
+    Ok(ManifestModule {
+        path,
+        capabilities: ModuleCapabilities::from_names(&capability_values)?,
+    })
+}
+
+fn ensure_tinylang_source(path: &Path) -> Result<()> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("to"))
+    {
+        Ok(())
+    } else {
+        Err(TinyOneError::compile(format!(
+            "Module import {:?} rejected: modules must be TinyLang .to source files",
+            path.display()
+        )))
     }
 }
 
@@ -371,7 +615,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        let mut resolver = ModuleResolver::default();
+        let mut resolver = ModuleResolver::new(&main).expect("create resolver");
         let first = resolver
             .resolve_import(&main.to_string_lossy(), "first")
             .expect("resolve first");
@@ -382,7 +626,7 @@ mod tests {
             .resolve_import(&main.to_string_lossy(), "first")
             .expect("resolve cached first");
 
-        assert_eq!(first.0, second.0);
+        assert_eq!(first.filename, second.filename);
         assert_eq!(first, again);
         assert_eq!(1, resolver.sources.len());
         assert_eq!(

@@ -1,11 +1,11 @@
 use crate::{
-    EnumVariantDef, Function, Instr, ModuleDef, ModuleImportDef, Op, Program, Result, StructDef,
-    TinyOneError, VerifiedProgram,
+    EnumVariantDef, Function, Instr, ModuleCapabilities, ModuleDef, ModuleImportDef, Op, Program,
+    Result, StructDef, TinyOneError, VerifiedProgram, VmSettings,
 };
 
 pub(crate) const BINARY_ARTIFACT_MAGIC: &[u8; 8] = b"TINYONEB";
 pub(crate) const MAX_BINARY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
-const BINARY_ARTIFACT_VERSION: u16 = 1;
+const BINARY_ARTIFACT_VERSION: u16 = 3;
 const MAX_FUNCTIONS: usize = 4_096;
 const MAX_STRUCTS: usize = 4_096;
 const MAX_CODE_OPS: usize = 65_536;
@@ -27,6 +27,8 @@ impl Program {
         let mut writer = BinaryWriter::default();
         writer.bytes.extend_from_slice(BINARY_ARTIFACT_MAGIC);
         writer.u16(BINARY_ARTIFACT_VERSION);
+        writer.u8(self.root_capabilities.bits());
+        writer.usize(self.vm_settings.max_call_depth, "VM max call depth")?;
         writer.code(&self.code)?;
         writer.usize(self.slot_count, "main slot count")?;
         writer.string_list(&self.names)?;
@@ -59,6 +61,7 @@ impl Program {
             }
             writer.string_list(&module.exported_functions)?;
             writer.string_list(&module.exported_structs)?;
+            writer.u8(module.capabilities.bits());
         }
         writer.usize(self.enum_variants.len(), "enum variant count")?;
         for item in &self.enum_variants {
@@ -97,6 +100,10 @@ impl Program {
                 "Unsupported TinyOne binary artifact version {version}"
             )));
         }
+        let root_capabilities = ModuleCapabilities::from_bits(reader.u8()?)?;
+        let vm_settings = VmSettings::with_max_call_depth(
+            reader.bounded_usize("VM max call depth", crate::MAX_CALL_DEPTH)?,
+        )?;
         let code = reader.code("main code")?;
         let slot_count = reader.bounded_usize("main slot count", MAX_SLOT_COUNT)?;
         let names = reader.string_list("main names", MAX_NAMES)?;
@@ -152,6 +159,7 @@ impl Program {
                     .string_list("module function exports", MAX_MODULE_EXPORTS)?,
                 exported_structs: reader
                     .string_list("module struct exports", MAX_MODULE_EXPORTS)?,
+                capabilities: ModuleCapabilities::from_bits(reader.u8()?)?,
             });
         }
         let enum_count = reader.bounded_usize("enum variant count", MAX_ENUM_VARIANTS)?;
@@ -179,6 +187,8 @@ impl Program {
             fields,
             modules,
             enum_variants,
+            root_capabilities,
+            vm_settings,
         })
     }
 }
@@ -195,6 +205,10 @@ struct BinaryWriter {
 }
 
 impl BinaryWriter {
+    fn u8(&mut self, value: u8) {
+        self.bytes.push(value);
+    }
+
     fn u16(&mut self, value: u16) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -273,6 +287,10 @@ impl<'a> BinaryReader<'a> {
             .try_into()
             .map_err(|_| TinyOneError::compile("Binary artifact is truncated"))?;
         Ok(u16::from_le_bytes(bytes))
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        self.take(1).map(|bytes| bytes[0])
     }
 
     fn u32(&mut self) -> Result<u32> {
