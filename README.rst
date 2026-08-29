@@ -25,6 +25,12 @@ on the v1 release foundation without creating a separate user-facing language.
 
 .. note::
 
+   **Repository history note:** Multiple recent failed rebases, and subsequent
+   rebase fixes, ruined the commit history. This repository has nevertheless
+   been in active development for almost eight months.
+
+.. note::
+
    **TinyLang v2 Development Update**
    
    With the successful v1 release line locked in, active development has shifted
