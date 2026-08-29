@@ -331,7 +331,7 @@ int main(void) {
         fprintf(stderr, "tinyone returned NULL\n");
         return 1;
     }
-    if (strstr(result, "\"ok\":true") == NULL) {
+    if (strstr(result, ""ok":true") == NULL) {
         fprintf(stderr, "error: %s\n", result);
         tinyone_free_string(result);
         return 1;
@@ -353,8 +353,8 @@ char *compiled = tinyone_compile_source_json(
 /* ... extract artifact_json string ... */
 
 /* Run with a pre-supplied input */
-char *run1 = tinyone_run_artifact_json(artifact_json, "jit", "[\"7\"]");
-char *run2 = tinyone_run_artifact_json(artifact_json, "jit", "[\"12\"]");
+char *run1 = tinyone_run_artifact_json(artifact_json, "jit", "["7"]");
+char *run2 = tinyone_run_artifact_json(artifact_json, "jit", "["12"]");
 
 tinyone_free_string(run1);
 tinyone_free_string(run2);
@@ -369,7 +369,7 @@ static int check_ok(const char *label, char *response) {
         fprintf(stderr, "%s: NULL response\n", label);
         return 0;
     }
-    if (strstr(response, "\"ok\":true") != NULL) return 1;
+    if (strstr(response, ""ok":true") != NULL) return 1;
     fprintf(stderr, "%s failed: %s\n", label, response);
     return 0;
 }

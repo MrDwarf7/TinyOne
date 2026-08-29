@@ -8,7 +8,7 @@ TinyOne compiles to a shared library (`libtinyone.so` / `.dylib` / `.dll`)
 and a Rust crate. This section covers how to integrate TinyOne into a host
 application from both C and Rust.
 
-For the ABI contract and JSON schema reference, see [`abi/`](../abi/index.rst).
+For the ABI contract and JSON schema reference, see [`abi/`](../abi/index.md).
 
 ## Documents in This Area
 
