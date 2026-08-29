@@ -42,6 +42,9 @@ Examples:
   ./loc.py --largest 10         top 10 files by code lines
   ./loc.py --smallest 3         3 files with the fewest code lines
   ./loc.py --largest --json     JSON output including the largest list
+  ./loc.py --letters            index and report Unicode letters in every file
+  ./loc.py --largest 10 --letters
+                                show the 10 largest files by LoC and letters
 
 Files are discovered via 'git ls-files --cached --others --exclude-standard',
 recursing into nested git repos. Anything git ignores is ignored here too.
@@ -58,6 +61,7 @@ class FileStat:
     comment: int
     blank: int
     warnings: tuple[dict[str, object], ...] = ()
+    letters: int | None = None
 
     @property
     def total(self) -> int:
@@ -70,6 +74,7 @@ class Tally:
     code: int = 0
     comment: int = 0
     blank: int = 0
+    letters: int = 0
 
     @property
     def total(self) -> int:
@@ -80,6 +85,7 @@ class Tally:
         self.code += stat.code
         self.comment += stat.comment
         self.blank += stat.blank
+        self.letters += stat.letters or 0
 
 
 def die(message: str) -> NoReturn:
@@ -278,6 +284,7 @@ def count_file(
     ext: str,
     *,
     warn_large_bytes: int = DEFAULT_WARN_LARGE_BYTES,
+    count_letters: bool = False,
 ) -> FileStat | None:
     full = root / rel
     try:
@@ -304,7 +311,17 @@ def count_file(
                 "threshold_bytes": warn_large_bytes,
             }
         )
-    return FileStat(rel, ext, size, code, comment, blank, tuple(warnings))
+    letters = sum(character.isalpha() for character in text) if count_letters else None
+    return FileStat(
+        rel,
+        ext,
+        size,
+        code,
+        comment,
+        blank,
+        tuple(warnings),
+        letters,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -350,7 +367,11 @@ def build_parser() -> argparse.ArgumentParser:
         const=DEFAULT_TOP_N,
         default=None,
         metavar="N",
-        help=f"list the N files with the most code lines (bare flag: N={DEFAULT_TOP_N})",
+        help=(
+            "list the N files with the most code lines "
+            f"(bare flag: N={DEFAULT_TOP_N}); with --letters, also list the N files "
+            "with the most letters"
+        ),
     )
     parser.add_argument(
         "--smallest",
@@ -362,6 +383,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"list the N files with the fewest code lines (bare flag: N={DEFAULT_TOP_N})",
     )
     parser.add_argument(
+        "--letters",
+        action="store_true",
+        help="index every counted file and report exact Unicode letter counts",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable JSON instead of a table",
@@ -370,17 +396,29 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def emit_table(
+    stats: list[FileStat],
     tallies: dict[str, Tally],
     grand: Tally,
     largest: list[FileStat] | None,
     smallest: list[FileStat] | None,
+    largest_letters: list[FileStat] | None,
+    *,
+    include_letters: bool,
 ) -> None:
     headers = ("EXT", "FILES", "CODE", "COMMENT", "BLANK", "TOTAL")
+    if include_letters:
+        headers += ("LETTERS",)
     rows = [
-        (ext, t.files, t.code, t.comment, t.blank, t.total)
+        (ext, t.files, t.code, t.comment, t.blank, t.total, t.letters)
+        if include_letters
+        else (ext, t.files, t.code, t.comment, t.blank, t.total)
         for ext, t in tallies.items()
     ]
-    total_row = ("TOTAL", grand.files, grand.code, grand.comment, grand.blank, grand.total)
+    total_row = (
+        ("TOTAL", grand.files, grand.code, grand.comment, grand.blank, grand.total, grand.letters)
+        if include_letters
+        else ("TOTAL", grand.files, grand.code, grand.comment, grand.blank, grand.total)
+    )
 
     str_rows = [tuple(str(c) for c in row) for row in (*rows, total_row)]
     widths = [len(h) for h in headers]
@@ -401,15 +439,26 @@ def emit_table(
     out.append(fmt(str_rows[-1]))
     print("\n".join(out))
 
-    for title, group in (("Largest", largest), ("Smallest", smallest)):
+    for title, group, measurement in (
+        ("Largest", largest, "LoC"),
+        ("Smallest", smallest, "LoC"),
+        ("Largest", largest_letters, "letters"),
+    ):
         if group is None:
             continue
         print()
-        print(f"{title} files (by LoC):")
+        print(f"{title} files (by {measurement}):")
         if not group:
             print("  (none)")
         for stat in group:
-            print(f"  {stat.path}: {stat.code} LoC")
+            value = stat.code if measurement == "LoC" else stat.letters
+            print(f"  {stat.path}: {value} {measurement}")
+
+    if include_letters and largest_letters is None:
+        print()
+        print("Letters per file:")
+        for stat in sorted(stats, key=lambda s: s.path):
+            print(f"  {stat.path}: {stat.letters} letters")
 
 
 def emit_json(
@@ -419,14 +468,19 @@ def emit_json(
     extensions: tuple[str, ...],
     largest: list[FileStat] | None,
     smallest: list[FileStat] | None,
+    largest_letters: list[FileStat] | None,
     warnings: list[dict[str, object]],
+    *,
+    include_letters: bool,
 ) -> None:
     payload = build_json_payload(
         stats,
         extensions=extensions,
         largest=largest,
         smallest=smallest,
+        largest_letters=largest_letters,
         warnings=warnings,
+        include_letters=include_letters,
     )
     print(json.dumps(payload, indent=2))
 
@@ -438,6 +492,8 @@ def build_json_payload(
     largest: list[FileStat] | None,
     smallest: list[FileStat] | None,
     warnings: list[dict[str, object]],
+    largest_letters: list[FileStat] | None = None,
+    include_letters: bool = False,
 ) -> dict[str, object]:
     tallies: dict[str, Tally] = {ext: Tally() for ext in extensions}
     grand = Tally()
@@ -446,16 +502,19 @@ def build_json_payload(
         grand.add(stat)
 
     def tally_dict(t: Tally) -> dict[str, int]:
-        return {
+        result = {
             "files": t.files,
             "code": t.code,
             "comment": t.comment,
             "blank": t.blank,
             "total": t.total,
         }
+        if include_letters:
+            result["letters"] = t.letters
+        return result
 
     def file_dict(s: FileStat) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "path": s.path,
             "extension": s.extension,
             "bytes": s.bytes,
@@ -464,6 +523,9 @@ def build_json_payload(
             "blank": s.blank,
             "total": s.total,
         }
+        if include_letters:
+            result["letters"] = s.letters
+        return result
 
     payload: dict[str, object] = {
         "extensions": list(extensions),
@@ -476,6 +538,8 @@ def build_json_payload(
         payload["largest"] = [file_dict(s) for s in largest]
     if smallest is not None:
         payload["smallest"] = [file_dict(s) for s in smallest]
+    if largest_letters is not None:
+        payload["largest_by_letters"] = [file_dict(s) for s in largest_letters]
     return payload
 
 
@@ -495,7 +559,13 @@ def main(argv: list[str] | None = None) -> int:
     warnings: list[dict[str, object]] = []
     for rel in rels:
         ext = ext_of(rel, extensions)
-        stat = count_file(root, rel, ext, warn_large_bytes=args.warn_large)
+        stat = count_file(
+            root,
+            rel,
+            ext,
+            warn_large_bytes=args.warn_large,
+            count_letters=args.letters,
+        )
         if stat is None:
             continue
         stats.append(stat)
@@ -506,9 +576,17 @@ def main(argv: list[str] | None = None) -> int:
     for stat in stats:
         grand.add(stat)
 
+    ranking_count = (
+        args.largest if args.largest is not None else DEFAULT_TOP_N if args.audit else None
+    )
     largest = (
-        sorted(stats, key=lambda s: (-s.code, s.path))[: (args.largest or DEFAULT_TOP_N)]
-        if args.largest is not None or args.audit
+        sorted(stats, key=lambda s: (-s.code, s.path))[:ranking_count]
+        if ranking_count is not None
+        else None
+    )
+    largest_letters = (
+        sorted(stats, key=lambda s: (-(s.letters or 0), s.path))[:ranking_count]
+        if args.letters and ranking_count is not None
         else None
     )
     smallest = (
@@ -518,9 +596,27 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.json:
-        emit_json(stats, tallies, grand, extensions, largest, smallest, warnings)
+        emit_json(
+            stats,
+            tallies,
+            grand,
+            extensions,
+            largest,
+            smallest,
+            largest_letters,
+            warnings,
+            include_letters=args.letters,
+        )
     else:
-        emit_table(tallies, grand, largest, smallest)
+        emit_table(
+            stats,
+            tallies,
+            grand,
+            largest,
+            smallest,
+            largest_letters,
+            include_letters=args.letters,
+        )
     return EXIT_OK
 
 

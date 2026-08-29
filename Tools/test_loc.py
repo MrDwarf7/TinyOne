@@ -4,6 +4,8 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -46,6 +48,59 @@ class LocToolTests(unittest.TestCase):
             self.assertIn("bytes", payload["files"][0])
             self.assertEqual(payload["warnings"][0]["path"], "README.rst")
             self.assertEqual(payload["warnings"][0]["kind"], "large_file")
+
+    def test_letter_index_counts_unicode_letters_per_file_and_in_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src" / "lib.rs"
+            source.parent.mkdir()
+            source.write_text("a1 \u00e9!\n", encoding="utf-8")
+
+            stat = loc_tool.count_file(root, "src/lib.rs", ".rs", count_letters=True)
+            self.assertIsNotNone(stat)
+            assert stat is not None
+            self.assertEqual(stat.letters, 2)
+
+            payload = loc_tool.build_json_payload(
+                [stat],
+                extensions=(".rs",),
+                largest=None,
+                smallest=None,
+                warnings=[],
+                include_letters=True,
+            )
+            self.assertEqual(payload["total"]["letters"], 2)
+            self.assertEqual(payload["files"][0]["letters"], 2)
+
+    def test_largest_with_letters_limits_both_rankings_to_requested_files(self) -> None:
+        stats = [
+            loc_tool.FileStat("first_loc.rs", ".rs", 0, 3, 0, 0, letters=3),
+            loc_tool.FileStat("second_loc.rs", ".rs", 0, 2, 0, 0, letters=10),
+            loc_tool.FileStat("most_letters.rs", ".rs", 0, 1, 0, 0, letters=500),
+        ]
+        tally = loc_tool.Tally()
+        for stat in stats:
+            tally.add(stat)
+        output = StringIO()
+        with redirect_stdout(output):
+            loc_tool.emit_table(
+                stats,
+                {".rs": tally},
+                tally,
+                [stats[0], stats[1]],
+                None,
+                [stats[2], stats[1]],
+                include_letters=True,
+            )
+
+        report = output.getvalue()
+        self.assertIn("Largest files (by LoC):", report)
+        self.assertIn("Largest files (by letters):", report)
+        self.assertNotIn("Letters per file:", report)
+        self.assertNotIn("most_letters.rs: 500 LoC", report)
+        self.assertNotIn("first_loc.rs: 3 letters", report)
+        self.assertIn("most_letters.rs: 500 letters", report)
+        self.assertIn("second_loc.rs: 10 letters", report)
 
 
 if __name__ == "__main__":
