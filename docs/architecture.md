@@ -214,9 +214,9 @@ mismatch.
 All verification runs before any allocation for execution.
 
 The VM and JIT share this verifier. Dynamic function-name entry points
-(`closure_new` and `thread_spawn`) separately restrict lookups to root or
-exported module functions because their target is supplied as runtime data,
-not encoded in an instruction. Native shared-library imports currently fail
+(`closure_new` and `thread_spawn`) separately enforce the invoking function's
+same-module/import-and-export authority because their target is supplied as
+runtime data, not encoded in an instruction. Native shared-library imports currently fail
 closed: arbitrary DLL/SO execution is outside the verified bytecode boundary
 until a versioned native ABI and isolation policy are implemented.
 

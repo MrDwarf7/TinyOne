@@ -219,10 +219,12 @@ before any allocation for the program body.
 
 `.tob` files use the magic `TINYONEB`, a little-endian version field, bounded
 length-prefixed tables, numeric opcode ordinals, and fixed-width instruction
-operands. The format includes the complete program metadata, including enum
-variants. Decoding applies byte, table, text, per-chunk, and total-instruction
-limits before verification and rejects unknown versions, unknown opcodes,
-truncation, invalid UTF-8, and trailing bytes.
+operands. The current binary revision is **2**; it includes the complete
+program metadata, including enum variants and each module's capability bitset.
+Revision 1 artifacts are rejected rather than being loaded with an ambiguous
+privilege set. Decoding applies byte, table, text, per-chunk, and
+total-instruction limits before verification and rejects unknown versions,
+unknown opcodes, truncation, invalid UTF-8, and trailing bytes.
 
 `load_verified_artifact` auto-detects compact binary versus JSON by magic.
 The CLI emits binary when the `--emit-bytecode` path ends in `.tob`; other
@@ -233,8 +235,8 @@ extensions retain the readable JSON format.
 `Program::fingerprint()` hashes the complete program with Blake2b512 and
 returns the first 16 bytes as a lowercase hex string. The domain-separated v2
 hash covers opcodes, operands, code/table lengths, slot and local names,
-function declarations, string literals, structs, fields, modules, and enum
-variants. `VerifiedProgram` computes it once in a shared `OnceLock`, so clones
+function declarations, string literals, structs, fields, modules (including
+their capability grants), and enum variants. `VerifiedProgram` computes it once in a shared `OnceLock`, so clones
 do not re-hash metadata. It keys both the in-memory JIT cache and integrity
 checks for dependency-validated disk artifacts.
 

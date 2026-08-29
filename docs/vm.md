@@ -32,6 +32,22 @@ A `Vec<Value>` inside the VM holds the operand stack. Instructions push and pop 
 
 The call-depth limit is **16** nested TinyLang function calls. Exceeding this limit returns a `TinyOneError::Runtime("call stack overflow")`.
 
+### Module Capabilities
+
+Imported functions carry a capability set from their package-manifest entry.
+Before dispatching a host-facing builtin, the VM selects the grant for the
+currently running function's owning module and rejects a missing grant. The
+root chunk and root functions retain the authority given to the embedding
+application; authority is never inherited from a caller into an imported
+module. This check is performed at runtime, including dynamically invoked
+module functions. Artifact metadata preserves grants but is not a signature:
+untrusted artifacts still need an external OS/process sandbox because their
+root chunk is privileged.
+
+The JIT repeats the same check for generic builtin dispatch and for its direct
+`free` superinstruction. See [modules](syntax/modules.md) for the manifest
+format and the capability-to-builtin map.
+
 ### Error Propagation
 
 Every operation that can fail returns `Result`. The `?` operator propagates errors up the call chain. The VM never calls `panic!`, `unwrap`, or `expect` on production paths.

@@ -37,8 +37,8 @@ Import paths are resolved in this order:
 
 2. **Manifest lookup:** if the path does not end in `.to`, the compiler
    searches for a `tinyone.json` package manifest in the importing
-   file's directory and then in each ancestor directory up to the
-   filesystem root. The first manifest that maps the module name wins.
+   file's directory and then in each ancestor directory up to the entry
+   file's directory. The first manifest that maps the module name wins.
    ```
    import "math" as math   # resolved via tinyone.json
    ```
@@ -48,6 +48,12 @@ Import paths are resolved in this order:
    ```
    import "lib/math.to"   # accessible as math.add(...)
    ```
+
+The entry file's directory is the module sandbox root. Imports and manifest
+targets must be relative `.to` files inside that root. Absolute paths,
+`..` traversal, and symlinks that resolve outside the root are rejected before
+source text is read. This keeps an imported dependency from silently reaching
+into a parent project, user home directory, or machine-wide manifest.
 
 ---
 
@@ -68,6 +74,61 @@ A `tinyone.json` file in a directory maps module names to source paths:
 With this manifest, `import "math" as m` resolves `lib/math.to` relative
 to the manifest file. The `"package"` key is optional metadata.
 
+For a module that needs a host-facing facility, use the object form and grant
+only that facility:
+
+```json
+{
+  "package": "myproject",
+  "modules": {
+    "cache": {
+      "path": "lib/cache.to",
+      "capabilities": ["filesystem"]
+    },
+    "renderer": {
+      "path": "lib/renderer.to",
+      "capabilities": ["graphics"]
+    }
+  }
+}
+```
+
+The legacy string form remains valid but grants **no** host capabilities. An
+imported module starts with no host authority; the root program retains the
+authority supplied by its embedding application. Grants belong to the module
+itself, not its caller, so a privileged root cannot accidentally lend its
+authority to an unprivileged dependency.
+
+| Capability | Current protected surface |
+| --- | --- |
+| `filesystem` | `fs_read`, `fs_write`, `fs_exists`, `fs_list_dir` |
+| `environment` | `sys_env_has`, `sys_env_get` |
+| `threads` | `thread_spawn`, `thread_join` |
+| `unsafe_memory` | unsafe pointer, buffer, allocation, and free operations |
+| `network` | Reserved for future socket/network bridge builtins |
+| `graphics` | Reserved for future GPU/graphics bridge builtins |
+
+`unsafe` syntax is still required for unsafe builtins, but it is not a
+capability grant. A module needs both the syntax and `unsafe_memory`. The VM
+and JIT enforce the same policy at every builtin dispatch, and capability
+metadata is retained in JSON and binary artifacts. Artifacts that omit module
+capabilities decode with an empty grant set.
+
+Artifact capability metadata is a deployment request, not a signature or an
+OS security boundary: a host that executes an artifact from an untrusted party
+must still use an external process/container/OS sandbox. In particular, the
+artifact's root code has the embedding application's authority, just as source
+entrypoint code does.
+
+String-selected calls (`closure_new` and `thread_spawn`) also follow the
+caller's import/export boundary. An imported module cannot name a root function
+to turn that function into a privileged deputy; it may select its own functions
+or exported functions from modules it imports.
+
+TinyOne does not yet expose socket or GPU builtins. The reserved `network` and
+`graphics` grants establish the stable contract those bridges must use when
+they arrive; they do not by themselves provide access to a device or network.
+
 Within one compilation session, TinyOne caches canonical resolutions, parsed
 manifests (including missing-manifest probes), and source text. Repeated or
 diamond-shaped imports do not reread the same file. CLI source runs also use a
@@ -82,6 +143,8 @@ the VM/JIT process would bypass bytecode verification and could corrupt the
 runtime. The planned native-module boundary requires a versioned C ABI,
 validated value marshalling, capability declarations, and generation-checked
 foreign handles; untrusted libraries additionally require process isolation.
+Capability checks are language-runtime checks, not a replacement for an OS
+sandbox around arbitrary native code.
 
 ---
 
@@ -111,7 +174,7 @@ artifact cannot call or take a function value for a private module function,
 construct a private module struct, access root globals from module code, forge
 an export for a missing declaration, or add an invalid/cyclic dependency.
 String-based runtime entry points such as `closure_new` and `thread_spawn`
-also resolve only root functions and exported module functions.
+also enforce the invoking function's module/import/export boundary.
 
 ---
 
