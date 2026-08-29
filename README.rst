@@ -15,7 +15,7 @@ optimizer, verifier, portable VM, heap/runtime model, bytecode artifact
 support, adaptive execution support, host integration surfaces, CLI tooling,
 and early allocator-integration scaffolding.
 
-Current crate version: 1.4.0`` (the implementation is now managed as the
+Current crate version: ``1.4.0`` (the implementation is now managed as the
 public v1 release line while language work proceeds internally under v2).
 
 The current Rust crate lives in ``TinyOne/`` in this checkout. TinyLang is the
@@ -39,7 +39,7 @@ on the v1 release foundation without creating a separate user-facing language.
    
    *The frozen v1 ABI remains stable in ``TinyOne/`` while v2 features evolve internally.*
 
----
+----
 
 .. contents::
 
@@ -186,8 +186,7 @@ Language Overview
 The implemented language currently includes:
 
 * integer and string literals
-* `
-ull``
+* ``null``
 * ``let`` bindings
 * assignment to existing variables
 * expression statements
@@ -407,7 +406,7 @@ This section intentionally records gaps between current implementation,
 documentation, tests, and earlier claims.
 
 Documentation status
-^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~
 
 The syntax, FFI, allocator, VM, JIT, memory model, and semantics described here
 are works in progress. These pages explain current behavior so it can be tested
@@ -420,7 +419,7 @@ TinyLang versions available forever, or promise backward compatibility any time
 soon. Users should pin the specific source revision or release they need.
 
 Repository and documentation drift
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * The old README referred to ``Rust/`` and root ``stdlib/`` paths. The live Rust
   crate is currently under ``TinyOne/``.
@@ -431,13 +430,13 @@ Repository and documentation drift
   current ``TinyOne/target`` and ``Ralloc/target`` build outputs by default.
 
 Test and verification gaps
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * The C FFI smoke test depends on a built debug ``cdylib`` and may skip when
   that library is not present.
 
 Language and runtime gaps
-^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * The runtime type registry contains internal/staged variants beyond the
   source-level types. Heap ``type_of`` mappings are wired for all current
@@ -456,7 +455,7 @@ Language and runtime gaps
   are covered by threading parity tests.
 
 Allocator boundary
-^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~
 
 * ``Ralloc/`` is a path dependency of ``TinyOne`` and is the backend for heap
   payloads, VM locals/globals, and native allocator sidecar entries.
