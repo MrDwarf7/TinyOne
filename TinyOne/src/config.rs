@@ -27,8 +27,49 @@ const CENTRAL_ROOTS_ENV: Option<&str> = option_env!("TINYONE_CENTRAL_AUTHORITY_R
 /// entries remain available for projects that have not migrated yet.
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigModule {
-    pub(crate) path: String,
     pub(crate) capabilities: ModuleCapabilities,
+    source: ConfigModuleSource,
+}
+
+#[derive(Debug, Clone)]
+enum ConfigModuleSource {
+    ProjectPath(String),
+    Registry(RegistryModule),
+}
+
+/// A project declaration of an untrusted repository mirror and a user-owned
+/// registry client state file. The initial TUF root is deliberately absent:
+/// it is embedded by the TinyOne release build, never supplied by a project.
+#[derive(Debug, Clone)]
+pub(crate) struct RegistryModule {
+    repository: PathBuf,
+    state_path: PathBuf,
+}
+
+impl ConfigModule {
+    pub(crate) fn project_path(&self) -> Option<&str> {
+        match &self.source {
+            ConfigModuleSource::ProjectPath(path) => Some(path),
+            ConfigModuleSource::Registry(_) => None,
+        }
+    }
+
+    pub(crate) fn registry(&self) -> Option<&RegistryModule> {
+        match &self.source {
+            ConfigModuleSource::ProjectPath(_) => None,
+            ConfigModuleSource::Registry(registry) => Some(registry),
+        }
+    }
+}
+
+impl RegistryModule {
+    pub(crate) fn repository(&self) -> &Path {
+        &self.repository
+    }
+
+    pub(crate) fn state_path(&self) -> &Path {
+        &self.state_path
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -51,9 +92,6 @@ struct AuthorityCertificate {
 #[derive(Debug, Clone)]
 struct ModuleManifest {
     name: String,
-    version: String,
-    publisher: String,
-    purpose: String,
     network_outbound: bool,
     network_listen: bool,
     filesystem_read: bool,
@@ -72,7 +110,6 @@ struct ModuleManifest {
 #[derive(Debug, Clone)]
 struct SignatureMetadata {
     source_hash: String,
-    binary_hash: Option<String>,
     dependency_lock_hash: String,
     compiler_version: String,
     language_version: String,
@@ -80,7 +117,6 @@ struct SignatureMetadata {
     policy_version: String,
     issued_at: u64,
     expires_at: u64,
-    signing_record_id: String,
     signature: Option<Signature>,
 }
 
@@ -223,7 +259,7 @@ impl ProjectConfig {
             .transpose()?
             .unwrap_or_default();
 
-        let modules = parse_modules(root.get("modules"))?;
+        let modules = parse_modules(&project_root, root.get("modules"))?;
         let signing = parse_signing(root.get("signing"))?;
 
         Ok(Self {
@@ -260,6 +296,18 @@ impl ProjectConfig {
 
     pub(crate) fn module(&self, name: &str) -> Option<ConfigModule> {
         self.modules.get(name).cloned()
+    }
+
+    pub(crate) fn registry_modules(&self) -> Vec<(String, RegistryModule)> {
+        self.modules
+            .iter()
+            .filter_map(|(name, module)| {
+                module
+                    .registry()
+                    .cloned()
+                    .map(|registry| (name.clone(), registry))
+            })
+            .collect()
     }
 
     pub(crate) fn input(&self) -> Option<(PathBuf, [u8; 16])> {
@@ -346,7 +394,14 @@ impl ProjectConfig {
                     metadata.authority_id
                 ))
             })?;
-        let digest = module_signature_digest_from_parts(&manifest, &metadata);
+        let manifest_text = std::str::from_utf8(&manifest_bytes).map_err(|error| {
+            TinyOneError::compile(format!("module.toml must be UTF-8: {error}"))
+        })?;
+        let signature_text = std::str::from_utf8(&bytes).map_err(|error| {
+            TinyOneError::compile(format!("signature.toml must be UTF-8: {error}"))
+        })?;
+        let digest = tinyone_signing_format::module_signature_digest(manifest_text, signature_text)
+            .map_err(|error| TinyOneError::compile(error.to_string()))?;
         let signature = metadata.signature.as_ref().ok_or_else(|| {
             TinyOneError::compile(
                 "signature.toml signing.signature is required for module verification",
@@ -404,11 +459,8 @@ pub fn canonical_module_signature_payload(
     module_manifest_toml: &str,
     signature_toml: &str,
 ) -> Result<Vec<u8>> {
-    let manifest = parse_module_manifest(module_manifest_toml.as_bytes())?;
-    let metadata = parse_signature_metadata(signature_toml.as_bytes(), false)?;
-    Ok(canonical_module_signature_payload_from_parts(
-        &manifest, &metadata,
-    ))
+    tinyone_signing_format::canonical_module_signature_payload(module_manifest_toml, signature_toml)
+        .map_err(|error| TinyOneError::compile(error.to_string()))
 }
 
 /// SHA-256 digest to be signed by an Ed25519 authority for a module package.
@@ -418,14 +470,14 @@ pub fn module_signature_digest(
     module_manifest_toml: &str,
     signature_toml: &str,
 ) -> Result<[u8; 32]> {
-    let payload = canonical_module_signature_payload(module_manifest_toml, signature_toml)?;
-    Ok(sha256_digest(&payload))
+    tinyone_signing_format::module_signature_digest(module_manifest_toml, signature_toml)
+        .map_err(|error| TinyOneError::compile(error.to_string()))
 }
 
 /// Canonical `sha256:` hash for the UTF-8 source artifact named in
 /// `signature.toml [artifact].source_hash`.
 pub fn module_source_hash(source: &[u8]) -> String {
-    sha256_prefixed(source)
+    tinyone_signing_format::module_source_hash(source)
 }
 
 /// Canonical dependency-lock hash for the dependencies declared in a
@@ -433,113 +485,8 @@ pub fn module_source_hash(source: &[u8]) -> String {
 /// `signature.toml [artifact].dependency_lock_hash` before obtaining the
 /// Ed25519 signature.
 pub fn module_dependency_lock_hash(module_manifest_toml: &str) -> Result<String> {
-    let manifest = parse_module_manifest(module_manifest_toml.as_bytes())?;
-    Ok(dependency_lock_hash(&manifest.dependencies))
-}
-
-fn module_signature_digest_from_parts(
-    manifest: &ModuleManifest,
-    metadata: &SignatureMetadata,
-) -> [u8; 32] {
-    sha256_digest(&canonical_module_signature_payload_from_parts(
-        manifest, metadata,
-    ))
-}
-
-fn canonical_module_signature_payload_from_parts(
-    manifest: &ModuleManifest,
-    metadata: &SignatureMetadata,
-) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(1024 + manifest.purpose.len());
-    payload.extend_from_slice(b"tinyone-module-signature-v1\0");
-    canonical_string(&mut payload, "module_name", &manifest.name);
-    canonical_string(&mut payload, "module_version", &manifest.version);
-    canonical_string(&mut payload, "publisher_id", &manifest.publisher);
-    canonical_string(&mut payload, "declared_purpose", &manifest.purpose);
-    canonical_bool(
-        &mut payload,
-        "capabilities.network.outbound",
-        manifest.network_outbound,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.network.listen",
-        manifest.network_listen,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.filesystem.read",
-        manifest.filesystem_read,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.filesystem.write",
-        manifest.filesystem_write,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.process.spawn",
-        manifest.process_spawn,
-    );
-    canonical_strings(
-        &mut payload,
-        "capabilities.environment.read",
-        &manifest.environment_read,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.ffi.allowed",
-        manifest.ffi_allowed,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.graphics.gpu",
-        manifest.graphics_gpu,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.hardware.access",
-        manifest.hardware_access,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.threads.allowed",
-        manifest.threads_allowed,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.memory.unsafe",
-        manifest.unsafe_memory_allowed,
-    );
-    canonical_bool(
-        &mut payload,
-        "capabilities.pipelines.linux",
-        manifest.linux_pipelines_allowed,
-    );
-    canonical_dependencies(&mut payload, &manifest.dependencies);
-    canonical_string(&mut payload, "source_hash", &metadata.source_hash);
-    canonical_string(
-        &mut payload,
-        "artifact_hash",
-        metadata.binary_hash.as_deref().unwrap_or(""),
-    );
-    canonical_string(
-        &mut payload,
-        "dependency_lock_hash",
-        &metadata.dependency_lock_hash,
-    );
-    canonical_string(&mut payload, "compiler_version", &metadata.compiler_version);
-    canonical_string(&mut payload, "language_version", &metadata.language_version);
-    canonical_string(&mut payload, "authority_id", &metadata.authority_id);
-    canonical_string(&mut payload, "policy_version", &metadata.policy_version);
-    canonical_u64(&mut payload, "issued_at", metadata.issued_at);
-    canonical_u64(&mut payload, "expires_at", metadata.expires_at);
-    canonical_string(
-        &mut payload,
-        "signing_record_id",
-        &metadata.signing_record_id,
-    );
-    payload
+    tinyone_signing_format::module_dependency_lock_hash(module_manifest_toml)
+        .map_err(|error| TinyOneError::compile(error.to_string()))
 }
 
 fn canonical_field(payload: &mut Vec<u8>, name: &str, value: &[u8]) {
@@ -547,28 +494,6 @@ fn canonical_field(payload: &mut Vec<u8>, name: &str, value: &[u8]) {
     payload.extend_from_slice(name.as_bytes());
     payload.extend_from_slice(&(value.len() as u32).to_be_bytes());
     payload.extend_from_slice(value);
-}
-
-fn canonical_string(payload: &mut Vec<u8>, name: &str, value: &str) {
-    canonical_field(payload, name, value.as_bytes());
-}
-
-fn canonical_bool(payload: &mut Vec<u8>, name: &str, value: bool) {
-    canonical_field(payload, name, &[u8::from(value)]);
-}
-
-fn canonical_u64(payload: &mut Vec<u8>, name: &str, value: u64) {
-    canonical_field(payload, name, &value.to_be_bytes());
-}
-
-fn canonical_strings(payload: &mut Vec<u8>, name: &str, values: &[String]) {
-    let mut encoded = Vec::new();
-    encoded.extend_from_slice(&(values.len() as u32).to_be_bytes());
-    for value in values {
-        encoded.extend_from_slice(&(value.len() as u32).to_be_bytes());
-        encoded.extend_from_slice(value.as_bytes());
-    }
-    canonical_field(payload, name, &encoded);
 }
 
 fn canonical_dependencies(payload: &mut Vec<u8>, dependencies: &BTreeMap<String, String>) {
@@ -604,14 +529,15 @@ fn parse_module_manifest(bytes: &[u8]) -> Result<ModuleManifest> {
         "module.toml module",
     )?;
     let name = required_metadata_text(module.get("name"), "module.toml module.name", 256)?;
-    let version = required_metadata_text(module.get("version"), "module.toml module.version", 256)?;
+    let _version =
+        required_metadata_text(module.get("version"), "module.toml module.version", 256)?;
     let publisher =
         required_metadata_text(module.get("publisher"), "module.toml module.publisher", 256)?;
     validate_authority_id(&publisher, "module.toml module.publisher")?;
 
     let purpose = required_toml_table(root.get("purpose"), "module.toml [purpose]")?;
     reject_unknown_fields(purpose, &["description"], "module.toml purpose")?;
-    let purpose = required_metadata_text(
+    let _purpose = required_metadata_text(
         purpose.get("description"),
         "module.toml purpose.description",
         8192,
@@ -657,9 +583,6 @@ fn parse_module_manifest(bytes: &[u8]) -> Result<ModuleManifest> {
 
     Ok(ModuleManifest {
         name,
-        version,
-        publisher,
-        purpose,
         network_outbound: capability_bool(
             network,
             "outbound",
@@ -736,11 +659,11 @@ fn parse_signature_metadata(bytes: &[u8], signature_required: bool) -> Result<Si
         72,
     )?;
     validate_sha256_hash(&source_hash, "signature.toml artifact.source_hash")?;
-    let binary_hash = artifact
+    let _binary_hash = artifact
         .get("binary_hash")
         .map(|value| required_metadata_text(Some(value), "signature.toml artifact.binary_hash", 72))
         .transpose()?;
-    if let Some(binary_hash) = &binary_hash {
+    if let Some(binary_hash) = &_binary_hash {
         validate_sha256_hash(binary_hash, "signature.toml artifact.binary_hash")?;
     }
     let dependency_lock_hash = required_metadata_text(
@@ -826,7 +749,6 @@ fn parse_signature_metadata(bytes: &[u8], signature_required: bool) -> Result<Si
 
     Ok(SignatureMetadata {
         source_hash,
-        binary_hash,
         dependency_lock_hash,
         compiler_version,
         language_version,
@@ -834,7 +756,6 @@ fn parse_signature_metadata(bytes: &[u8], signature_required: bool) -> Result<Si
         policy_version,
         issued_at,
         expires_at,
-        signing_record_id,
         signature,
     })
 }
@@ -1041,7 +962,10 @@ fn sha256_prefixed(value: &[u8]) -> String {
     format!("sha256:{}", hex::encode(sha256_digest(value)))
 }
 
-fn parse_modules(value: Option<&TomlValue>) -> Result<HashMap<String, ConfigModule>> {
+fn parse_modules(
+    project_root: &Path,
+    value: Option<&TomlValue>,
+) -> Result<HashMap<String, ConfigModule>> {
     let Some(modules) = value else {
         return Ok(HashMap::new());
     };
@@ -1053,15 +977,68 @@ fn parse_modules(value: Option<&TomlValue>) -> Result<HashMap<String, ConfigModu
         let entry = entry
             .as_table()
             .ok_or_else(|| TinyOneError::compile(format!("modules.{name} must be a table")))?;
-        reject_unknown_fields(entry, &["path", "permissions"], &format!("modules.{name}"))?;
-        let path = required_string(entry.get("path"), &format!("modules.{name}.path"))?.to_string();
-        validate_module_path(&path, &format!("modules.{name}.path"))?;
+        reject_unknown_fields(
+            entry,
+            &["path", "repository", "state_path", "permissions"],
+            &format!("modules.{name}"),
+        )?;
         let capabilities = entry
             .get("permissions")
             .map(|value| parse_capability_list(value, &format!("modules.{name}.permissions")))
             .transpose()?
             .unwrap_or_else(ModuleCapabilities::none);
-        parsed.insert(name.clone(), ConfigModule { path, capabilities });
+        let source = match (
+            entry.get("path"),
+            entry.get("repository"),
+            entry.get("state_path"),
+        ) {
+            (Some(path), None, None) => {
+                let path =
+                    required_string(Some(path), &format!("modules.{name}.path"))?.to_string();
+                validate_module_path(&path, &format!("modules.{name}.path"))?;
+                ConfigModuleSource::ProjectPath(path)
+            }
+            (None, Some(repository), Some(state_path)) => {
+                let repository =
+                    required_string(Some(repository), &format!("modules.{name}.repository"))?;
+                let repository = project_root.join(repository);
+                let state_path = PathBuf::from(required_string(
+                    Some(state_path),
+                    &format!("modules.{name}.state_path"),
+                )?);
+                if !state_path.is_absolute() {
+                    return Err(TinyOneError::compile(format!(
+                        "modules.{name}.state_path must be an absolute user-owned path"
+                    )));
+                }
+                if state_path.starts_with(project_root) {
+                    return Err(TinyOneError::compile(format!(
+                        "modules.{name}.state_path must live outside the project tree so project files cannot control the user's update policy"
+                    )));
+                }
+                ConfigModuleSource::Registry(RegistryModule {
+                    repository,
+                    state_path,
+                })
+            }
+            (Some(_), _, _) => {
+                return Err(TinyOneError::compile(format!(
+                    "modules.{name} must use either path or the repository and state_path pair"
+                )));
+            }
+            _ => {
+                return Err(TinyOneError::compile(format!(
+                    "modules.{name} must contain path or both repository and state_path"
+                )));
+            }
+        };
+        parsed.insert(
+            name.clone(),
+            ConfigModule {
+                capabilities,
+                source,
+            },
+        );
     }
     Ok(parsed)
 }
@@ -1221,20 +1198,13 @@ pub fn authority_certificate_payload(
     not_before: u64,
     expires: u64,
 ) -> Result<Vec<u8>> {
-    validate_authority_id(authority_id, "authority certificate id")?;
-    if expires <= not_before {
-        return Err(TinyOneError::compile(
-            "authority certificate expiry must be after not_before",
-        ));
-    }
-    let mut payload = Vec::with_capacity(48 + authority_id.len());
-    payload.extend_from_slice(b"tinyone-authority-certificate-v1\0");
-    payload.extend_from_slice(authority_id.as_bytes());
-    payload.push(0);
-    payload.extend_from_slice(public_key);
-    payload.extend_from_slice(&not_before.to_le_bytes());
-    payload.extend_from_slice(&expires.to_le_bytes());
-    Ok(payload)
+    tinyone_signing_format::authority_certificate_payload(
+        authority_id,
+        public_key,
+        not_before,
+        expires,
+    )
+    .map_err(|error| TinyOneError::compile(error.to_string()))
 }
 
 /// SHA-256 digest signed by a TinyOne central root for an authority
@@ -1246,12 +1216,13 @@ pub fn authority_certificate_digest(
     not_before: u64,
     expires: u64,
 ) -> Result<[u8; 32]> {
-    Ok(sha256_digest(&authority_certificate_payload(
+    tinyone_signing_format::authority_certificate_digest(
         authority_id,
         public_key,
         not_before,
         expires,
-    )?))
+    )
+    .map_err(|error| TinyOneError::compile(error.to_string()))
 }
 
 fn validate_authority_id(id: &str, field: &str) -> Result<()> {

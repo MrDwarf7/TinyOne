@@ -40,3 +40,9 @@ toml = "0.8"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 sha2 = "0.10"
 ralloc = { version = "0.2.0", path = "../Ralloc" }
+tinyone-module-client = { path = "../../Authority/module-client" }
+tinyone-signing-format = { path = "../../Authority/signing-format" }
+
+[dev-dependencies]
+tinyone-repository-core = { path = "../../Authority/repository-core" }
+tinyone-signing-interface = { path = "../../Authority/signing-interface" }

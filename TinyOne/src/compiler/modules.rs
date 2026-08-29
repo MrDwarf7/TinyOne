@@ -6,15 +6,22 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use tinyone_module_client::{MaterializedModule, ModuleClient};
+
+use crate::config::RegistryModule;
 use crate::{
     CompilerSharedState, ModuleCapabilities, ModulePermissions, ProjectConfig, Result, TinyOneError,
 };
+
+include!(concat!(env!("OUT_DIR"), "/embedded_tuf_initial_root.rs"));
 
 pub(crate) type Resolver = Rc<RefCell<ModuleResolver>>;
 
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAX_REGISTRY_CLIENT_STATE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolverInput {
@@ -47,6 +54,8 @@ pub(crate) struct ModuleResolver {
     canonical_resolutions: BTreeMap<PathBuf, PathBuf>,
     module_names: BTreeMap<PathBuf, String>,
     module_permissions: HashMap<PathBuf, ModulePermissions>,
+    registry_modules: HashMap<String, MaterializedModule>,
+    trusted_tuf_initial_root: Vec<u8>,
     signed_module_valid_until: Option<u64>,
     existing_input_bytes: usize,
 }
@@ -63,6 +72,13 @@ impl ModuleResolver {
     /// a filesystem the attacker cannot modify, or use OS-level isolation,
     /// when adversarial concurrent filesystem writes are in scope.
     pub(crate) fn new(root_file: &Path) -> Result<Self> {
+        Self::new_with_trusted_tuf_root(root_file, EMBEDDED_TUF_INITIAL_ROOT)
+    }
+
+    fn new_with_trusted_tuf_root(
+        root_file: &Path,
+        trusted_tuf_initial_root: &[u8],
+    ) -> Result<Self> {
         let root_file = root_file.canonicalize().map_err(|error| {
             TinyOneError::compile(format!(
                 "File error: could not canonicalize module root: {error}"
@@ -90,11 +106,20 @@ impl ModuleResolver {
             canonical_resolutions: BTreeMap::new(),
             module_names: BTreeMap::new(),
             module_permissions: HashMap::new(),
+            registry_modules: HashMap::new(),
+            trusted_tuf_initial_root: trusted_tuf_initial_root.to_vec(),
             signed_module_valid_until: None,
             existing_input_bytes: 0,
         };
         if let Some((path, digest)) = resolver.config.input() {
             resolver.inputs.insert(path, Some(digest));
+        }
+        // This is deliberately eager. The compiled-program disk cache calls
+        // `ModuleResolver::new` before accepting a hit, so every configured
+        // registry module gets current TUF, authority, and revocation checks
+        // before either a fresh or cached program can execute it.
+        for (module_name, registry) in resolver.config.registry_modules() {
+            resolver.refresh_registry_module(&module_name, &registry)?;
         }
         Ok(resolver)
     }
@@ -105,7 +130,13 @@ impl ModuleResolver {
         import_path: &str,
     ) -> Result<ResolvedModule> {
         let cache_key = (from_filename.to_string(), import_path.to_string());
-        if let Some(resolved) = self.resolutions.get(&cache_key) {
+        let registry_configuration = self
+            .config
+            .module(import_path)
+            .and_then(|module| module.registry().cloned());
+        if registry_configuration.is_none()
+            && let Some(resolved) = self.resolutions.get(&cache_key)
+        {
             return Ok(resolved.clone());
         }
         let import = Path::new(import_path);
@@ -138,18 +169,31 @@ impl ModuleResolver {
                 "Import {import_path:?} is not declared in Config.toml [modules]"
             )));
         }
-        let manifest_module = self.resolve_manifest_import(&base, import_path)?;
-        let configured_capabilities = manifest_module
-            .as_ref()
-            .map(|(_, module)| {
-                module
+        let (candidate, configured_capabilities) =
+            if let Some(registry) = registry_configuration.clone() {
+                let candidate = self.refresh_registry_module(import_path, &registry)?;
+                let capabilities = self
+                    .config
+                    .module(import_path)
+                    .expect("the registry configuration was just read")
                     .capabilities
-                    .intersection(self.config.root_capabilities())
-            })
-            .unwrap_or_else(ModuleCapabilities::none);
-        let candidate = manifest_module
-            .map(|(directory, module)| directory.join(module.path))
-            .unwrap_or_else(|| base.join(import));
+                    .intersection(self.config.root_capabilities());
+                (candidate, capabilities)
+            } else {
+                let manifest_module = self.resolve_manifest_import(&base, import_path)?;
+                let configured_capabilities = manifest_module
+                    .as_ref()
+                    .map(|(_, module)| {
+                        module
+                            .capabilities
+                            .intersection(self.config.root_capabilities())
+                    })
+                    .unwrap_or_else(ModuleCapabilities::none);
+                let candidate = manifest_module
+                    .map(|(directory, module)| directory.join(module.path))
+                    .unwrap_or_else(|| base.join(import));
+                (candidate, configured_capabilities)
+            };
         ensure_tinylang_source(&candidate)?;
         reject_native_library_import(&candidate)?;
         let path = if let Some(path) = self.canonical_resolutions.get(&candidate) {
@@ -162,7 +206,11 @@ impl ModuleResolver {
                 .insert(candidate.clone(), path.clone());
             path
         };
-        self.ensure_within_sandbox(&path, "resolved module")?;
+        if registry_configuration.is_some() {
+            self.ensure_current_registry_candidate(import_path, &path)?;
+        } else {
+            self.ensure_within_sandbox(&path, "resolved module")?;
+        }
         ensure_tinylang_source(&path)?;
         reject_native_library_import(&path)?;
         let source = if let Some(source) = self.sources.get(&path) {
@@ -219,7 +267,9 @@ impl ModuleResolver {
             source,
             permissions,
         };
-        self.resolutions.insert(cache_key, resolved.clone());
+        if registry_configuration.is_none() {
+            self.resolutions.insert(cache_key, resolved.clone());
+        }
         Ok(resolved)
     }
 
@@ -229,10 +279,15 @@ impl ModuleResolver {
         import_path: &str,
     ) -> Result<Option<(PathBuf, ManifestModule)>> {
         if let Some(module) = self.config.module(import_path) {
+            let path = module.project_path().ok_or_else(|| {
+                TinyOneError::compile(format!(
+                    "Registry module {import_path:?} must be resolved through the registry client"
+                ))
+            })?;
             return Ok(Some((
                 self.config.project_root().to_path_buf(),
                 ManifestModule {
-                    path: module.path,
+                    path: path.to_string(),
                     capabilities: module.capabilities,
                 },
             )));
@@ -375,6 +430,96 @@ impl ModuleResolver {
             )))
         }
     }
+
+    fn refresh_registry_module(
+        &mut self,
+        module_name: &str,
+        registry: &RegistryModule,
+    ) -> Result<PathBuf> {
+        if let Some(module) = self.registry_modules.get(module_name) {
+            return Ok(module.source_path.clone());
+        }
+        if self.trusted_tuf_initial_root.is_empty() {
+            return Err(TinyOneError::compile(
+                "Registry modules require a TinyOne release built with TINYONE_TUF_INITIAL_ROOT pointing to the separately protected initial TUF root",
+            ));
+        }
+        let mut client = ModuleClient::open(registry.state_path()).map_err(|error| {
+            TinyOneError::compile(format!(
+                "Registry module {module_name:?} requires an initialized user update-policy state at {}: {error}",
+                registry.state_path().display()
+            ))
+        })?;
+        client
+            .refresh_for_runtime_with_trusted_root_bytes(
+                registry.repository(),
+                &self.trusted_tuf_initial_root,
+                module_name,
+                unix_time_now()?,
+            )
+            .map_err(|error| {
+                TinyOneError::compile(format!(
+                    "Registry security refresh refused module {module_name:?}: {error}"
+                ))
+            })?;
+        let materialized = client
+            .materialize_for_tinyone(module_name)
+            .map_err(|error| {
+                TinyOneError::compile(format!(
+                    "Registry module {module_name:?} could not be materialized: {error}"
+                ))
+            })?;
+        let state = read_limited_file(
+            registry.state_path(),
+            MAX_REGISTRY_CLIENT_STATE_BYTES,
+            "Registry update-policy state",
+        )?;
+        self.existing_input_bytes = self.existing_input_bytes.saturating_add(state.len());
+        self.inputs.insert(
+            registry.state_path().to_path_buf(),
+            Some(content_digest(&state)),
+        );
+        let source_path = materialized.source_path.clone();
+        self.registry_modules
+            .insert(module_name.to_string(), materialized);
+        Ok(source_path)
+    }
+
+    fn ensure_current_registry_candidate(&self, module_name: &str, path: &Path) -> Result<()> {
+        let materialized = self.registry_modules.get(module_name).ok_or_else(|| {
+            TinyOneError::compile(format!(
+                "Registry module {module_name:?} was not refreshed before resolution"
+            ))
+        })?;
+        let expected = materialized.source_path.canonicalize().map_err(|error| {
+            TinyOneError::compile(format!(
+                "Registry module {module_name:?} source read error: {error}"
+            ))
+        })?;
+        if path != expected {
+            return Err(TinyOneError::compile(format!(
+                "Registry module {module_name:?} resolved outside its verified package"
+            )));
+        }
+        let root = materialized.root.canonicalize().map_err(|error| {
+            TinyOneError::compile(format!(
+                "Registry module {module_name:?} cache root read error: {error}"
+            ))
+        })?;
+        if !path.starts_with(root) {
+            return Err(TinyOneError::compile(format!(
+                "Registry module {module_name:?} escaped its verified package root"
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn unix_time_now() -> Result<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| TinyOneError::compile("System clock is before the Unix epoch"))
 }
 
 fn parse_manifest_module(
@@ -599,7 +744,16 @@ fn sanitize_identifier(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer as _, SigningKey};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tinyone_module_client::ModuleClient;
+    use tinyone_repository_core::{
+        AuthorityRegistration, ModuleRepository, PackageInput, ReleaseChannel, RepositorySigners,
+    };
+    use tinyone_signing_format::{
+        module_dependency_lock_hash, module_signature_digest, module_source_hash,
+    };
+    use tinyone_signing_interface::{KeyPurpose, SigningBackend, SigningBackendError};
 
     struct TempDir(PathBuf);
 
@@ -622,6 +776,91 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// Test-only signing backend. The compiler never imports authority keyring
+    /// code: this fixture exists only to construct a repository package for
+    /// the integration test below.
+    struct TestSigner {
+        authority_id: String,
+        key: SigningKey,
+        purpose: KeyPurpose,
+    }
+
+    impl TestSigner {
+        fn new(authority_id: &str, purpose: KeyPurpose, seed: [u8; 32]) -> Self {
+            Self {
+                authority_id: authority_id.to_string(),
+                key: SigningKey::from_bytes(&seed),
+                purpose,
+            }
+        }
+    }
+
+    impl SigningBackend for TestSigner {
+        fn authority_id(&self) -> &str {
+            &self.authority_id
+        }
+
+        fn purpose(&self) -> KeyPurpose {
+            self.purpose
+        }
+
+        fn public_key_hex(&self) -> std::result::Result<String, SigningBackendError> {
+            Ok(hex::encode(self.key.verifying_key().as_bytes()))
+        }
+
+        fn sign_message(
+            &self,
+            message: &[u8],
+        ) -> std::result::Result<[u8; 64], SigningBackendError> {
+            Ok(self.key.sign(message).to_bytes())
+        }
+    }
+
+    fn sign_module_files(
+        signer: &TestSigner,
+        manifest_path: &Path,
+        source_path: &Path,
+        signature_path: &Path,
+    ) {
+        let manifest = fs::read_to_string(manifest_path).expect("read module manifest");
+        let source = fs::read_to_string(source_path).expect("read module source");
+        let mut signature: toml::Value = fs::read_to_string(signature_path)
+            .expect("read unsigned signature")
+            .parse()
+            .expect("parse unsigned signature");
+        let artifact = signature
+            .get_mut("artifact")
+            .and_then(toml::Value::as_table_mut)
+            .expect("signature artifact table");
+        artifact.insert(
+            "source_hash".to_string(),
+            toml::Value::String(module_source_hash(source.as_bytes())),
+        );
+        artifact.insert(
+            "dependency_lock_hash".to_string(),
+            toml::Value::String(
+                module_dependency_lock_hash(&manifest).expect("dependency lock hash"),
+            ),
+        );
+        let unsigned = toml::to_string(&signature).expect("serialize unsigned signature");
+        let digest = module_signature_digest(&manifest, &unsigned).expect("module digest");
+        signature
+            .get_mut("signing")
+            .and_then(toml::Value::as_table_mut)
+            .expect("signature signing table")
+            .insert(
+                "signature".to_string(),
+                toml::Value::String(hex::encode(
+                    signer.sign_digest(&digest).expect("sign digest"),
+                )),
+            );
+        fs::write(
+            signature_path,
+            toml::to_string(&signature).expect("serialize signed signature"),
+        )
+        .expect("write signed signature");
     }
 
     #[test]
@@ -660,5 +899,141 @@ mod tests {
                 .count()
         );
         assert_eq!(2, resolver.resolutions.len());
+    }
+
+    #[test]
+    fn registry_modules_refresh_before_resolving_and_fail_closed_after_suspension() {
+        let temp = TempDir::new();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_secs();
+        let central = TestSigner::new("CENTRAL-TEST-01", KeyPurpose::CentralRoot, [71; 32]);
+        let company = TestSigner::new("EXAMPLE-CA-01", KeyPurpose::CompanyModule, [72; 32]);
+        let repository_root = temp.0.join("repository");
+        let repository = ModuleRepository::new(
+            &repository_root,
+            RepositorySigners {
+                root: &central,
+                targets: &central,
+                snapshot: &central,
+                timestamp: &central,
+            },
+        );
+        repository.initialize(now).expect("initialize repository");
+        repository
+            .approve_authority(
+                &AuthorityRegistration {
+                    authority_id: "EXAMPLE-CA-01".to_string(),
+                    public_key_hex: company.public_key_hex().expect("company public key"),
+                    not_before: now.saturating_sub(1),
+                    expires: now + 600,
+                },
+                now,
+            )
+            .expect("approve authority");
+        let input = temp.0.join("package-input");
+        fs::create_dir(&input).expect("create package input");
+        let manifest = input.join("module.toml");
+        let source = input.join("module.to");
+        let signature = input.join("signature.toml");
+        fs::write(
+            &manifest,
+            r#"
+[module]
+name = "example-module"
+version = "1.0.0"
+publisher = "example-company"
+
+[purpose]
+description = "Runtime resolver registry test"
+"#,
+        )
+        .expect("write module manifest");
+        fs::write(&source, "export fn value() { return 7 }\n").expect("write module source");
+        fs::write(
+            &signature,
+            format!(
+                r#"
+[artifact]
+source_hash = ""
+dependency_lock_hash = ""
+compiler_version = "{}"
+language_version = "1"
+
+[signing]
+authority = "EXAMPLE-CA-01"
+policy_version = "1"
+issued_at = {}
+expires_at = {}
+signing_record_id = "resolver-registry-test-record"
+signature = "{}"
+"#,
+                env!("CARGO_PKG_VERSION"),
+                now.saturating_sub(1),
+                now + 600,
+                "00".repeat(64),
+            ),
+        )
+        .expect("write unsigned signature");
+        sign_module_files(&company, &manifest, &source, &signature);
+        repository
+            .publish(
+                PackageInput {
+                    manifest: &manifest,
+                    source: &source,
+                    signature: &signature,
+                    channel: ReleaseChannel::Stable,
+                },
+                now,
+            )
+            .expect("publish package");
+
+        let project = temp.0.join("project");
+        fs::create_dir(&project).expect("create project");
+        let state = temp.0.join("user-update-policy.json");
+        ModuleClient::initialize(&state, ReleaseChannel::Stable).expect("initialize user policy");
+        let toml_path = |path: &Path| {
+            path.to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        };
+        fs::write(
+            project.join("Config.toml"),
+            format!(
+                "[modules.example-module]\nrepository = \"{}\"\nstate_path = \"{}\"\npermissions = []\n",
+                toml_path(&repository_root),
+                toml_path(&state),
+            ),
+        )
+        .expect("write project config");
+        let main = project.join("main.to");
+        fs::write(
+            &main,
+            "import \"example-module\" as example\nprint example.value()\n",
+        )
+        .expect("write main source");
+        let pinned_root =
+            fs::read(repository_root.join("metadata/1.root.json")).expect("read initial root");
+
+        let mut resolver = ModuleResolver::new_with_trusted_tuf_root(&main, &pinned_root)
+            .expect("registry security refresh");
+        let resolved = resolver
+            .resolve_import(&main.to_string_lossy(), "example-module")
+            .expect("resolve verified registry module");
+        assert_eq!(resolved.source, "export fn value() { return 7 }\n");
+        assert!(resolver.inputs.contains_key(&state));
+
+        repository
+            .suspend_authority("EXAMPLE-CA-01", "test compromise", now + 1)
+            .expect("suspend authority");
+        let error = ModuleResolver::new_with_trusted_tuf_root(&main, &pinned_root)
+            .expect_err("suspended authority must block even a cached package");
+        assert!(
+            error
+                .to_string()
+                .contains("Registry security refresh refused module"),
+            "{error}"
+        );
     }
 }

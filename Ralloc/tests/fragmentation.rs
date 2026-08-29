@@ -10,17 +10,14 @@ fn mixed_size_interleave_does_not_exhaust_arena() {
     let sizes = [8usize, 64, 256, 16, 128, 32, 512, 24];
 
     for round in 0..16 {
-        let mut handles: Vec<RallocBuffer> = sizes
-            .iter()
-            .enumerate()
-            .map(|(index, &n)| {
-                let mut buffer = RallocBuffer::new(n).expect("initial allocation should succeed");
-                let marker = round as u8 ^ index as u8 ^ n as u8;
-                buffer.as_mut_slice().fill(marker);
-                assert!(buffer.as_slice().iter().all(|&byte| byte == marker));
-                buffer
-            })
-            .collect();
+        let mut handles = Vec::with_capacity(sizes.len());
+        for (index, &size) in sizes.iter().enumerate() {
+            let mut buffer = RallocBuffer::new(size).expect("initial allocation should succeed");
+            let marker = round as u8 ^ index as u8 ^ size as u8;
+            buffer.as_mut_slice().fill(marker);
+            assert!(buffer.as_slice().iter().all(|&byte| byte == marker));
+            handles.push(buffer);
+        }
 
         // Free every other handle, punching holes of varying sizes.
         let mut i = 0;
