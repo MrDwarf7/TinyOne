@@ -145,7 +145,7 @@ impl VM {
         function_index: Option<usize>,
         global_memory: Option<&TinyMemory>,
     ) -> Result<Option<Value>> {
-        let capabilities = self.program.capabilities_for_function(function_index);
+        let permissions = self.program.capabilities_for_function(function_index);
         let mut stack: Vec<Value> = Vec::with_capacity(code.len().min(32));
         let mut pc = 0usize;
         loop {
@@ -354,7 +354,7 @@ impl VM {
                         globals,
                         builtin_index,
                         function_index,
-                        capabilities,
+                        &permissions,
                         &stack[args_start..],
                     )?;
                     stack.truncate(args_start);

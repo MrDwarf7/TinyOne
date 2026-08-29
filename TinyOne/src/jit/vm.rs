@@ -27,7 +27,7 @@ fn run_direct_builtin(
     context: &mut TinyRuntimeContext,
     stack: &mut Vec<Value>,
     builtin: JitBuiltin,
-    capabilities: crate::ModuleCapabilities,
+    permissions: &crate::ModulePermissions,
 ) -> Result<()> {
     let result = match builtin {
         JitBuiltin::Len => {
@@ -104,7 +104,7 @@ fn run_direct_builtin(
             value
         }
         JitBuiltin::Free => {
-            require_builtin_capability("free", true, capabilities)?;
+            require_builtin_capability("free", true, permissions)?;
             let target = jit_pop(stack)?;
             context.heap().free(&target)?;
             Value::I64(0)
@@ -199,7 +199,7 @@ impl<'a> JitVm<'a> {
         global_memory: Option<&TinyMemory>,
         stack: &mut Vec<Value>,
     ) -> Result<Option<Value>> {
-        let capabilities = self
+        let permissions = self
             .program
             .verified_program
             .program()
@@ -609,7 +609,7 @@ impl<'a> JitVm<'a> {
                     )?);
                 }
                 JitOp::BuiltinDirect(builtin) => {
-                    run_direct_builtin(&mut self.context, stack, builtin, capabilities)?;
+                    run_direct_builtin(&mut self.context, stack, builtin, &permissions)?;
                 }
                 JitOp::Builtin(builtin_index, arg_count) => {
                     let args_start = stack
@@ -623,7 +623,7 @@ impl<'a> JitVm<'a> {
                         globals,
                         builtin_index,
                         caller_function,
-                        capabilities,
+                        &permissions,
                         &stack[args_start..],
                     )?;
                     stack.truncate(args_start);

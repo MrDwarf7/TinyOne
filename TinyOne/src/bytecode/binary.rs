@@ -1,11 +1,12 @@
 use crate::{
-    EnumVariantDef, Function, Instr, ModuleCapabilities, ModuleDef, ModuleImportDef, Op, Program,
-    Result, StructDef, TinyOneError, VerifiedProgram, VmSettings,
+    EnumVariantDef, Function, Instr, ModuleCapabilities, ModuleDef, ModuleImportDef,
+    ModulePermissions, Op, Program, Result, StructDef, TinyOneError, VerifiedProgram, VmSettings,
 };
 
 pub(crate) const BINARY_ARTIFACT_MAGIC: &[u8; 8] = b"TINYONEB";
 pub(crate) const MAX_BINARY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
-const BINARY_ARTIFACT_VERSION: u16 = 3;
+// Version 4 adds the fine-grained policy which backs signed module grants.
+const BINARY_ARTIFACT_VERSION: u16 = 4;
 const MAX_FUNCTIONS: usize = 4_096;
 const MAX_STRUCTS: usize = 4_096;
 const MAX_CODE_OPS: usize = 65_536;
@@ -20,6 +21,7 @@ const MAX_STRUCT_FIELDS: usize = 256;
 const MAX_ENUM_VARIANTS: usize = 4_096;
 const MAX_ENUM_FIELDS: usize = 256;
 const MAX_NAMES: usize = 65_536;
+const MAX_PERMISSION_ENVIRONMENT_VARIABLES: usize = 4_096;
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 
 impl Program {
@@ -28,6 +30,7 @@ impl Program {
         writer.bytes.extend_from_slice(BINARY_ARTIFACT_MAGIC);
         writer.u16(BINARY_ARTIFACT_VERSION);
         writer.u8(self.root_capabilities.bits());
+        writer.permissions(&self.root_permissions)?;
         writer.usize(self.vm_settings.max_call_depth, "VM max call depth")?;
         writer.code(&self.code)?;
         writer.usize(self.slot_count, "main slot count")?;
@@ -62,6 +65,7 @@ impl Program {
             writer.string_list(&module.exported_functions)?;
             writer.string_list(&module.exported_structs)?;
             writer.u8(module.capabilities.bits());
+            writer.permissions(&module.permissions)?;
         }
         writer.usize(self.enum_variants.len(), "enum variant count")?;
         for item in &self.enum_variants {
@@ -80,6 +84,12 @@ impl Program {
 
     pub fn from_binary_artifact(bytes: &[u8]) -> Result<Self> {
         VerifiedProgram::from_binary_artifact(bytes).map(VerifiedProgram::into_program)
+    }
+
+    /// Decodes policy-bearing binary data after the caller has authenticated
+    /// the artifact bytes and accepted its authority as an embedding decision.
+    pub fn from_trusted_binary_artifact(bytes: &[u8]) -> Result<Self> {
+        VerifiedProgram::from_trusted_binary_artifact(bytes).map(VerifiedProgram::into_program)
     }
 
     pub(crate) fn decode_binary_artifact(bytes: &[u8]) -> Result<Self> {
@@ -101,6 +111,7 @@ impl Program {
             )));
         }
         let root_capabilities = ModuleCapabilities::from_bits(reader.u8()?)?;
+        let root_permissions = reader.permissions(root_capabilities, "root permissions")?;
         let vm_settings = VmSettings::with_max_call_depth(
             reader.bounded_usize("VM max call depth", crate::MAX_CALL_DEPTH)?,
         )?;
@@ -151,15 +162,20 @@ impl Program {
                     resolved: reader.string("resolved module import target")?,
                 });
             }
+            let exported_functions =
+                reader.string_list("module function exports", MAX_MODULE_EXPORTS)?;
+            let exported_structs =
+                reader.string_list("module struct exports", MAX_MODULE_EXPORTS)?;
+            let capabilities = ModuleCapabilities::from_bits(reader.u8()?)?;
+            let permissions = reader.permissions(capabilities, "module permissions")?;
             modules.push(ModuleDef {
                 name,
                 path,
                 imports,
-                exported_functions: reader
-                    .string_list("module function exports", MAX_MODULE_EXPORTS)?,
-                exported_structs: reader
-                    .string_list("module struct exports", MAX_MODULE_EXPORTS)?,
-                capabilities: ModuleCapabilities::from_bits(reader.u8()?)?,
+                exported_functions,
+                exported_structs,
+                capabilities,
+                permissions,
             });
         }
         let enum_count = reader.bounded_usize("enum variant count", MAX_ENUM_VARIANTS)?;
@@ -188,14 +204,25 @@ impl Program {
             modules,
             enum_variants,
             root_capabilities,
+            root_permissions,
+            policy_trusted: false,
             vm_settings,
         })
     }
 }
 
 impl VerifiedProgram {
+    /// Decodes an untrusted binary artifact without granting its serialized
+    /// host authority. Use [`Self::from_trusted_binary_artifact`] only after
+    /// the embedding application authenticates the bytes and policy.
     pub fn from_binary_artifact(bytes: &[u8]) -> Result<Self> {
         Self::verify(Program::decode_binary_artifact(bytes)?)
+    }
+
+    /// Decodes a binary artifact whose bytes and policy were authenticated by
+    /// the embedding application.
+    pub fn from_trusted_binary_artifact(bytes: &[u8]) -> Result<Self> {
+        Self::verify(Program::decode_binary_artifact(bytes)?.trust_artifact_policy())
     }
 }
 
@@ -249,6 +276,28 @@ impl BinaryWriter {
             self.i64(instruction.arg);
             self.i64(instruction.arg2);
         }
+        Ok(())
+    }
+
+    fn permissions(&mut self, permissions: &ModulePermissions) -> Result<()> {
+        self.u8(permissions.allows_filesystem_read() as u8);
+        self.u8(permissions.allows_filesystem_write() as u8);
+        match permissions.environment_read_allowlist() {
+            None => self.u8(0),
+            Some(values) => {
+                self.u8(1);
+                self.string_list(values)?;
+            }
+        }
+        self.u8(permissions.network_outbound() as u8);
+        self.u8(permissions.network_listen() as u8);
+        self.u8(permissions.process_spawn() as u8);
+        self.u8(permissions.ffi_allowed() as u8);
+        self.u8(permissions.graphics_gpu() as u8);
+        self.u8(permissions.hardware_access() as u8);
+        self.u8(permissions.threads_allowed() as u8);
+        self.u8(permissions.unsafe_memory_allowed() as u8);
+        self.u8(permissions.linux_pipelines_allowed() as u8);
         Ok(())
     }
 }
@@ -366,6 +415,52 @@ impl<'a> BinaryReader<'a> {
         Ok(code)
     }
 
+    fn boolean(&mut self, name: &str) -> Result<bool> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(TinyOneError::compile(format!(
+                "Binary artifact {name} must be encoded as 0 or 1"
+            ))),
+        }
+    }
+
+    fn permissions(
+        &mut self,
+        capabilities: ModuleCapabilities,
+        name: &str,
+    ) -> Result<ModulePermissions> {
+        let filesystem_read = self.boolean(&format!("{name} filesystem read"))?;
+        let filesystem_write = self.boolean(&format!("{name} filesystem write"))?;
+        let environment_read = match self.u8()? {
+            0 => None,
+            1 => Some(self.string_list(
+                &format!("{name} environment allowlist"),
+                MAX_PERMISSION_ENVIRONMENT_VARIABLES,
+            )?),
+            _ => {
+                return Err(TinyOneError::compile(format!(
+                    "Binary artifact {name} environment allowlist tag must be 0 or 1"
+                )));
+            }
+        };
+        ModulePermissions::from_artifact(
+            capabilities,
+            filesystem_read,
+            filesystem_write,
+            environment_read,
+            self.boolean(&format!("{name} network outbound"))?,
+            self.boolean(&format!("{name} network listen"))?,
+            self.boolean(&format!("{name} process spawn"))?,
+            self.boolean(&format!("{name} ffi"))?,
+            self.boolean(&format!("{name} graphics"))?,
+            self.boolean(&format!("{name} hardware"))?,
+            self.boolean(&format!("{name} threads"))?,
+            self.boolean(&format!("{name} unsafe memory"))?,
+            self.boolean(&format!("{name} linux pipelines"))?,
+        )
+    }
+
     fn is_empty(&self) -> bool {
         self.offset == self.bytes.len()
     }
@@ -379,7 +474,7 @@ mod tests {
     fn minimal_binary_round_trip_verifies() {
         let program = Program::new(vec![Instr::new(Op::Halt, 0, 0)], 0);
         let bytes = program.to_binary_artifact().expect("encode");
-        let decoded = Program::from_binary_artifact(&bytes).expect("decode");
+        let decoded = Program::from_trusted_binary_artifact(&bytes).expect("trusted decode");
         assert_eq!(program, decoded);
     }
 

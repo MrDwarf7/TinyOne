@@ -15,7 +15,7 @@ optimizer, verifier, portable VM, heap/runtime model, bytecode artifact
 support, adaptive execution support, host integration surfaces, CLI tooling,
 and early allocator-integration scaffolding.
 
-Current crate version: ``1.4.0`` (the implementation is now managed as the
+Current crate version: ``1.5.1`` (the implementation is now managed as the
 public v1 release line while language work proceeds internally under v2).
 
 The current Rust crate lives in ``TinyOne/`` in this checkout. TinyLang is the
@@ -286,6 +286,19 @@ variants, so JSON artifacts containing enum construction are rejected by
 verification. The decoder applies its table and instruction bounds before it
 builds each program table; the full verifier budget check completes before
 execution.
+
+Artifact authority
+~~~~~~~~~~~~~~~~~~
+
+New JSON artifacts use schema version 2 and compact binary artifacts use
+schema version 4; both record the complete root and module permission policy.
+Ordinary artifact loading (including the CLI, C FFI, and ``load_artifact``)
+treats that policy as untrusted metadata and therefore grants no host
+capabilities. An embedding application may use the explicit trusted Rust
+loaders only after it has independently authenticated the artifact bytes and
+accepted the recorded policy. This prevents a supplied artifact from adding
+filesystem, environment, thread, network, process, hardware, graphics, or
+unsafe-memory authority on its own.
 
 Runtime, source, and FFI
 ~~~~~~~~~~~~~~~~~~~~~~~~

@@ -4,9 +4,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::{
-    CompileCacheStatus, Compiler, CompilerSharedState, Lexer, ModuleCapabilities, ModuleResolver,
-    PeepholeOptimizer, Program, Result, TinyOneError, VerifiedProgram, compile_cache,
-    read_source_file,
+    CompileCacheStatus, Compiler, CompilerSharedState, Lexer, ModuleCapabilities,
+    ModulePermissions, ModuleResolver, PeepholeOptimizer, Program, Result, TinyOneError,
+    VerifiedProgram, compile_cache, read_source_file,
 };
 
 pub fn compile_source(source: &str) -> Result<Arc<Program>> {
@@ -51,7 +51,7 @@ fn compile_source_unoptimized_program(source: &str, filename: &str) -> Result<Pr
         None,
         false,
         "",
-        ModuleCapabilities::all(),
+        ModulePermissions::from_capabilities(ModuleCapabilities::all()),
         shared,
     )?;
     compiler.compile()
@@ -203,7 +203,7 @@ fn compile_module_fragment(
         Some(Rc::clone(&resolver)),
         true,
         module_name,
-        ModuleCapabilities::none(),
+        ModulePermissions::from_capabilities(ModuleCapabilities::none()),
         shared,
     )?;
     let program = compiler.compile()?;
@@ -232,7 +232,7 @@ fn compile_canonical_file(
         Some(Rc::clone(&resolver)),
         false,
         "",
-        ModuleCapabilities::all(),
+        ModulePermissions::from_capabilities(ModuleCapabilities::all()),
         shared,
     )?
     .with_runtime_policy(root_capabilities, vm_settings);

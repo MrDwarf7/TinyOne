@@ -7,7 +7,9 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest as ShaDigest, Sha256};
 use toml::Value as TomlValue;
 
-use crate::{ModuleCapabilities, Result, TinyOneError, VmSettings, content_digest};
+use crate::{
+    ModuleCapabilities, ModulePermissions, Result, TinyOneError, VmSettings, content_digest,
+};
 
 const CONFIG_FILE: &str = "Config.toml";
 const MODULE_MANIFEST_FILE: &str = "module.toml";
@@ -88,6 +90,8 @@ struct SignatureMetadata {
 pub(crate) struct SignatureVerification {
     pub(crate) inputs: Vec<(PathBuf, [u8; 16], usize)>,
     pub(crate) declared_capabilities: ModuleCapabilities,
+    pub(crate) declared_permissions: ModulePermissions,
+    pub(crate) expires_at: u64,
 }
 
 /// Policy discovered from the nearest ancestor `Config.toml`.
@@ -356,6 +360,7 @@ impl ProjectConfig {
                     "Module {module_name:?} failed Ed25519 signature verification"
                 ))
             })?;
+        let declared_permissions = manifest.runtime_permissions();
         Ok(Some(SignatureVerification {
             inputs: vec![
                 (
@@ -365,39 +370,29 @@ impl ProjectConfig {
                 ),
                 (signature_path, content_digest(&bytes), bytes.len()),
             ],
-            declared_capabilities: manifest.runtime_capabilities()?,
+            declared_capabilities: declared_permissions.capabilities(),
+            declared_permissions,
+            expires_at: metadata.expires_at,
         }))
     }
 }
 
 impl ModuleManifest {
-    fn runtime_capabilities(&self) -> Result<ModuleCapabilities> {
-        let mut names = Vec::new();
-        if self.filesystem_read || self.filesystem_write {
-            names.push("filesystem".to_string());
-        }
-        if !self.environment_read.is_empty() {
-            names.push("environment".to_string());
-        }
-        if self.threads_allowed {
-            names.push("threads".to_string());
-        }
-        if self.ffi_allowed || self.unsafe_memory_allowed {
-            names.push("unsafe_memory".to_string());
-        }
-        if self.network_outbound || self.network_listen {
-            names.push("network".to_string());
-        }
-        if self.graphics_gpu {
-            names.push("graphics".to_string());
-        }
-        if self.hardware_access {
-            names.push("hardware".to_string());
-        }
-        if self.process_spawn || self.linux_pipelines_allowed {
-            names.push("linux_pipelines".to_string());
-        }
-        ModuleCapabilities::from_names(&names)
+    fn runtime_permissions(&self) -> ModulePermissions {
+        ModulePermissions::from_signed_manifest(
+            self.filesystem_read,
+            self.filesystem_write,
+            self.environment_read.clone(),
+            self.network_outbound,
+            self.network_listen,
+            self.process_spawn,
+            self.ffi_allowed,
+            self.graphics_gpu,
+            self.hardware_access,
+            self.threads_allowed,
+            self.unsafe_memory_allowed,
+            self.linux_pipelines_allowed,
+        )
     }
 }
 
@@ -1447,6 +1442,45 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     use super::*;
+
+    #[test]
+    fn signed_manifest_runtime_permissions_keep_fine_grained_grants() {
+        let manifest = parse_module_manifest(
+            br#"
+            [module]
+            name = "fine-policy"
+            version = "1.0.0"
+            publisher = "example-corp"
+
+            [purpose]
+            description = "Tests exact runtime permissions"
+
+            [capabilities.filesystem]
+            read = true
+            write = false
+
+            [capabilities.environment]
+            read = ["HTTP_PROXY"]
+
+            [capabilities.network]
+            outbound = true
+            listen = false
+
+            [capabilities.process]
+            spawn = true
+            "#,
+        )
+        .expect("valid manifest");
+        let permissions = manifest.runtime_permissions();
+        assert!(permissions.allows_filesystem_read());
+        assert!(!permissions.allows_filesystem_write());
+        assert!(permissions.allows_environment_read("HTTP_PROXY"));
+        assert!(!permissions.allows_environment_read("SECRET_TOKEN"));
+        assert!(permissions.network_outbound());
+        assert!(!permissions.network_listen());
+        assert!(permissions.process_spawn());
+        assert!(!permissions.linux_pipelines_allowed());
+    }
 
     #[test]
     fn central_root_certificate_delegates_company_module_signing() {

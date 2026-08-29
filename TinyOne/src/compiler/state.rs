@@ -2,12 +2,16 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::{EnumVariantDef, Function, ModuleCapabilities, ModuleDef, ModuleImportDef, StructDef};
+use crate::{
+    EnumVariantDef, Function, ModuleCapabilities, ModuleDef, ModuleImportDef, ModulePermissions,
+    StructDef,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModuleInfo {
     pub(crate) name: String,
     pub(crate) capabilities: ModuleCapabilities,
+    pub(crate) permissions: ModulePermissions,
     pub(crate) function_exports: HashMap<String, usize>,
     pub(crate) struct_exports: HashMap<String, usize>,
     pub(crate) all_functions: HashSet<String>,

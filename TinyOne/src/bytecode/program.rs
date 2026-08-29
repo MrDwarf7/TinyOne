@@ -148,6 +148,298 @@ impl ModuleCapabilities {
     }
 }
 
+/// The host authority granted to one compilation unit.
+///
+/// `ModuleCapabilities` is the compact, backwards-compatible summary used
+/// for coarse policy checks.  Signed module manifests are more specific than
+/// that summary, though: a module may read files but not write them, and may
+/// read only a named set of environment variables.  Keeping those details in
+/// the executable program is required so the runtime cannot accidentally turn
+/// a signed declaration into a broader grant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModulePermissions {
+    capabilities: ModuleCapabilities,
+    filesystem_read: bool,
+    filesystem_write: bool,
+    /// `None` is the legacy/configured broad environment grant. `Some` is an
+    /// exact signed-manifest allowlist, including `Some(vec![])` for no grant.
+    environment_read: Option<Vec<String>>,
+    network_outbound: bool,
+    network_listen: bool,
+    process_spawn: bool,
+    ffi_allowed: bool,
+    graphics_gpu: bool,
+    hardware_access: bool,
+    threads_allowed: bool,
+    unsafe_memory_allowed: bool,
+    linux_pipelines_allowed: bool,
+}
+
+impl ModulePermissions {
+    pub(crate) fn none() -> Self {
+        Self::from_capabilities(ModuleCapabilities::none())
+    }
+
+    /// Retains the historic semantics of an unqualified Config.toml or
+    /// `tinyone.json` capability list: each selected coarse capability grants
+    /// all of its currently supported sub-permissions.
+    pub(crate) fn from_capabilities(capabilities: ModuleCapabilities) -> Self {
+        Self {
+            filesystem_read: capabilities.allows(ModuleCapability::Filesystem),
+            filesystem_write: capabilities.allows(ModuleCapability::Filesystem),
+            environment_read: if capabilities.allows(ModuleCapability::Environment) {
+                None
+            } else {
+                Some(Vec::new())
+            },
+            network_outbound: capabilities.allows(ModuleCapability::Network),
+            network_listen: capabilities.allows(ModuleCapability::Network),
+            process_spawn: capabilities.allows(ModuleCapability::LinuxPipelines),
+            ffi_allowed: capabilities.allows(ModuleCapability::UnsafeMemory),
+            graphics_gpu: capabilities.allows(ModuleCapability::Graphics),
+            hardware_access: capabilities.allows(ModuleCapability::Hardware),
+            threads_allowed: capabilities.allows(ModuleCapability::Threads),
+            unsafe_memory_allowed: capabilities.allows(ModuleCapability::UnsafeMemory),
+            linux_pipelines_allowed: capabilities.allows(ModuleCapability::LinuxPipelines),
+            capabilities,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_signed_manifest(
+        filesystem_read: bool,
+        filesystem_write: bool,
+        environment_read: Vec<String>,
+        network_outbound: bool,
+        network_listen: bool,
+        process_spawn: bool,
+        ffi_allowed: bool,
+        graphics_gpu: bool,
+        hardware_access: bool,
+        threads_allowed: bool,
+        unsafe_memory_allowed: bool,
+        linux_pipelines_allowed: bool,
+    ) -> Self {
+        let mut bits = 0u8;
+        if filesystem_read || filesystem_write {
+            bits |= ModuleCapability::Filesystem.bit();
+        }
+        if !environment_read.is_empty() {
+            bits |= ModuleCapability::Environment.bit();
+        }
+        if threads_allowed {
+            bits |= ModuleCapability::Threads.bit();
+        }
+        if ffi_allowed || unsafe_memory_allowed {
+            bits |= ModuleCapability::UnsafeMemory.bit();
+        }
+        if network_outbound || network_listen {
+            bits |= ModuleCapability::Network.bit();
+        }
+        if graphics_gpu {
+            bits |= ModuleCapability::Graphics.bit();
+        }
+        if hardware_access {
+            bits |= ModuleCapability::Hardware.bit();
+        }
+        if process_spawn || linux_pipelines_allowed {
+            bits |= ModuleCapability::LinuxPipelines.bit();
+        }
+        Self {
+            capabilities: ModuleCapabilities(bits),
+            filesystem_read,
+            filesystem_write,
+            environment_read: Some(environment_read),
+            network_outbound,
+            network_listen,
+            process_spawn,
+            ffi_allowed,
+            graphics_gpu,
+            hardware_access,
+            threads_allowed,
+            unsafe_memory_allowed,
+            linux_pipelines_allowed,
+        }
+    }
+
+    /// Reconstructs policy metadata carried by a versioned artifact.  The
+    /// detailed fields must be a subset of the coarse capability bits.
+    /// This allows an artifact to retain an intentionally broad legacy grant
+    /// while still enforcing its narrower detailed policy at runtime.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_artifact(
+        capabilities: ModuleCapabilities,
+        filesystem_read: bool,
+        filesystem_write: bool,
+        environment_read: Option<Vec<String>>,
+        network_outbound: bool,
+        network_listen: bool,
+        process_spawn: bool,
+        ffi_allowed: bool,
+        graphics_gpu: bool,
+        hardware_access: bool,
+        threads_allowed: bool,
+        unsafe_memory_allowed: bool,
+        linux_pipelines_allowed: bool,
+    ) -> Result<Self> {
+        if let Some(allowlist) = &environment_read {
+            for (index, name) in allowlist.iter().enumerate() {
+                if name.is_empty()
+                    || !name.bytes().enumerate().all(|(position, byte)| {
+                        byte.is_ascii_uppercase()
+                            || byte == b'_'
+                            || (position > 0 && byte.is_ascii_digit())
+                    })
+                    || (index > 0 && allowlist[index - 1] >= *name)
+                {
+                    return Err(TinyOneError::compile(
+                        "Artifact module environment allowlist must contain sorted, unique uppercase variable names",
+                    ));
+                }
+            }
+        }
+        let expected = Self::from_detailed_fields(
+            filesystem_read,
+            filesystem_write,
+            environment_read
+                .as_ref()
+                .is_none_or(|items| !items.is_empty()),
+            network_outbound,
+            network_listen,
+            process_spawn,
+            ffi_allowed,
+            graphics_gpu,
+            hardware_access,
+            threads_allowed,
+            unsafe_memory_allowed,
+            linux_pipelines_allowed,
+        );
+        if !expected.is_subset_of(capabilities) {
+            return Err(TinyOneError::compile(
+                "Artifact module detailed permissions exceed its declared capabilities",
+            ));
+        }
+        Ok(Self {
+            capabilities,
+            filesystem_read,
+            filesystem_write,
+            environment_read,
+            network_outbound,
+            network_listen,
+            process_spawn,
+            ffi_allowed,
+            graphics_gpu,
+            hardware_access,
+            threads_allowed,
+            unsafe_memory_allowed,
+            linux_pipelines_allowed,
+        })
+    }
+
+    pub(crate) const fn capabilities(&self) -> ModuleCapabilities {
+        self.capabilities
+    }
+
+    pub(crate) const fn allows_filesystem_read(&self) -> bool {
+        self.filesystem_read
+    }
+
+    pub(crate) const fn allows_filesystem_write(&self) -> bool {
+        self.filesystem_write
+    }
+
+    pub(crate) fn allows_environment_read(&self, name: &str) -> bool {
+        self.capabilities.allows(ModuleCapability::Environment)
+            && self
+                .environment_read
+                .as_ref()
+                .is_none_or(|allowed| allowed.iter().any(|item| item == name))
+    }
+
+    pub(crate) const fn network_outbound(&self) -> bool {
+        self.network_outbound
+    }
+
+    pub(crate) const fn network_listen(&self) -> bool {
+        self.network_listen
+    }
+
+    pub(crate) const fn process_spawn(&self) -> bool {
+        self.process_spawn
+    }
+
+    pub(crate) const fn ffi_allowed(&self) -> bool {
+        self.ffi_allowed
+    }
+
+    pub(crate) const fn graphics_gpu(&self) -> bool {
+        self.graphics_gpu
+    }
+
+    pub(crate) const fn hardware_access(&self) -> bool {
+        self.hardware_access
+    }
+
+    pub(crate) const fn threads_allowed(&self) -> bool {
+        self.threads_allowed
+    }
+
+    pub(crate) const fn unsafe_memory_allowed(&self) -> bool {
+        self.unsafe_memory_allowed
+    }
+
+    pub(crate) const fn linux_pipelines_allowed(&self) -> bool {
+        self.linux_pipelines_allowed
+    }
+
+    pub(crate) fn environment_read_allowlist(&self) -> Option<&[String]> {
+        self.environment_read.as_deref()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_detailed_fields(
+        filesystem_read: bool,
+        filesystem_write: bool,
+        environment_read: bool,
+        network_outbound: bool,
+        network_listen: bool,
+        process_spawn: bool,
+        ffi_allowed: bool,
+        graphics_gpu: bool,
+        hardware_access: bool,
+        threads_allowed: bool,
+        unsafe_memory_allowed: bool,
+        linux_pipelines_allowed: bool,
+    ) -> ModuleCapabilities {
+        let mut bits = 0u8;
+        if filesystem_read || filesystem_write {
+            bits |= ModuleCapability::Filesystem.bit();
+        }
+        if environment_read {
+            bits |= ModuleCapability::Environment.bit();
+        }
+        if threads_allowed {
+            bits |= ModuleCapability::Threads.bit();
+        }
+        if ffi_allowed || unsafe_memory_allowed {
+            bits |= ModuleCapability::UnsafeMemory.bit();
+        }
+        if network_outbound || network_listen {
+            bits |= ModuleCapability::Network.bit();
+        }
+        if graphics_gpu {
+            bits |= ModuleCapability::Graphics.bit();
+        }
+        if hardware_access {
+            bits |= ModuleCapability::Hardware.bit();
+        }
+        if process_spawn || linux_pipelines_allowed {
+            bits |= ModuleCapability::LinuxPipelines.bit();
+        }
+        ModuleCapabilities(bits)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     pub(crate) name: String,
@@ -195,6 +487,7 @@ pub struct ModuleDef {
     pub(crate) exported_functions: Vec<String>,
     pub(crate) exported_structs: Vec<String>,
     pub(crate) capabilities: ModuleCapabilities,
+    pub(crate) permissions: ModulePermissions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +504,11 @@ pub struct Program {
     /// Authority available to root code. Imported modules retain their own,
     /// narrower grants even when called by root code.
     pub(crate) root_capabilities: ModuleCapabilities,
+    pub(crate) root_permissions: ModulePermissions,
+    /// Decoded artifacts are data, not an authority grant. This flag is set
+    /// only by compiler output or an embedding that explicitly authenticates
+    /// an artifact before opting into its serialized policy.
+    pub(crate) policy_trusted: bool,
     /// Per-program limits selected by the project configuration.
     pub(crate) vm_settings: VmSettings,
 }
@@ -230,6 +528,8 @@ impl Program {
             modules: Vec::new(),
             enum_variants: Vec::new(),
             root_capabilities: ModuleCapabilities::all(),
+            root_permissions: ModulePermissions::from_capabilities(ModuleCapabilities::all()),
+            policy_trusted: true,
             vm_settings: VmSettings::default(),
         }
     }
@@ -266,24 +566,56 @@ impl Program {
     pub(crate) fn capabilities_for_function(
         &self,
         function_index: Option<usize>,
-    ) -> ModuleCapabilities {
+    ) -> ModulePermissions {
+        if !self.policy_trusted {
+            return ModulePermissions::none();
+        }
         let Some(function_index) = function_index else {
-            return self.root_capabilities;
+            return self.root_permissions.clone();
         };
         let Some(function) = self.functions.get(function_index) else {
-            return ModuleCapabilities::none();
+            return ModulePermissions::none();
         };
         let Some((module_name, local_name)) = function.name.split_once('.') else {
-            return self.root_capabilities;
+            return self.root_permissions.clone();
         };
         if local_name.contains('.') {
-            return ModuleCapabilities::none();
+            return ModulePermissions::none();
         }
-        self.modules
+        if let Some(module) = self
+            .modules
             .iter()
             .find(|module| module.name == module_name)
-            .map(|module| module.capabilities)
-            .unwrap_or_else(ModuleCapabilities::none)
+        {
+            module.permissions.clone()
+        } else {
+            ModulePermissions::none()
+        }
+    }
+
+    /// Marks policy metadata as an explicit embedding decision after the
+    /// artifact bytes have been authenticated by the caller. Generic artifact
+    /// loaders intentionally leave it disabled.
+    pub(crate) fn trust_artifact_policy(mut self) -> Self {
+        self.policy_trusted = true;
+        self
+    }
+
+    /// Whether this bytecode needs an authenticated cache entry to run.
+    /// Disk-cache records are attacker-writable data. Any builtin dispatch is
+    /// conservatively treated as host-facing: this avoids making a future
+    /// builtin an authority bypass merely because the cache scanner was not
+    /// updated at the same time. Such programs are recompiled from current
+    /// source and configuration instead.
+    pub(crate) fn needs_runtime_host_permissions(&self) -> bool {
+        self.code
+            .iter()
+            .chain(
+                self.functions
+                    .iter()
+                    .flat_map(|function| function.code.iter()),
+            )
+            .any(|instruction| instruction.op == crate::Op::Builtin)
     }
 
     pub fn with_functions(mut self, functions: Vec<Function>) -> Self {
@@ -372,10 +704,10 @@ impl Program {
 
     pub fn fingerprint(&self) -> String {
         let mut hasher = Blake2b512::new();
-        hasher.update(b"tinyone-program-fingerprint-v3");
+        hasher.update(b"tinyone-program-fingerprint-v4");
         self.hash_code(&mut hasher, &self.code);
         hasher.update((self.slot_count as u64).to_le_bytes());
-        hasher.update([self.root_capabilities.bits()]);
+        hash_module_permissions(&mut hasher, &self.root_permissions);
         hasher.update((self.vm_settings.max_call_depth as u64).to_le_bytes());
         hash_string_list(&mut hasher, self.names.iter());
         hasher.update((self.functions.len() as u64).to_le_bytes());
@@ -413,7 +745,7 @@ impl Program {
             );
             hash_string_list(&mut hasher, module.exported_functions.iter());
             hash_string_list(&mut hasher, module.exported_structs.iter());
-            hasher.update([module.capabilities.bits()]);
+            hash_module_permissions(&mut hasher, &module.permissions);
         }
         hasher.update((self.enum_variants.len() as u64).to_le_bytes());
         for item in &self.enum_variants {
@@ -498,6 +830,19 @@ impl ModuleDef {
     pub fn capabilities(&self) -> Vec<String> {
         self.capabilities.names()
     }
+
+    /// Fine-grained signed-manifest declarations, when present. `None` for
+    /// environment access means a legacy broad environment capability grant.
+    pub fn filesystem_permissions(&self) -> (bool, bool) {
+        (
+            self.permissions.allows_filesystem_read(),
+            self.permissions.allows_filesystem_write(),
+        )
+    }
+
+    pub fn environment_read_allowlist(&self) -> Option<&[String]> {
+        self.permissions.environment_read_allowlist()
+    }
 }
 
 fn hash_string_u32(hasher: &mut Blake2b512, value: &str) {
@@ -520,6 +865,28 @@ where
     for item in items {
         hash_string_u32(hasher, item);
     }
+}
+
+fn hash_module_permissions(hasher: &mut Blake2b512, permissions: &ModulePermissions) {
+    hasher.update([permissions.capabilities.bits()]);
+    hasher.update([permissions.filesystem_read as u8]);
+    hasher.update([permissions.filesystem_write as u8]);
+    match &permissions.environment_read {
+        None => hasher.update([0]),
+        Some(values) => {
+            hasher.update([1]);
+            hash_string_list(hasher, values.iter());
+        }
+    }
+    hasher.update([permissions.network_outbound as u8]);
+    hasher.update([permissions.network_listen as u8]);
+    hasher.update([permissions.process_spawn as u8]);
+    hasher.update([permissions.ffi_allowed as u8]);
+    hasher.update([permissions.graphics_gpu as u8]);
+    hasher.update([permissions.hardware_access as u8]);
+    hasher.update([permissions.threads_allowed as u8]);
+    hasher.update([permissions.unsafe_memory_allowed as u8]);
+    hasher.update([permissions.linux_pipelines_allowed as u8]);
 }
 
 /// A `Program` that has been validated by `BytecodeVerifier`.
@@ -585,5 +952,41 @@ impl VerifiedProgram {
             Ok(program) => program,
             Err(program) => (*program).clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Op;
+
+    #[test]
+    fn cache_authority_scan_rejects_any_builtin_in_main_or_function() {
+        let safe = Program::new(vec![Instr::new(Op::Halt, 0, 0)], 0);
+        assert!(!safe.needs_runtime_host_permissions());
+
+        let filesystem_builtin = crate::builtin_index("fs_read").expect("filesystem builtin");
+        let in_main = Program::new(
+            vec![Instr::new(Op::Builtin, filesystem_builtin as i64, 1)],
+            0,
+        );
+        assert!(in_main.needs_runtime_host_permissions());
+
+        let otherwise_safe_builtin = crate::builtin_index("len").expect("length builtin");
+        let in_main = Program::new(
+            vec![Instr::new(Op::Builtin, otherwise_safe_builtin as i64, 1)],
+            0,
+        );
+        assert!(in_main.needs_runtime_host_permissions());
+
+        let unsafe_builtin = crate::builtin_index("free").expect("unsafe builtin");
+        let in_function =
+            Program::new(vec![Instr::new(Op::Halt, 0, 0)], 0).with_functions(vec![Function::new(
+                "module.release",
+                0,
+                vec![Instr::new(Op::Builtin, unsafe_builtin as i64, 1)],
+                0,
+            )]);
+        assert!(in_function.needs_runtime_host_permissions());
     }
 }

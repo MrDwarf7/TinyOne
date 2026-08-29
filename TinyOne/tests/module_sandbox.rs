@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tinyone::{Program, TinyOneError, compile_file, run_program, write_binary_artifact};
+use tinyone::{
+    Program, TinyOneError, VerifiedProgram, compile_file, run_program, write_binary_artifact,
+};
 
 struct TestDir(PathBuf);
 
@@ -36,6 +38,24 @@ fn run(program: Arc<Program>, mode: &str) -> Result<String, TinyOneError> {
     let mut stdout = Vec::new();
     run_program(program, mode, &mut stdout, Vec::new())?;
     Ok(String::from_utf8(stdout).expect("TinyOne output is UTF-8"))
+}
+
+#[cfg(unix)]
+fn create_file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn create_file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_file_symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "this platform does not support file symlinks in the test harness",
+    ))
 }
 
 fn write_fs_module(project: &TestDir, manifest_module: &str) -> PathBuf {
@@ -99,7 +119,23 @@ fn manifest_grant_is_retained_by_vm_jit_and_artifacts() {
         );
     }
 
-    let json_round_trip = Program::from_artifact(program.to_artifact()).expect("JSON artifact");
+    let artifact = program.to_artifact();
+    let untrusted_json = Program::from_artifact(artifact.clone()).expect("untrusted JSON artifact");
+    assert_eq!(untrusted_json.modules()[0].capabilities(), ["filesystem"]);
+    for mode in ["vm", "jit"] {
+        let error = run(Arc::new(untrusted_json.clone()), mode)
+            .expect_err("untrusted JSON policy must not grant filesystem access");
+        assert!(
+            error
+                .to_string()
+                .contains("builtin \"fs_exists\" requires \"filesystem\""),
+            "{error}"
+        );
+    }
+
+    let json_round_trip = VerifiedProgram::from_trusted_artifact(artifact)
+        .expect("trusted JSON artifact")
+        .into_program();
     assert_eq!(json_round_trip.modules()[0].capabilities(), ["filesystem"]);
     assert_eq!(
         run(Arc::new(json_round_trip), "jit").expect("JSON artifact runs"),
@@ -109,7 +145,22 @@ fn manifest_grant_is_retained_by_vm_jit_and_artifacts() {
     let binary_path = project.path().join("program.tob");
     write_binary_artifact(&program, &binary_path).expect("write binary artifact");
     let binary = fs::read(binary_path).expect("read binary artifact");
-    let binary_round_trip = Program::from_binary_artifact(&binary).expect("binary artifact");
+    let untrusted_binary =
+        Program::from_binary_artifact(&binary).expect("untrusted binary artifact");
+    assert_eq!(untrusted_binary.modules()[0].capabilities(), ["filesystem"]);
+    for mode in ["vm", "jit"] {
+        let error = run(Arc::new(untrusted_binary.clone()), mode)
+            .expect_err("untrusted binary policy must not grant filesystem access");
+        assert!(
+            error
+                .to_string()
+                .contains("builtin \"fs_exists\" requires \"filesystem\""),
+            "{error}"
+        );
+    }
+    let binary_round_trip = VerifiedProgram::from_trusted_binary_artifact(&binary)
+        .expect("trusted binary artifact")
+        .into_program();
     assert_eq!(
         binary_round_trip.modules()[0].capabilities(),
         ["filesystem"]
@@ -118,6 +169,134 @@ fn manifest_grant_is_retained_by_vm_jit_and_artifacts() {
         run(Arc::new(binary_round_trip), "vm").expect("binary artifact runs"),
         "1\n"
     );
+}
+
+#[test]
+fn detailed_module_permissions_limit_filesystem_writes_and_environment_reads() {
+    let project = TestDir::new("fine-module-permissions");
+    fs::write(
+        project.path().join("tinyone.json"),
+        r#"{"modules":{"files":{"path":"files.to","capabilities":["filesystem"]},"env":{"path":"env.to","capabilities":["environment"]}}}"#,
+    )
+    .expect("write manifest");
+    fs::write(
+        project.path().join("files.to"),
+        r#"
+        export fn write_probe() {
+          let bytes = buffer(1)
+          return unsafe fs_write("must-not-be-created", bytes)
+        }
+        "#,
+    )
+    .expect("write filesystem module");
+    fs::write(
+        project.path().join("env.to"),
+        r#"
+        export fn env_probe() {
+          return sys_env_get("SECRET_TOKEN")
+        }
+        "#,
+    )
+    .expect("write environment module");
+    let main = project.path().join("main.to");
+    fs::write(
+        &main,
+        r#"
+        import "files" as files
+        import "env" as env
+        print files.write_probe()
+        print env.env_probe()
+        "#,
+    )
+    .expect("write entrypoint");
+
+    let program = compile_file(main).expect("compile broad compatibility grants");
+    let mut artifact = program.to_artifact();
+    let modules = artifact["modules"]
+        .as_array_mut()
+        .expect("artifact module list");
+    let file_permissions = modules[0]["permissions"]
+        .as_object_mut()
+        .expect("filesystem permission object");
+    file_permissions.insert("filesystem_read".to_string(), serde_json::Value::Bool(true));
+    file_permissions.insert(
+        "filesystem_write".to_string(),
+        serde_json::Value::Bool(false),
+    );
+    let env_permissions = modules[1]["permissions"]
+        .as_object_mut()
+        .expect("environment permission object");
+    env_permissions.insert(
+        "environment_read".to_string(),
+        serde_json::json!(["PUBLIC_VALUE"]),
+    );
+
+    let restricted = VerifiedProgram::from_trusted_artifact(artifact)
+        .expect("trusted artifact with detailed policy")
+        .into_program();
+    assert_eq!(
+        restricted.modules()[0].filesystem_permissions(),
+        (true, false)
+    );
+    assert_eq!(
+        restricted.modules()[1].environment_read_allowlist(),
+        Some(["PUBLIC_VALUE".to_string()].as_slice())
+    );
+    for mode in ["vm", "jit"] {
+        let error = run(Arc::new(restricted.clone()), mode)
+            .expect_err("filesystem write must be denied before host access");
+        assert!(
+            error
+                .to_string()
+                .contains("builtin \"fs_write\" is outside the signed module declaration"),
+            "{error}"
+        );
+    }
+
+    let mut artifact = program.to_artifact();
+    let modules = artifact["modules"]
+        .as_array_mut()
+        .expect("artifact module list");
+    let file_permissions = modules[0]["permissions"]
+        .as_object_mut()
+        .expect("filesystem permission object");
+    file_permissions.insert("filesystem_read".to_string(), serde_json::Value::Bool(true));
+    file_permissions.insert(
+        "filesystem_write".to_string(),
+        serde_json::Value::Bool(false),
+    );
+    let env_permissions = modules[1]["permissions"]
+        .as_object_mut()
+        .expect("environment permission object");
+    env_permissions.insert(
+        "environment_read".to_string(),
+        serde_json::json!(["PUBLIC_VALUE"]),
+    );
+    let restricted = VerifiedProgram::from_trusted_artifact(artifact)
+        .expect("trusted artifact with detailed policy")
+        .into_program();
+
+    // Invoke only the environment module after removing the filesystem call,
+    // so we assert the dynamic variable-name allowlist independently.
+    let mut environment_only = restricted.to_artifact();
+    environment_only["code"] = serde_json::json!([
+        {"op": "CALL", "arg": 1, "arg2": 0},
+        {"op": "PRINT", "arg": 0, "arg2": 0},
+        {"op": "HALT", "arg": 0, "arg2": 0}
+    ]);
+    let environment_only = VerifiedProgram::from_trusted_artifact(environment_only)
+        .expect("trusted environment-only artifact")
+        .into_program();
+    for mode in ["vm", "jit"] {
+        let error = run(Arc::new(environment_only.clone()), mode)
+            .expect_err("undeclared environment variable must be denied");
+        assert!(
+            error.to_string().contains(
+                "builtin \"sys_env_get\" may not read environment variable \"SECRET_TOKEN\""
+            ),
+            "{error}"
+        );
+    }
 }
 
 #[test]
@@ -148,6 +327,53 @@ fn jit_direct_builtin_cannot_bypass_unsafe_memory_grant() {
             error
                 .to_string()
                 .contains("builtin \"free\" requires \"unsafe_memory\""),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn ffi_declaration_does_not_grant_unsafe_memory_to_vm_or_direct_jit() {
+    let project = TestDir::new("ffi-is-not-unsafe-memory");
+    fs::write(
+        project.path().join("tinyone.json"),
+        r#"{"modules":{"mem":{"path":"mem.to","capabilities":["unsafe_memory"]}}}"#,
+    )
+    .expect("write manifest");
+    fs::write(
+        project.path().join("mem.to"),
+        r#"
+        export fn release() {
+          let data = buffer(1)
+          return unsafe free(data)
+        }
+        "#,
+    )
+    .expect("write module");
+    let main = project.path().join("main.to");
+    fs::write(&main, "import \"mem\" as mem\nprint mem.release()\n").expect("write entrypoint");
+    let program = compile_file(main).expect("compile module");
+
+    let mut artifact = program.to_artifact();
+    let permissions = artifact["modules"][0]["permissions"]
+        .as_object_mut()
+        .expect("module permissions");
+    permissions.insert("ffi_allowed".to_string(), serde_json::Value::Bool(true));
+    permissions.insert(
+        "unsafe_memory_allowed".to_string(),
+        serde_json::Value::Bool(false),
+    );
+    let restricted = VerifiedProgram::from_trusted_artifact(artifact)
+        .expect("trusted FFI-only policy")
+        .into_program();
+
+    for mode in ["vm", "jit"] {
+        let error = run(Arc::new(restricted.clone()), mode)
+            .expect_err("FFI permission must not authorize unsafe memory");
+        assert!(
+            error
+                .to_string()
+                .contains("builtin \"free\" is outside the signed module declaration"),
             "{error}"
         );
     }
@@ -232,6 +458,42 @@ fn imports_and_manifest_targets_cannot_escape_the_entry_directory() {
     let manifest_error =
         compile_file(direct_escape).expect_err("escaping manifest target must fail");
     assert!(manifest_error.to_string().contains("escaping path"));
+}
+
+#[test]
+fn symlinked_imports_cannot_escape_the_entry_directory() {
+    let parent = TestDir::new("symlink-escape-parent");
+    let project = parent.path().join("project");
+    fs::create_dir(&project).expect("create project");
+    let outside = parent.path().join("outside.to");
+    fs::write(&outside, "export fn value() { return 1 }").expect("write external module");
+    let symlink = project.join("outside-link.to");
+
+    // Creating symlinks requires an elevated Windows token unless Developer
+    // Mode is enabled. The resolver's protection is covered whenever the
+    // host permits symlink creation; unsupported test hosts remain valid.
+    if let Err(error) = create_file_symlink(&outside, &symlink) {
+        if matches!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+        ) {
+            eprintln!("skipping symlink containment test: {error}");
+            return;
+        }
+        panic!("create symlink: {error}");
+    }
+
+    let main = project.join("main.to");
+    fs::write(
+        &main,
+        "import \"outside-link.to\" as outside\nprint outside.value()\n",
+    )
+    .expect("write entrypoint");
+    let error = compile_file(main).expect_err("symlink import must fail");
+    assert!(
+        error.to_string().contains("escapes module sandbox"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -348,7 +610,9 @@ fn config_toml_denies_root_code_and_preserves_the_policy_in_artifacts() {
     assert!(program.root_capabilities().is_empty());
     assert_eq!(program.max_call_depth(), 1);
 
-    let artifact = Program::from_artifact(program.to_artifact()).expect("JSON artifact");
+    let artifact = VerifiedProgram::from_trusted_artifact(program.to_artifact())
+        .expect("trusted JSON artifact")
+        .into_program();
     assert!(artifact.root_capabilities().is_empty());
     assert_eq!(artifact.max_call_depth(), 1);
     for mode in ["vm", "jit"] {
@@ -358,6 +622,43 @@ fn config_toml_denies_root_code_and_preserves_the_policy_in_artifacts() {
                 .to_string()
                 .contains("builtin \"fs_exists\" requires \"filesystem\""),
             "{error}"
+        );
+    }
+
+    let binary_path = project.path().join("restricted-root.tob");
+    write_binary_artifact(&program, &binary_path).expect("write binary artifact");
+    let binary = fs::read(binary_path).expect("read binary artifact");
+    let binary_artifact = VerifiedProgram::from_trusted_binary_artifact(&binary)
+        .expect("trusted binary artifact preserves root policy")
+        .into_program();
+    assert!(binary_artifact.root_capabilities().is_empty());
+    assert_eq!(binary_artifact.max_call_depth(), 1);
+    for mode in ["vm", "jit"] {
+        let error = run(Arc::new(binary_artifact.clone()), mode)
+            .expect_err("binary root filesystem denied");
+        assert!(
+            error
+                .to_string()
+                .contains("builtin \"fs_exists\" requires \"filesystem\""),
+            "{error}"
+        );
+    }
+
+    fs::write(
+        &main,
+        r#"
+        fn one_call_is_allowed() {
+          return 7
+        }
+        print one_call_is_allowed()
+        "#,
+    )
+    .expect("write exactly-one-call entrypoint");
+    let depth_boundary = compile_file(&main).expect("compile depth-boundary program");
+    for mode in ["vm", "jit"] {
+        assert_eq!(
+            run(depth_boundary.clone(), mode).expect("one nested call is permitted"),
+            "7\n"
         );
     }
 
@@ -379,6 +680,49 @@ fn config_toml_denies_root_code_and_preserves_the_policy_in_artifacts() {
             error
                 .to_string()
                 .contains("Call stack overflow after 1 nested call"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn string_selected_threads_cannot_turn_root_functions_into_module_deputies() {
+    let project = TestDir::new("deny-root-thread-deputy");
+    fs::write(
+        project.path().join("tinyone.json"),
+        r#"{"modules":{"plugin":{"path":"plugin.to","capabilities":["threads"]}}}"#,
+    )
+    .expect("write manifest");
+    fs::write(
+        project.path().join("plugin.to"),
+        r#"
+        export fn invoke_root() {
+          let thread = thread_spawn("host_filesystem")
+          return thread_join(thread)
+        }
+        "#,
+    )
+    .expect("write module");
+    let main = project.path().join("main.to");
+    fs::write(
+        &main,
+        r#"
+        import "plugin" as plugin
+        fn host_filesystem() {
+          return fs_exists(".")
+        }
+        print plugin.invoke_root()
+        "#,
+    )
+    .expect("write entrypoint");
+    let program = compile_file(main).expect("compile module");
+
+    for mode in ["vm", "jit"] {
+        let error = run(program.clone(), mode).expect_err("root function selection must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("thread_spawn: function \"host_filesystem\" not found or not exported"),
             "{error}"
         );
     }

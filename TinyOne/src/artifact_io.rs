@@ -11,7 +11,11 @@ pub fn load_artifact(path: impl AsRef<Path>) -> Result<Program> {
 }
 
 pub fn load_verified_artifact(path: impl AsRef<Path>) -> Result<VerifiedProgram> {
-    let bytes = read_limited_artifact(path.as_ref())?;
+    load_verified_untrusted_artifact(path.as_ref())
+}
+
+fn load_verified_untrusted_artifact(path: &Path) -> Result<VerifiedProgram> {
+    let bytes = read_limited_artifact(path)?;
     if bytes.starts_with(BINARY_ARTIFACT_MAGIC) {
         return VerifiedProgram::from_binary_artifact(&bytes);
     }

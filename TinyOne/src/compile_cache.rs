@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use blake2::{Blake2b512, Digest};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,9 @@ use crate::{
     load_verified_artifact, write_binary_artifact,
 };
 
-const CACHE_FORMAT_VERSION: u32 = 6;
+// v8 records the earliest signed-module expiry.  A cache entry must never
+// authorize a module after the signature used to compile it has expired.
+const CACHE_FORMAT_VERSION: u32 = 8;
 const MAX_CACHE_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_CACHE_INPUT_BYTES: usize = 1024 * 1024;
 const SMALL_CACHE_MAX_MODULES: usize = 2;
@@ -42,6 +44,9 @@ struct CacheRecord {
     fingerprint: String,
     module_count: usize,
     input_bytes: usize,
+    /// Earliest expiry among module signatures verified during compilation.
+    /// `None` means the source graph did not require module signatures.
+    signature_expires_at: Option<u64>,
     inputs: Vec<CacheInput>,
     resolutions: Vec<CacheResolution>,
     modules: Vec<CacheModule>,
@@ -97,6 +102,9 @@ pub(crate) fn lookup(root: &Path, optimize: bool) -> Result<CacheLookup> {
         return Ok(CacheLookup::Miss);
     };
     if !record_matches_request(&record, root, optimize) {
+        return Ok(CacheLookup::Miss);
+    }
+    if !signature_cache_entry_is_current(record.signature_expires_at)? {
         return Ok(CacheLookup::Miss);
     }
     if should_bypass_shape(record.module_count, record.input_bytes) {
@@ -170,8 +178,14 @@ pub(crate) fn lookup(root: &Path, optimize: bool) -> Result<CacheLookup> {
 }
 
 fn match_cached_program(path: &Path, expected_fingerprint: &str) -> Option<VerifiedProgram> {
+    // Cache files live beside project sources and are not an authenticated
+    // authority store. Decode them as untrusted data; any entry that dispatches
+    // a builtin is rebuilt from current source/configuration rather than
+    // allowed to re-grant serialized policy.
     let program = load_verified_artifact(path).ok()?;
-    (program.fingerprint() == expected_fingerprint).then_some(program)
+    (!program.program().needs_runtime_host_permissions()
+        && program.fingerprint() == expected_fingerprint)
+        .then_some(program)
 }
 
 pub(crate) fn should_bypass(root_source: &str, resolver: &ModuleResolver) -> bool {
@@ -285,6 +299,7 @@ pub(crate) fn store(
         input_bytes: root_source
             .len()
             .saturating_add(resolver.existing_input_bytes()),
+        signature_expires_at: resolver.signed_module_valid_until(),
         inputs: inputs
             .into_iter()
             .map(|(path, digest)| CacheInput {
@@ -344,6 +359,10 @@ pub(crate) fn store_incremental(
     );
     candidate.record.inputs = inputs.into_values().collect();
     candidate.record.fingerprint = verified.fingerprint().to_string();
+    candidate.record.signature_expires_at = earliest_expiry(
+        candidate.record.signature_expires_at,
+        resolver.signed_module_valid_until(),
+    );
 
     let mut resolutions = candidate
         .record
@@ -506,6 +525,26 @@ fn record_matches_request(record: &CacheRecord, root: &Path, optimize: bool) -> 
         && record.root == root
 }
 
+fn earliest_expiry(existing: Option<u64>, replacement: Option<u64>) -> Option<u64> {
+    match (existing, replacement) {
+        (Some(existing), Some(replacement)) => Some(existing.min(replacement)),
+        (Some(existing), None) => Some(existing),
+        (None, Some(replacement)) => Some(replacement),
+        (None, None) => None,
+    }
+}
+
+fn signature_cache_entry_is_current(expires_at: Option<u64>) -> Result<bool> {
+    let Some(expires_at) = expires_at else {
+        return Ok(true);
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| TinyOneError::compile("System clock is before the Unix epoch"))?;
+    Ok(now <= expires_at)
+}
+
 struct CachePaths {
     directory: PathBuf,
     metadata: PathBuf,
@@ -527,5 +566,19 @@ fn cache_paths(root: &Path, optimize: bool) -> CachePaths {
         metadata: directory.join(format!("{key}.json")),
         artifact: directory.join(format!("{key}.tob")),
         directory,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{earliest_expiry, signature_cache_entry_is_current};
+
+    #[test]
+    fn signature_expiry_invalidates_cache_entries_after_expiry() {
+        assert!(signature_cache_entry_is_current(None).expect("unsigned cache entry"));
+        assert!(signature_cache_entry_is_current(Some(u64::MAX)).expect("future signature"));
+        assert!(!signature_cache_entry_is_current(Some(0)).expect("expired signature"));
+        assert_eq!(earliest_expiry(Some(30), Some(20)), Some(20));
+        assert_eq!(earliest_expiry(Some(30), None), Some(30));
     }
 }

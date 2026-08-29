@@ -38,7 +38,7 @@ pub use bytecode::{
     BytecodeVerifier, EnumVariantDef, Function, Instr, ModuleDef, ModuleImportDef, Op,
     PeepholeOptimizer, Program, StructDef, VerifiedProgram,
 };
-pub(crate) use bytecode::{ModuleCapabilities, ModuleCapability};
+pub(crate) use bytecode::{ModuleCapabilities, ModuleCapability, ModulePermissions};
 pub use compile_cache::CompileCacheStatus;
 pub(crate) use compiler::{
     Compiler, CompilerSharedState, ModuleInfo, ModuleResolver, Resolver, ResolverInput,

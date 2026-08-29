@@ -1,8 +1,8 @@
 use serde_json::{Value as JsonValue, json};
 
 use crate::{
-    Function, Instr, ModuleCapabilities, ModuleDef, ModuleImportDef, Op, Program, Result,
-    StructDef, TinyOneError, VerifiedProgram, VmSettings,
+    Function, Instr, ModuleCapabilities, ModuleDef, ModuleImportDef, ModulePermissions, Op,
+    Program, Result, StructDef, TinyOneError, VerifiedProgram, VmSettings,
 };
 
 pub(crate) const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
@@ -18,18 +18,32 @@ const MAX_MODULES: usize = 256;
 const MAX_MODULE_IMPORTS: usize = 4_096;
 const MAX_MODULE_EXPORTS: usize = 4_096;
 const MAX_MODULE_CAPABILITIES: usize = 8;
+const MAX_PERMISSION_ENVIRONMENT_VARIABLES: usize = 4_096;
 const MAX_STRUCT_FIELDS: usize = 256;
 #[allow(dead_code)]
 const MAX_ENUM_VARIANTS: usize = 65_536;
 const MAX_NAMES: usize = 65_536;
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 
+// Version 1 did not define persisted execution policy. Keep accepting it as
+// a legacy input, but never give newly emitted policy-bearing artifacts that
+// version: a v1 reader would silently ignore the new fields.
+const LEGACY_JSON_ARTIFACT_VERSION: i64 = 1;
+const JSON_ARTIFACT_VERSION: i64 = 2;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JsonArtifactVersion {
+    LegacyV1,
+    V2,
+}
+
 impl Program {
     pub fn to_artifact(&self) -> JsonValue {
         json!({
             "format": "tinyone-bytecode",
-            "version": 1,
+            "version": JSON_ARTIFACT_VERSION,
             "root_capabilities": self.root_capabilities.names(),
+            "root_permissions": encode_permissions(&self.root_permissions),
             "vm": {
                 "max_call_depth": self.vm_settings.max_call_depth,
             },
@@ -62,6 +76,7 @@ impl Program {
                 "exported_functions": module.exported_functions,
                 "exported_structs": module.exported_structs,
                 "capabilities": module.capabilities.names(),
+                "permissions": encode_permissions(&module.permissions),
             })).collect::<Vec<_>>(),
         })
     }
@@ -70,15 +85,24 @@ impl Program {
         VerifiedProgram::from_artifact(data).map(VerifiedProgram::into_program)
     }
 
+    /// Decodes policy-bearing JSON after the caller has authenticated the
+    /// artifact bytes and accepted its authority as an embedding decision.
+    pub fn from_trusted_artifact(data: JsonValue) -> Result<Self> {
+        VerifiedProgram::from_trusted_artifact(data).map(VerifiedProgram::into_program)
+    }
+
     pub(crate) fn decode_artifact(data: JsonValue) -> Result<Self> {
         let object = data
             .as_object()
             .ok_or_else(|| TinyOneError::compile("Artifact must be a JSON object"))?;
-        if object.get("format").and_then(JsonValue::as_str) != Some("tinyone-bytecode")
-            || object.get("version").and_then(JsonValue::as_i64) != Some(1)
-        {
+        if object.get("format").and_then(JsonValue::as_str) != Some("tinyone-bytecode") {
             return Err(TinyOneError::compile("Unsupported TinyOne artifact format"));
         }
+        let version = match object.get("version").and_then(JsonValue::as_i64) {
+            Some(LEGACY_JSON_ARTIFACT_VERSION) => JsonArtifactVersion::LegacyV1,
+            Some(JSON_ARTIFACT_VERSION) => JsonArtifactVersion::V2,
+            _ => return Err(TinyOneError::compile("Unsupported TinyOne artifact format")),
+        };
         let raw_functions =
             expect_array_limited(object.get("functions"), "functions", MAX_FUNCTIONS)?;
         let main_slot_count = expect_usize(object.get("slot_count"), "slot_count")?;
@@ -88,33 +112,45 @@ impl Program {
         let fields = expect_string_list_limited(object.get("fields"), "fields", MAX_FIELDS)?;
         let raw_structs = expect_array_limited(object.get("structs"), "structs", MAX_STRUCTS)?;
         let raw_modules = optional_array_limited(object.get("modules"), "modules", MAX_MODULES)?;
-        let root_capability_names = object
-            .get("root_capabilities")
-            .map(|value| {
-                expect_string_list_limited(
-                    Some(value),
+        let (root_capabilities, root_permissions, vm_settings) = match version {
+            // v1 artifacts predate policy serialization. Interpret every v1
+            // input using the historical defaults, including malformed or
+            // restrictive policy-looking fields that a v1 reader would have
+            // ignored. This prevents a v1 payload from claiming a policy that
+            // older readers would silently drop.
+            JsonArtifactVersion::LegacyV1 => {
+                let root_capabilities = ModuleCapabilities::all();
+                (
+                    root_capabilities,
+                    ModulePermissions::from_capabilities(root_capabilities),
+                    VmSettings::default(),
+                )
+            }
+            JsonArtifactVersion::V2 => {
+                let root_capability_names = expect_string_list_limited(
+                    object.get("root_capabilities"),
                     "root_capabilities",
                     MAX_MODULE_CAPABILITIES,
-                )
-            })
-            .transpose()?
-            .unwrap_or_else(|| ModuleCapabilities::all().names());
-        let root_capabilities = ModuleCapabilities::from_names(&root_capability_names)?;
-        let vm_settings = object
-            .get("vm")
-            .map(|value| {
-                let vm = value.as_object().ok_or_else(|| {
-                    TinyOneError::compile("Artifact field \"vm\" must be an object")
-                })?;
-                let depth = vm
-                    .get("max_call_depth")
-                    .map(|value| expect_usize(Some(value), "vm.max_call_depth"))
-                    .transpose()?
-                    .unwrap_or(crate::MAX_CALL_DEPTH);
-                VmSettings::with_max_call_depth(depth)
-            })
-            .transpose()?
-            .unwrap_or_default();
+                )?;
+                let root_capabilities = ModuleCapabilities::from_names(&root_capability_names)?;
+                let root_permissions = decode_permissions(
+                    object.get("root_permissions"),
+                    "root_permissions",
+                    root_capabilities,
+                )?;
+                let vm = object
+                    .get("vm")
+                    .and_then(JsonValue::as_object)
+                    .ok_or_else(|| {
+                        TinyOneError::compile("Artifact field \"vm\" must be an object")
+                    })?;
+                let vm_settings = VmSettings::with_max_call_depth(expect_usize(
+                    vm.get("max_call_depth"),
+                    "vm.max_call_depth",
+                )?)?;
+                (root_capabilities, root_permissions, vm_settings)
+            }
+        };
         let mut total_code_ops = 0usize;
         let functions = raw_functions
             .iter()
@@ -198,17 +234,29 @@ impl Program {
                         "module struct exports",
                         MAX_MODULE_EXPORTS,
                     )?;
-                    let capabilities = obj
-                        .get("capabilities")
-                        .map(|value| {
-                            expect_string_list_limited(
-                                Some(value),
-                                "module capabilities",
-                                MAX_MODULE_CAPABILITIES,
+                    let (capabilities, permissions) = match version {
+                        JsonArtifactVersion::LegacyV1 => {
+                            let capabilities = ModuleCapabilities::none();
+                            (
+                                capabilities,
+                                ModulePermissions::from_capabilities(capabilities),
                             )
-                        })
-                        .transpose()?
-                        .unwrap_or_default();
+                        }
+                        JsonArtifactVersion::V2 => {
+                            let capabilities =
+                                ModuleCapabilities::from_names(&expect_string_list_limited(
+                                    obj.get("capabilities"),
+                                    "module capabilities",
+                                    MAX_MODULE_CAPABILITIES,
+                                )?)?;
+                            let permissions = decode_permissions(
+                                obj.get("permissions"),
+                                "module permissions",
+                                capabilities,
+                            )?;
+                            (capabilities, permissions)
+                        }
+                    };
                     Ok(ModuleDef {
                         name: expect_str(obj.get("name"), "module name")?,
                         path: expect_str(obj.get("path"), "module path")?,
@@ -228,7 +276,8 @@ impl Program {
                             .collect::<Result<Vec<_>>>()?,
                         exported_functions,
                         exported_structs,
-                        capabilities: ModuleCapabilities::from_names(&capabilities)?,
+                        capabilities,
+                        permissions,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -238,6 +287,8 @@ impl Program {
             // incorrectly. Source-file compilation is unaffected.
             enum_variants: Vec::new(),
             root_capabilities,
+            root_permissions,
+            policy_trusted: false,
             vm_settings,
         };
         Ok(program)
@@ -245,8 +296,17 @@ impl Program {
 }
 
 impl VerifiedProgram {
+    /// Decodes an untrusted JSON artifact. Its serialized policy is retained
+    /// for inspection but grants no host authority during execution.
     pub fn from_artifact(data: JsonValue) -> Result<Self> {
         Self::verify(Program::decode_artifact(data)?)
+    }
+
+    /// Decodes a JSON artifact whose bytes and policy were authenticated by
+    /// the embedding application. Calling this is an explicit authority
+    /// decision; use [`Self::from_artifact`] for untrusted inputs.
+    pub fn from_trusted_artifact(data: JsonValue) -> Result<Self> {
+        Self::verify(Program::decode_artifact(data)?.trust_artifact_policy())
     }
 }
 
@@ -254,6 +314,88 @@ fn encode_code(code: &[Instr]) -> Vec<JsonValue> {
     code.iter()
         .map(|instr| json!({"op": instr.op.name(), "arg": instr.arg, "arg2": instr.arg2}))
         .collect()
+}
+
+fn encode_permissions(permissions: &ModulePermissions) -> JsonValue {
+    json!({
+        "filesystem_read": permissions.allows_filesystem_read(),
+        "filesystem_write": permissions.allows_filesystem_write(),
+        "environment_read": permissions.environment_read_allowlist(),
+        "network_outbound": permissions.network_outbound(),
+        "network_listen": permissions.network_listen(),
+        "process_spawn": permissions.process_spawn(),
+        "ffi_allowed": permissions.ffi_allowed(),
+        "graphics_gpu": permissions.graphics_gpu(),
+        "hardware_access": permissions.hardware_access(),
+        "threads_allowed": permissions.threads_allowed(),
+        "unsafe_memory_allowed": permissions.unsafe_memory_allowed(),
+        "linux_pipelines_allowed": permissions.linux_pipelines_allowed(),
+    })
+}
+
+fn decode_permissions(
+    value: Option<&JsonValue>,
+    name: &str,
+    capabilities: ModuleCapabilities,
+) -> Result<ModulePermissions> {
+    let object = value.and_then(JsonValue::as_object).ok_or_else(|| {
+        TinyOneError::compile(format!("Artifact field {name:?} must be an object"))
+    })?;
+    let environment_read = match object.get("environment_read") {
+        Some(JsonValue::Null) => None,
+        Some(value) => Some(expect_string_list_limited(
+            Some(value),
+            &format!("{name}.environment_read"),
+            MAX_PERMISSION_ENVIRONMENT_VARIABLES,
+        )?),
+        None => {
+            return Err(TinyOneError::compile(format!(
+                "Artifact field {name:?}.environment_read must be null or a list"
+            )));
+        }
+    };
+    ModulePermissions::from_artifact(
+        capabilities,
+        expect_bool(
+            object.get("filesystem_read"),
+            &format!("{name}.filesystem_read"),
+        )?,
+        expect_bool(
+            object.get("filesystem_write"),
+            &format!("{name}.filesystem_write"),
+        )?,
+        environment_read,
+        expect_bool(
+            object.get("network_outbound"),
+            &format!("{name}.network_outbound"),
+        )?,
+        expect_bool(
+            object.get("network_listen"),
+            &format!("{name}.network_listen"),
+        )?,
+        expect_bool(
+            object.get("process_spawn"),
+            &format!("{name}.process_spawn"),
+        )?,
+        expect_bool(object.get("ffi_allowed"), &format!("{name}.ffi_allowed"))?,
+        expect_bool(object.get("graphics_gpu"), &format!("{name}.graphics_gpu"))?,
+        expect_bool(
+            object.get("hardware_access"),
+            &format!("{name}.hardware_access"),
+        )?,
+        expect_bool(
+            object.get("threads_allowed"),
+            &format!("{name}.threads_allowed"),
+        )?,
+        expect_bool(
+            object.get("unsafe_memory_allowed"),
+            &format!("{name}.unsafe_memory_allowed"),
+        )?,
+        expect_bool(
+            object.get("linux_pipelines_allowed"),
+            &format!("{name}.linux_pipelines_allowed"),
+        )?,
+    )
 }
 
 fn decode_code_limited(value: Option<&JsonValue>, name: &str) -> Result<Vec<Instr>> {
@@ -333,6 +475,12 @@ fn expect_i64(value: Option<&JsonValue>, name: &str) -> Result<i64> {
         .ok_or_else(|| TinyOneError::compile(format!("Artifact field {name:?} must be an integer")))
 }
 
+fn expect_bool(value: Option<&JsonValue>, name: &str) -> Result<bool> {
+    value
+        .and_then(JsonValue::as_bool)
+        .ok_or_else(|| TinyOneError::compile(format!("Artifact field {name:?} must be a boolean")))
+}
+
 fn expect_string_list_limited(
     value: Option<&JsonValue>,
     name: &str,
@@ -371,7 +519,7 @@ mod tests {
     fn minimal() -> JsonValue {
         json!({
             "format": "tinyone-bytecode",
-            "version": 1,
+            "version": LEGACY_JSON_ARTIFACT_VERSION,
             "code": [{"op": "HALT", "arg": 0, "arg2": 0}],
             "slot_count": 0,
             "names": [],
@@ -380,6 +528,41 @@ mod tests {
             "structs": [],
             "fields": [],
             "modules": []
+        })
+    }
+
+    fn v2_minimal() -> JsonValue {
+        json!({
+            "format": "tinyone-bytecode",
+            "version": JSON_ARTIFACT_VERSION,
+            "root_capabilities": [],
+            "root_permissions": no_permissions(),
+            "vm": {"max_call_depth": 1},
+            "code": [{"op": "HALT", "arg": 0, "arg2": 0}],
+            "slot_count": 0,
+            "names": [],
+            "functions": [],
+            "strings": [],
+            "structs": [],
+            "fields": [],
+            "modules": []
+        })
+    }
+
+    fn no_permissions() -> JsonValue {
+        json!({
+            "filesystem_read": false,
+            "filesystem_write": false,
+            "environment_read": [],
+            "network_outbound": false,
+            "network_listen": false,
+            "process_spawn": false,
+            "ffi_allowed": false,
+            "graphics_gpu": false,
+            "hardware_access": false,
+            "threads_allowed": false,
+            "unsafe_memory_allowed": false,
+            "linux_pipelines_allowed": false,
         })
     }
 
@@ -472,5 +655,119 @@ mod tests {
         let mut artifact = minimal();
         artifact["strings"] = json!(["x".repeat(MAX_TEXT_BYTES + 1)]);
         rejects(artifact, "strings limit");
+    }
+
+    #[test]
+    fn policy_bearing_artifacts_use_v2_and_round_trip_restrictions() {
+        let artifact = v2_minimal();
+        let decoded = Program::from_artifact(artifact.clone()).expect("v2 artifact decodes");
+        assert!(decoded.root_capabilities().is_empty());
+        assert_eq!(decoded.max_call_depth(), 1);
+
+        let emitted = decoded.to_artifact();
+        assert_eq!(emitted["version"], JSON_ARTIFACT_VERSION);
+        assert_eq!(emitted["root_capabilities"], json!([]));
+        assert_eq!(emitted["root_permissions"], no_permissions());
+        assert_eq!(emitted["vm"]["max_call_depth"], 1);
+    }
+
+    #[test]
+    fn v2_requires_complete_policy_fields() {
+        let mut artifact = minimal();
+        artifact["version"] = json!(JSON_ARTIFACT_VERSION);
+        rejects(artifact, "root_capabilities");
+
+        let mut artifact = v2_minimal();
+        artifact.as_object_mut().expect("object").remove("vm");
+        rejects(artifact, "vm");
+
+        let mut artifact = v2_minimal();
+        artifact["modules"] = json!([{
+            "name": "m",
+            "path": "m",
+            "imports": [],
+            "exported_functions": [],
+            "exported_structs": [],
+            "capabilities": []
+        }]);
+        rejects(artifact, "module permissions");
+
+        let mut artifact = v2_minimal();
+        artifact
+            .as_object_mut()
+            .expect("object")
+            .remove("root_permissions");
+        rejects(artifact, "root_permissions");
+
+        let mut artifact = v2_minimal();
+        artifact["root_permissions"]["filesystem_read"] = json!(true);
+        rejects(artifact, "detailed permissions exceed");
+    }
+
+    #[test]
+    fn legacy_v1_uses_historical_policy_even_with_policy_lookalikes() {
+        let mut artifact = minimal();
+        artifact["root_capabilities"] = json!([]);
+        artifact["vm"] = json!({"max_call_depth": 1});
+        artifact["modules"] = json!([{
+            "name": "m",
+            "path": "m",
+            "imports": [],
+            "exported_functions": [],
+            "exported_structs": [],
+            "capabilities": ["filesystem"]
+        }]);
+
+        let decoded = Program::from_artifact(artifact).expect("legacy artifact decodes");
+        assert_eq!(
+            decoded.root_capabilities(),
+            ModuleCapabilities::all().names()
+        );
+        assert_eq!(decoded.max_call_depth(), crate::MAX_CALL_DEPTH);
+        assert!(decoded.modules()[0].capabilities().is_empty());
+    }
+
+    #[test]
+    fn v2_round_trips_fine_grained_module_permissions() {
+        let mut artifact = v2_minimal();
+        artifact["modules"] = json!([{
+            "name": "m",
+            "path": "m",
+            "imports": [],
+            "exported_functions": [],
+            "exported_structs": [],
+            "capabilities": ["filesystem", "environment"],
+            "permissions": {
+                "filesystem_read": true,
+                "filesystem_write": false,
+                "environment_read": ["HTTP_PROXY"],
+                "network_outbound": false,
+                "network_listen": false,
+                "process_spawn": false,
+                "ffi_allowed": false,
+                "graphics_gpu": false,
+                "hardware_access": false,
+                "threads_allowed": false,
+                "unsafe_memory_allowed": false,
+                "linux_pipelines_allowed": false
+            }
+        }]);
+
+        let decoded = Program::from_artifact(artifact).expect("v2 artifact decodes");
+        let module = &decoded.modules()[0];
+        assert_eq!(module.filesystem_permissions(), (true, false));
+        assert_eq!(
+            module.environment_read_allowlist(),
+            Some(["HTTP_PROXY".to_string()].as_slice())
+        );
+        let encoded = decoded.to_artifact();
+        assert_eq!(
+            encoded["modules"][0]["permissions"]["filesystem_write"],
+            false
+        );
+        assert_eq!(
+            encoded["modules"][0]["permissions"]["environment_read"],
+            json!(["HTTP_PROXY"])
+        );
     }
 }

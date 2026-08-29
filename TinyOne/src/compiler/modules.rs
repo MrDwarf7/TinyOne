@@ -7,7 +7,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::{CompilerSharedState, ModuleCapabilities, ProjectConfig, Result, TinyOneError};
+use crate::{
+    CompilerSharedState, ModuleCapabilities, ModulePermissions, ProjectConfig, Result, TinyOneError,
+};
 
 pub(crate) type Resolver = Rc<RefCell<ModuleResolver>>;
 
@@ -24,7 +26,7 @@ pub(crate) struct ResolverInput {
 pub(crate) struct ResolvedModule {
     pub(crate) filename: String,
     pub(crate) source: String,
-    pub(crate) capabilities: ModuleCapabilities,
+    pub(crate) permissions: ModulePermissions,
 }
 
 #[derive(Debug, Clone)]
@@ -44,15 +46,22 @@ pub(crate) struct ModuleResolver {
     inputs: BTreeMap<PathBuf, Option<[u8; 16]>>,
     canonical_resolutions: BTreeMap<PathBuf, PathBuf>,
     module_names: BTreeMap<PathBuf, String>,
-    module_capabilities: HashMap<PathBuf, ModuleCapabilities>,
+    module_permissions: HashMap<PathBuf, ModulePermissions>,
+    signed_module_valid_until: Option<u64>,
     existing_input_bytes: usize,
 }
 
 impl ModuleResolver {
     /// Creates a resolver whose import sandbox is the entry file's directory,
     /// or the nearest ancestor `Config.toml` project root. Canonicalization
-    /// makes `..`, absolute-path, and symlink escapes fail before their source
-    /// text is read whenever the sandbox is enabled.
+    /// rejects `..`, absolute-path, and symlink escapes that already exist
+    /// before their source text is read whenever the sandbox is enabled.
+    ///
+    /// This is import-path containment, not a file-system isolation boundary:
+    /// a concurrent actor able to modify the project tree can retarget a path
+    /// after canonicalization and before it is read. Put untrusted projects on
+    /// a filesystem the attacker cannot modify, or use OS-level isolation,
+    /// when adversarial concurrent filesystem writes are in scope.
     pub(crate) fn new(root_file: &Path) -> Result<Self> {
         let root_file = root_file.canonicalize().map_err(|error| {
             TinyOneError::compile(format!(
@@ -80,7 +89,8 @@ impl ModuleResolver {
             inputs: BTreeMap::new(),
             canonical_resolutions: BTreeMap::new(),
             module_names: BTreeMap::new(),
-            module_capabilities: HashMap::new(),
+            module_permissions: HashMap::new(),
+            signed_module_valid_until: None,
             existing_input_bytes: 0,
         };
         if let Some((path, digest)) = resolver.config.input() {
@@ -166,7 +176,7 @@ impl ModuleResolver {
             self.sources.insert(path.clone(), source.clone());
             source
         };
-        let capabilities = if let Some(verification) =
+        let permissions = if let Some(verification) =
             self.config
                 .verify_module_signature(import_path, &path, &source)?
         {
@@ -184,23 +194,30 @@ impl ModuleResolver {
                     self.existing_input_bytes = self.existing_input_bytes.saturating_add(bytes);
                 }
             }
-            verification.declared_capabilities
+            self.signed_module_valid_until = Some(
+                self.signed_module_valid_until
+                    .map_or(verification.expires_at, |existing| {
+                        existing.min(verification.expires_at)
+                    }),
+            );
+            verification.declared_permissions
         } else {
-            configured_capabilities
+            ModulePermissions::from_capabilities(configured_capabilities)
         };
-        if let Some(existing) = self.module_capabilities.get(&path)
-            && *existing != capabilities
+        if let Some(existing) = self.module_permissions.get(&path)
+            && *existing != permissions
         {
             return Err(TinyOneError::compile(format!(
                 "Module {} is imported with conflicting capability grants",
                 path.display()
             )));
         }
-        self.module_capabilities.insert(path.clone(), capabilities);
+        self.module_permissions
+            .insert(path.clone(), permissions.clone());
         let resolved = ResolvedModule {
             filename: path.to_string_lossy().to_string(),
             source,
-            capabilities,
+            permissions,
         };
         self.resolutions.insert(cache_key, resolved.clone());
         Ok(resolved)
@@ -324,9 +341,16 @@ impl ModuleResolver {
     }
 
     pub(crate) fn has_capability_grants(&self) -> bool {
-        self.module_capabilities
+        self.module_permissions
             .values()
-            .any(|capabilities| *capabilities != ModuleCapabilities::none())
+            .any(|permissions| permissions.capabilities() != ModuleCapabilities::none())
+    }
+
+    /// The earliest expiry among module signatures used in this compilation.
+    /// A cache entry must be rejected once this moment has passed, even when
+    /// the source and sidecar digests are otherwise unchanged.
+    pub(crate) const fn signed_module_valid_until(&self) -> Option<u64> {
+        self.signed_module_valid_until
     }
 
     pub(crate) const fn root_capabilities(&self) -> ModuleCapabilities {
@@ -415,10 +439,8 @@ fn parse_manifest_module(
     }
     reject_native_library_import(target)?;
     ensure_tinylang_source(target)?;
-    Ok(ManifestModule {
-        path,
-        capabilities: ModuleCapabilities::from_names(&capability_values)?,
-    })
+    let capabilities = ModuleCapabilities::from_names(&capability_values)?;
+    Ok(ManifestModule { path, capabilities })
 }
 
 fn ensure_tinylang_source(path: &Path) -> Result<()> {

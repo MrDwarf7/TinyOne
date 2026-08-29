@@ -1,6 +1,6 @@
 use crate::runtime::stdlib;
 use crate::{
-    BUILTINS, HeapData, MAX_ARRAY_LENGTH, ModuleCapabilities, ModuleCapability, Result, TinyMemory,
+    BUILTINS, HeapData, MAX_ARRAY_LENGTH, ModuleCapability, ModulePermissions, Result, TinyMemory,
     TinyOneError, TinyRuntimeContext, VALUE_BYTES, Value, checked_bounded_len,
     checked_payload_bytes, expect_int, expect_pointer, expect_string, runtime_array_pop,
     runtime_array_push, runtime_cast_pointer, runtime_make_buffer, runtime_make_field_pointer,
@@ -37,7 +37,7 @@ pub(crate) fn runtime_call_builtin(
     global_memory: &TinyMemory,
     builtin_index: usize,
     caller_function: Option<usize>,
-    capabilities: ModuleCapabilities,
+    permissions: &ModulePermissions,
     args: &[Value],
 ) -> Result<Value> {
     let builtin = BUILTINS
@@ -52,7 +52,8 @@ pub(crate) fn runtime_call_builtin(
             args.len()
         )));
     }
-    require_builtin_capability(builtin.name, builtin.requires_unsafe, capabilities)?;
+    require_builtin_capability(builtin.name, builtin.requires_unsafe, permissions)?;
+    require_builtin_argument_permissions(context, builtin.name, permissions, args)?;
     match builtin.name {
         "len" => runtime_len(context, &args[0]),
         "array" => {
@@ -288,12 +289,12 @@ pub(crate) fn runtime_call_builtin(
 }
 
 /// Checks the host authority required by a builtin before it can observe or
-/// affect host state. This remains a runtime check so forged artifacts and JIT
-/// lowering cannot bypass manifest policy.
+/// affect host state. This remains a runtime check, so untrusted artifact
+/// decoding and JIT lowering cannot bypass the policy applied by the host.
 pub(crate) fn require_builtin_capability(
     builtin_name: &str,
     requires_unsafe: bool,
-    capabilities: ModuleCapabilities,
+    permissions: &ModulePermissions,
 ) -> Result<()> {
     let required = match builtin_name {
         "fs_read" | "fs_write" | "fs_exists" | "fs_list_dir" => Some(ModuleCapability::Filesystem),
@@ -316,14 +317,61 @@ pub(crate) fn require_builtin_capability(
         _ => None,
     };
     if let Some(required) = required
-        && !capabilities.allows(required)
+        && !permissions.capabilities().allows(required)
     {
         return Err(TinyOneError::runtime(format!(
             "Module capability denied: builtin {builtin_name:?} requires {:?}",
             required.name()
         )));
     }
+    let denied_detail = match builtin_name {
+        "fs_read" | "fs_exists" | "fs_list_dir" => !permissions.allows_filesystem_read(),
+        "fs_write" => !permissions.allows_filesystem_write(),
+        "socket_connect" | "tcp_connect" => !permissions.network_outbound(),
+        "socket_listen" | "socket_accept" | "udp_bind" => !permissions.network_listen(),
+        "socket_read" | "socket_write" => {
+            !permissions.network_outbound() && !permissions.network_listen()
+        }
+        "gpu_adapter" | "gpu_device" | "gpu_buffer" | "gpu_submit" | "gpu_present" => {
+            !permissions.graphics_gpu()
+        }
+        "hardware_enumerate" | "hardware_open" | "serial_open" | "usb_open" => {
+            !permissions.hardware_access()
+        }
+        "pipeline_spawn" => !permissions.process_spawn() || !permissions.linux_pipelines_allowed(),
+        "pipeline_wait" | "pipeline_stdout" => !permissions.linux_pipelines_allowed(),
+        "thread_spawn" | "thread_join" => !permissions.threads_allowed(),
+        _ if requires_unsafe => !permissions.unsafe_memory_allowed(),
+        _ => false,
+    };
+    if denied_detail {
+        return Err(TinyOneError::runtime(format!(
+            "Module permission denied: builtin {builtin_name:?} is outside the signed module declaration"
+        )));
+    }
     Ok(())
+}
+
+/// Enforces permissions whose target is known only after evaluating builtin
+/// arguments.  The value is checked before the stdlib handler reads host
+/// state, so neither `sys_env_has` nor `sys_env_get` can probe an undeclared
+/// variable.
+fn require_builtin_argument_permissions(
+    context: &TinyRuntimeContext,
+    builtin_name: &str,
+    permissions: &ModulePermissions,
+    args: &[Value],
+) -> Result<()> {
+    if !matches!(builtin_name, "sys_env_has" | "sys_env_get") {
+        return Ok(());
+    }
+    let name = expect_string(context, &args[0], builtin_name)?;
+    if permissions.allows_environment_read(&name) {
+        return Ok(());
+    }
+    Err(TinyOneError::runtime(format!(
+        "Module permission denied: builtin {builtin_name:?} may not read environment variable {name:?}"
+    )))
 }
 
 fn looks_like_int(text: &str) -> bool {

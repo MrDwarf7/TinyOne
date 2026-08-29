@@ -3,7 +3,7 @@
 
 [package]
 name = "tinyone"
-version = "1.4.0"
+version = "1.5.1"
 description = "TinyOne language and VM"
 authors = ["TinyOne contributors"]
 
@@ -53,8 +53,10 @@ require_configured_modules = false
 # `binary_hash` is signed when supplied, but source-only .to modules do not
 # load a binary artifact yet; source_hash is the enforced artifact binding.
 # Self-signed package keys are intentionally not supported. Root source is
-# local project code and is not a module; compiled artifacts retain the
-# compile-time policy.
+# local project code and is not a module. Compiled artifacts record their
+# compile-time policy for inspection, but ordinary artifact loading never
+# grants it host authority. An embedding must independently authenticate the
+# bytes and explicitly opt into that policy before executing it.
 require_module_signatures = false
 #
 # A module package uses this non-duplicated layout:
@@ -85,7 +87,7 @@ require_module_signatures = false
 #   [artifact]
 #   source_hash = "sha256:<64 lowercase hex characters>"
 #   dependency_lock_hash = "sha256:<64 lowercase hex characters>"
-#   compiler_version = "1.4.0"
+#   compiler_version = "1.5.1"
 #   language_version = "1"
 #   [signing]
 #   authority = "example-dev-authority"

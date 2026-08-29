@@ -3,9 +3,9 @@ use std::rc::Rc;
 
 use crate::{
     BUILTINS, EnumVariantDef, Function, Instr, Lexer, ModuleCapabilities, ModuleDef,
-    ModuleImportDef, ModuleInfo, Op, Program, Resolver, Result, SharedState, SourceMap, StructDef,
-    SymbolTable, TinyOneError, Token, TokenKind, VmSettings, builtin_index, default_import_alias,
-    module_name_from_import, unique_module_name,
+    ModuleImportDef, ModuleInfo, ModulePermissions, Op, Program, Resolver, Result, SharedState,
+    SourceMap, StructDef, SymbolTable, TinyOneError, Token, TokenKind, VmSettings, builtin_index,
+    default_import_alias, module_name_from_import, unique_module_name,
 };
 
 #[derive(Debug)]
@@ -43,6 +43,7 @@ pub(crate) struct Compiler {
     in_function: bool,
     unsafe_depth: usize,
     root_capabilities: ModuleCapabilities,
+    root_permissions: ModulePermissions,
     vm_settings: VmSettings,
 }
 
@@ -53,7 +54,7 @@ impl Compiler {
         resolver: Option<Resolver>,
         module_mode: bool,
         module_name: impl Into<String>,
-        module_capabilities: ModuleCapabilities,
+        module_permissions: ModulePermissions,
         shared: SharedState,
     ) -> Result<Self> {
         let source = source.into();
@@ -75,7 +76,8 @@ impl Compiler {
                         filename.clone(),
                         ModuleInfo {
                             name: name.clone(),
-                            capabilities: module_capabilities,
+                            capabilities: module_permissions.capabilities(),
+                            permissions: module_permissions,
                             function_exports: HashMap::new(),
                             struct_exports: HashMap::new(),
                             all_functions: HashSet::new(),
@@ -119,6 +121,7 @@ impl Compiler {
             in_function: false,
             unsafe_depth: 0,
             root_capabilities: ModuleCapabilities::all(),
+            root_permissions: ModulePermissions::from_capabilities(ModuleCapabilities::all()),
             vm_settings: VmSettings::default(),
         })
     }
@@ -132,6 +135,7 @@ impl Compiler {
         vm_settings: VmSettings,
     ) -> Self {
         self.root_capabilities = root_capabilities;
+        self.root_permissions = ModulePermissions::from_capabilities(root_capabilities);
         self.vm_settings = vm_settings;
         self
     }
@@ -182,6 +186,8 @@ impl Compiler {
             modules: state.module_defs.clone(),
             enum_variants: state.enum_variants.clone(),
             root_capabilities: self.root_capabilities,
+            root_permissions: self.root_permissions.clone(),
+            policy_trusted: true,
             vm_settings: self.vm_settings,
         })
     }
@@ -223,6 +229,7 @@ impl Compiler {
                 exported_functions,
                 exported_structs,
                 capabilities: info.capabilities,
+                permissions: info.permissions.clone(),
             }
         };
         state.module_defs.push(def);
@@ -515,7 +522,7 @@ impl Compiler {
                     self.resolver.clone(),
                     true,
                     module_name_from_import(&path_token.text, &module_filename),
-                    resolved_module.capabilities,
+                    resolved_module.permissions,
                     Rc::clone(&self.shared),
                 )?;
                 compiler.compile().map(|_| ())
