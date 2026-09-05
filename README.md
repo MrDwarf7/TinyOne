@@ -32,7 +32,6 @@ release foundation without creating a separate user-facing language.
 > **Repository history note:** Multiple recent failed rebases, and
 > subsequent rebase fixes, ruined the commit history. This repository has
 > nevertheless been in active development for almost eight months.
-
 > **TinyLang v2 Development Update**
 >
 > With the successful v1 release line locked in, active development has
@@ -75,7 +74,7 @@ release foundation without creating a separate user-facing language.
 - [Tests and Benchmarks](#tests-and-benchmarks)
 - [Repository Layout](#repository-layout)
 - [Release Direction](#release-direction)
-- [License](#license)
+- [LICENSE](#license)
 - [Feedback and Community](#feedback-and-community)
 
 <a id="general-information"></a>
@@ -165,9 +164,9 @@ The gate checks tinyone_core, tinyone_ralloc, the xtask harness, language
 fixtures, formatting, Clippy, benchmark smoke coverage, and ABI drift. It
 requires `uv` for the Python tooling steps.
 
-This creates the debug executable at `crates/tinyone_core/target/debug/tinylang`.
+This creates the debug executable at `target/debug/tinylang`.
 Build with `--release` when you want the optimized executable at
-`crates/tinyone_core/target/release/tinylang`. The Windows executable name
+`target/release/tinylang`. The Windows executable name
 is `tinylang.exe`. The examples below assume the executable is available on
 `PATH` as `tinylang`.
 
@@ -587,12 +586,12 @@ Useful commands:
     cargo test --manifest-path crates/tinyone_core/Cargo.toml
     cargo test --manifest-path crates/tinyone_core/Cargo.toml --features testing-hooks
     cargo build --release --manifest-path crates/tinyone_core/Cargo.toml --bin tinylang_bench
-    ./crates/tinyone_core/target/release/tinylang_bench
-    ./crates/tinyone_core/target/release/tinylang_bench --quick --repeats 1
-    ./crates/tinyone_core/target/release/tinylang_bench --filter runtime.jit
-    ./crates/tinyone_core/target/release/tinylang_bench --save-baseline tinyone-baseline.json
-    ./crates/tinyone_core/target/release/tinylang_bench --save-baseline-auto
-    ./crates/tinyone_core/target/release/tinylang_bench --baseline tinyone-baseline.json
+    ./target/release/tinylang_bench
+    ./target/release/tinylang_bench --quick --repeats 1
+    ./target/release/tinylang_bench --filter runtime.jit
+    ./target/release/tinylang_bench --save-baseline tinyone-baseline.json
+    ./target/release/tinylang_bench --save-baseline-auto
+    ./target/release/tinylang_bench --baseline tinyone-baseline.json
 
 The benchmark runner checks VM/JIT output parity before measuring and
 reports best time, mean time, coefficient of variation, and per-thread
@@ -608,7 +607,7 @@ compilation with the size-aware disk-cache policy, `runtime.vm_*` and
 quickening benefit over a controlled 4,096-iteration loop. Collection
 and heap phase rows cover 16, 256, and 4,096-entry workloads, individual
 map and vector operations, generational slot reuse, and explicit frees.
-Automatic baselines are written under `crates/tinyone_core/target/perf/<platform>/`
+Automatic baselines are written under `target/perf/<platform>/`
 with machine, toolchain, Git, filesystem, and benchmark-option metadata.
 Run the suite from an optimized build; debug-profile timing is not
 representative.
@@ -620,7 +619,7 @@ filesystem, such as WSL `/mnt/c` versus native `/tmp`.
 When Windows and WSL share this checkout through `/mnt/c`, give Linux
 its own Cargo artifact directory before building or testing:
 
-    export CARGO_TARGET_DIR="$PWD/crates/tinyone_core/target/linux"
+    export CARGO_TARGET_DIR="$PWD/target/linux"
 
 The Linux benchmark binary is then
 `$CARGO_TARGET_DIR/release/tinylang_bench`. This keeps Linux and Windows
@@ -633,7 +632,7 @@ hardware counters around a filtered row when instruction counts or
 branch behavior matter:
 
     perf stat -e cycles,instructions,branches,branch-misses -- \
-      ./crates/tinyone_core/target/release/tinylang_bench \
+      ./target/release/tinylang_bench \
       --filter runtime.jit_hot_loop_4096 --skip-correctness
 
 See `docs/performance.md` for the workload map, measurement rules, and
@@ -701,7 +700,7 @@ The v1 release themes include:
 
 # License
 
-See `License.md`.
+See `LICENSE`.
 
 <a id="feedback-and-community"></a>
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Create zip or tar.gz archives while honoring discovered ignore files."""
+
 from __future__ import annotations
+from typing import Literal, NoReturn, TYPE_CHECKING
 
 import argparse
 import fnmatch
@@ -9,7 +11,9 @@ import tarfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, NoReturn, Sequence
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 ArchiveFormat = Literal["zip", "tar.gz"]
 EXIT_OK = 0
@@ -17,9 +21,9 @@ EXIT_ERROR = 2
 IGNORE_FILENAMES = (".gitignore", ".zipignore")
 HELP_EPILOG = """
 Examples:
-  ./Tools/zip.py TinyOne -o tinyone.zip
-  ./Tools/zip.py TinyOne Ralloc -o source.tar.gz --format tar.gz
-  ./Tools/zip.py README.rst docs --format zip
+  ./tools/zip.py crates/tinyone_core -o tinyone.zip
+  ./tools/zip.py crates/tinyone_core crates/tinyone_ralloc -o source.tar.gz --format tar.gz
+  ./tools/zip.py README.md docs --format zip
 
 Every directory walk loads .gitignore and .zipignore rules from each directory
 before reading that directory's children. Nested ignore files override earlier
@@ -55,10 +59,15 @@ class IgnoreRule:
                 rel == pattern
                 or rel.endswith(f"/{pattern}")
                 or fnmatch.fnmatchcase(rel, pattern)
-                or any(fnmatch.fnmatchcase(suffix, pattern) for suffix in suffixes(rel))
+                or any(
+                    fnmatch.fnmatchcase(suffix, pattern)
+                    for suffix in suffixes(rel)
+                )
             )
 
-        return any(fnmatch.fnmatchcase(part, pattern) for part in rel.split("/"))
+        return any(
+            fnmatch.fnmatchcase(part, pattern) for part in rel.split("/")
+        )
 
 
 def suffixes(rel: str) -> list[str]:
@@ -107,7 +116,9 @@ def load_ignore_rules(directory: Path) -> tuple[IgnoreRule, ...]:
         ignore_file = directory / filename
         if not ignore_file.is_file():
             continue
-        with ignore_file.open("r", encoding="utf-8", errors="replace") as handle:
+        with ignore_file.open(
+            "r", encoding="utf-8", errors="replace"
+        ) as handle:
             for raw in handle:
                 rule = parse_ignore_line(directory, raw)
                 if rule is not None:
@@ -129,11 +140,15 @@ def archive_name_for_root(root: Path, path: Path) -> str:
     return f"{root.name}/{path.relative_to(root).as_posix()}"
 
 
-def iter_archive_entries(root: Path, inherited_rules: Sequence[IgnoreRule] = ()) -> list[tuple[Path, str]]:
+def iter_archive_entries(
+    root: Path, inherited_rules: Sequence[IgnoreRule] = ()
+) -> list[tuple[Path, str]]:
     if root.is_file():
         return [(root, root.name)]
     if not root.is_dir():
-        raise ValueError(f"input path does not exist or is not a regular file/directory: {root}")
+        raise ValueError(
+            f"input path does not exist or is not a regular file/directory: {root}"
+        )
 
     entries: list[tuple[Path, str]] = []
 
@@ -164,8 +179,12 @@ def is_relative_to(path: Path, root: Path) -> bool:
 def validate_output_path(inputs: Sequence[Path], output: Path) -> None:
     resolved_output = output.resolve(strict=False)
     for input_path in inputs:
-        if input_path.is_dir() and is_relative_to(resolved_output, input_path.resolve()):
-            raise ValueError(f"output archive is inside input directory: {output}")
+        if input_path.is_dir() and is_relative_to(
+            resolved_output, input_path.resolve()
+        ):
+            raise ValueError(
+                f"output archive is inside input directory: {output}"
+            )
 
 
 def infer_format(output: Path, explicit: str | None) -> ArchiveFormat:
@@ -179,7 +198,9 @@ def infer_format(output: Path, explicit: str | None) -> ArchiveFormat:
     return "zip"
 
 
-def default_output(inputs: Sequence[Path], archive_format: ArchiveFormat) -> Path:
+def default_output(
+    inputs: Sequence[Path], archive_format: ArchiveFormat
+) -> Path:
     stem = inputs[0].name if len(inputs) == 1 else "archive"
     suffix = ".tar.gz" if archive_format == "tar.gz" else ".zip"
     return Path(f"{stem}{suffix}")
@@ -191,7 +212,9 @@ def collect_entries(inputs: Sequence[Path]) -> list[tuple[Path, str]]:
     for input_path in inputs:
         for source, arcname in iter_archive_entries(input_path):
             if arcname in seen_names:
-                raise ValueError(f"duplicate archive path from inputs: {arcname}")
+                raise ValueError(
+                    f"duplicate archive path from inputs: {arcname}"
+                )
             seen_names.add(arcname)
             entries.append((source, arcname))
     if not entries:
@@ -199,7 +222,11 @@ def collect_entries(inputs: Sequence[Path]) -> list[tuple[Path, str]]:
     return entries
 
 
-def create_archive(paths: Sequence[str | Path], output: str | Path, archive_format: ArchiveFormat | str | None = None) -> Path:
+def create_archive(
+    paths: Sequence[str | Path],
+    output: str | Path,
+    archive_format: ArchiveFormat | str | None = None,
+) -> Path:
     inputs = [Path(path).expanduser() for path in paths]
     if not inputs:
         raise ValueError("at least one input path is required")
@@ -210,7 +237,9 @@ def create_archive(paths: Sequence[str | Path], output: str | Path, archive_form
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "zip":
-        with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with zipfile.ZipFile(
+            out, "w", compression=zipfile.ZIP_DEFLATED
+        ) as archive:
             for source, arcname in entries:
                 archive.write(source, arcname)
     elif fmt == "tar.gz":
@@ -229,9 +258,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=HELP_EPILOG,
     )
-    parser.add_argument("paths", nargs="+", help="file or directory paths to archive")
+    parser.add_argument(
+        "paths", nargs="+", help="file or directory paths to archive"
+    )
     parser.add_argument("-o", "--output", help="archive path to write")
-    parser.add_argument("--format", choices=("zip", "tar.gz"), help="archive format; inferred from --output when omitted")
+    parser.add_argument(
+        "--format",
+        choices=("zip", "tar.gz"),
+        help="archive format; inferred from --output when omitted",
+    )
     return parser
 
 
@@ -244,8 +279,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     input_paths = [Path(path).expanduser() for path in args.paths]
-    fmt = infer_format(Path(args.output), args.format) if args.output else infer_format(Path("archive.zip"), args.format)
-    output = Path(args.output).expanduser() if args.output else default_output(input_paths, fmt)
+    fmt = (
+        infer_format(Path(args.output), args.format)
+        if args.output
+        else infer_format(Path("archive.zip"), args.format)
+    )
+    output = (
+        Path(args.output).expanduser()
+        if args.output
+        else default_output(input_paths, fmt)
+    )
     try:
         archive = create_archive(input_paths, output, fmt)
     except (OSError, ValueError) as exc:

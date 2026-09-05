@@ -31,9 +31,9 @@ Output locations:
 
 | Platform | Debug                                               | Release                                               |
 | -------- | --------------------------------------------------- | ----------------------------------------------------- |
-| Linux    | `crates/tinyone_core/target/debug/libtinyone.so`    | `crates/tinyone_core/target/release/libtinyone.so`    |
-| macOS    | `crates/tinyone_core/target/debug/libtinyone.dylib` | `crates/tinyone_core/target/release/libtinyone.dylib` |
-| Windows  | `crates/tinyone_core/target/debug/tinyone.dll`      | `crates/tinyone_core/target/release/tinyone.dll`      |
+| Linux    | `target/debug/libtinyone.so`    | `target/release/libtinyone.so`    |
+| macOS    | `target/debug/libtinyone.dylib` | `target/release/libtinyone.dylib` |
+| Windows  | `target/debug/tinyone.dll`      | `target/release/tinyone.dll`      |
 
 The `tinyone-sandbox-worker` executable produced in the same target directory
 must be shipped beside the host executable (or configured with
@@ -43,11 +43,11 @@ must be shipped beside the host executable (or configured with
 
 ```sh
 # Linux
-cc -std=c11 your_app.c -I/path/to/repo -L/path/to/TinyOne/target/release \
-   -Wl,-rpath,/path/to/TinyOne/target/release -ltinyone -o your_app
+cc -std=c11 your_app.c -I/path/to/repo -L/path/to/target/release \
+   -Wl,-rpath,/path/to/target/release -ltinyone -o your_app
 
 # macOS
-cc -std=c11 your_app.c -I/path/to/repo -L/path/to/TinyOne/target/release \
+cc -std=c11 your_app.c -I/path/to/repo -L/path/to/target/release \
    -rpath @loader_path -ltinyone -o your_app
 ```
 
@@ -331,7 +331,7 @@ int main(void) {
         fprintf(stderr, "tinyone returned NULL\n");
         return 1;
     }
-    if (strstr(result, ""ok":true") == NULL) {
+    if (strstr(result, "\"ok\":true") == NULL) {
         fprintf(stderr, "error: %s\n", result);
         tinyone_free_string(result);
         return 1;
@@ -353,8 +353,8 @@ char *compiled = tinyone_compile_source_json(
 /* ... extract artifact_json string ... */
 
 /* Run with a pre-supplied input */
-char *run1 = tinyone_run_artifact_json(artifact_json, "jit", "["7"]");
-char *run2 = tinyone_run_artifact_json(artifact_json, "jit", "["12"]");
+char *run1 = tinyone_run_artifact_json(artifact_json, "jit", "[\"7\"]");
+char *run2 = tinyone_run_artifact_json(artifact_json, "jit", "[\"12\"]");
 
 tinyone_free_string(run1);
 tinyone_free_string(run2);
@@ -369,7 +369,7 @@ static int check_ok(const char *label, char *response) {
         fprintf(stderr, "%s: NULL response\n", label);
         return 0;
     }
-    if (strstr(response, ""ok":true") != NULL) return 1;
+    if (strstr(response, "\"ok\":true") != NULL) return 1;
     fprintf(stderr, "%s failed: %s\n", label, response);
     return 0;
 }

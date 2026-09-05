@@ -56,6 +56,7 @@ jobs:
         with:
           target: "${{ matrix.target }}"
           toolchain: "nightly"
+          components: "clippy,rustfmt"
 
       - name: "${{ matrix.task }} (nightly)"
         shell: "bash"

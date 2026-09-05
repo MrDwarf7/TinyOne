@@ -2,7 +2,7 @@
 """TinyOne C ABI symbol manifest and header drift checker.
 
 This tool intentionally uses only the Python standard library. The default
-check compares exported `extern "C"` Rust symbols in `TinyOne/src/ffi.rs`
+check compares exported `extern "C"` Rust symbols in `crates/tinyone_core/src/ffi.rs`
 against the generated TinyLang C header `tinylang.h`.
 """
 
@@ -218,7 +218,7 @@ def command_generate_header(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         print(
-            "Install cbindgen separately or run `Tools/abi_manifest.py check` "
+            "Install cbindgen separately or run `tools/abi_manifest.py check` "
             "for the no-dependency drift check.",
             file=sys.stderr,
         )
@@ -297,7 +297,7 @@ def parser() -> argparse.ArgumentParser:
     generate.add_argument(
         "--crate-dir",
         type=Path,
-        default=ROOT / "TinyOne",
+        default=ROOT / "crates" / "tinyone_core",
         help="Rust crate directory whose Cargo.toml must identify the tinylang package",
     )
     generate.add_argument(

@@ -153,11 +153,12 @@ def fill_missing_fields(fm: dict, text: str, filename: str) -> dict:
     return fm
 
 
-def collect_docs(docs_dir: Path) -> tuple[list[dict], list[Path]]:
+def collect_docs(docs_dir: Path, *, write: bool = True) -> tuple[list[dict], list[Path]]:
     """Scan docs/ recursively for .md files. Auto-generates frontmatter when missing.
 
     Returns (entries, files_needing_review) where files_needing_review
     lists files that got auto-generated frontmatter and should be checked.
+    When write is False, frontmatter is not written to disk (check mode).
     """
     entries = []
     review_needed: list[Path] = []
@@ -170,7 +171,7 @@ def collect_docs(docs_dir: Path) -> tuple[list[dict], list[Path]]:
             continue
 
         # Compute link path relative to docs_dir
-        rel_path = str(path.relative_to(docs_dir))
+        rel_path = path.relative_to(docs_dir).as_posix()
 
         text = path.read_text(encoding="utf-8")
         fm = parse_frontmatter(text)
@@ -178,19 +179,21 @@ def collect_docs(docs_dir: Path) -> tuple[list[dict], list[Path]]:
         if fm is None:
             # Auto-generate frontmatter from content
             fm = derive_frontmatter(text, name)
-            # Insert frontmatter into the file
-            new_text = (
-                "---\n"
-                f"title: \"{fm['title']}\"\n"
-                f"description: \"{fm['description']}\"\n"
-                f"keywords: {fm['keywords']}\n"
-                f"order: {fm['order']}\n"
-                "---\n\n"
-                + text
-            )
-            path.write_text(new_text, encoding="utf-8")
+            # Serialize with yaml.safe_dump so quotes/backslashes round-trip via yaml.safe_load
+            fm_data = {
+                "title": fm["title"],
+                "description": fm["description"],
+                "keywords": fm["keywords"],
+                "order": fm["order"],
+            }
+            if write:
+                fm_yaml = yaml.safe_dump(fm_data, sort_keys=False).strip()
+                new_text = f"---\n{fm_yaml}\n---\n\n" + text
+                path.write_text(new_text, encoding="utf-8")
+                print(f"  [generated] {rel_path} -- frontmatter added, REVIEW recommended", file=sys.stderr)
+            else:
+                print(f"  [would generate] {rel_path} -- frontmatter missing, run without --check to add", file=sys.stderr)
             review_needed.append(path)
-            print(f"  [generated] {rel_path} -- frontmatter added, REVIEW recommended", file=sys.stderr)
         else:
             # Fill in any missing fields from content
             fm = fill_missing_fields(fm, text, name)
@@ -269,6 +272,19 @@ def regenerate_index(index_path: Path, entries: list[dict]) -> str:
     text = index_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
 
+    # Validate marker pair before replacing content
+    start_count = sum(1 for line in lines if MARKER_START in line)
+    end_count = sum(1 for line in lines if MARKER_END in line)
+    if start_count != 1 or end_count != 1:
+        raise ValueError(
+            f"docs/INDEX.md must contain exactly one MARKER_START and one MARKER_END "
+            f"(found {start_count} start, {end_count} end)"
+        )
+    start_idx = next(i for i, line in enumerate(lines) if MARKER_START in line)
+    end_idx = next(i for i, line in enumerate(lines) if MARKER_END in line)
+    if start_idx > end_idx:
+        raise ValueError("MARKER_START must appear before MARKER_END in docs/INDEX.md")
+
     docs_list = build_docs_list(entries)
     keywords = build_keywords_union(entries)
 
@@ -331,14 +347,25 @@ def main() -> int:
         print(f"Error: {INDEX_FILE} not found. Create it first with the doc markers.", file=sys.stderr)
         return 1
 
-    entries, review_needed = collect_docs(DOCS_DIR)
+    entries, review_needed = collect_docs(DOCS_DIR, write=not check_only)
     if not entries:
         print(f"No docs with frontmatter found in {DOCS_DIR}/.", file=sys.stderr)
         return 1
 
-    new_content = regenerate_index(INDEX_FILE, entries)
+    try:
+        new_content = regenerate_index(INDEX_FILE, entries)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     if check_only:
+        if review_needed:
+            print(
+                f"Error: {len(review_needed)} doc(s) missing frontmatter. "
+                f"Run scripts/update-docs-index.py to generate.",
+                file=sys.stderr,
+            )
+            return 1
         current = INDEX_FILE.read_text(encoding="utf-8")
         if current != new_content:
             print("Error: docs/INDEX.md is stale. Run scripts/update-docs-index.py to update.", file=sys.stderr)

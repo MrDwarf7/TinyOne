@@ -3,9 +3,9 @@ name         = "tinylang"
 version      = "1.5.1"
 edition      = "2024"
 description  = "TinyLang v1 compiler, verified bytecode runtime, adaptive JIT, and C ABI"
-license-file = "../../License.rst"
+license-file = "../../LICENSE"
 repository   = "https://github.com/ConnerAdamsMaine/TinyOne"
-readme       = "../../README.rst"
+readme       = "../../README.md"
 exclude      = [ "main.rs" ]
 
 [features]

@@ -15,19 +15,19 @@ class HashToolTests(unittest.TestCase):
     def test_default_excludes_match_current_layout_targets(self) -> None:
         excludes = hash_tool.defaulted_exclude_patterns((), use_defaults=True)
 
-        self.assertIn("TinyOne/target", excludes)
-        self.assertIn("Ralloc/target", excludes)
+        self.assertIn("crates/tinyone_core/target", excludes)
+        self.assertIn("crates/tinyone_ralloc/target", excludes)
         self.assertNotIn("Rust/target", excludes)
 
     def test_tree_hash_skips_current_layout_build_outputs_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "TinyOne" / "src").mkdir(parents=True)
-            (root / "TinyOne" / "target" / "debug").mkdir(parents=True)
-            (root / "Ralloc" / "target").mkdir(parents=True)
-            (root / "TinyOne" / "src" / "lib.rs").write_text("pub fn ok() {}\n", encoding="utf-8")
-            (root / "TinyOne" / "target" / "debug" / "tinylang").write_text("drop\n", encoding="utf-8")
-            (root / "Ralloc" / "target" / "lib.a").write_text("drop\n", encoding="utf-8")
+            (root / "crates" / "tinyone_core" / "src").mkdir(parents=True)
+            (root / "crates" / "tinyone_core" / "target" / "debug").mkdir(parents=True)
+            (root / "crates" / "tinyone_ralloc" / "target").mkdir(parents=True)
+            (root / "crates" / "tinyone_core" / "src" / "lib.rs").write_text("pub fn ok() {}\n", encoding="utf-8")
+            (root / "crates" / "tinyone_core" / "target" / "debug" / "tinylang").write_text("drop\n", encoding="utf-8")
+            (root / "crates" / "tinyone_ralloc" / "target" / "lib.a").write_text("drop\n", encoding="utf-8")
 
             result = hash_tool.build_tree_result(
                 root,
@@ -40,7 +40,7 @@ class HashToolTests(unittest.TestCase):
                 True,
             )
 
-            self.assertEqual([file.path for file in result.files or ()], ["TinyOne/src/lib.rs"])
+            self.assertEqual([file.path for file in result.files or ()], ["crates/tinyone_core/src/lib.rs"])
 
     def test_manifest_check_reports_all_entries_without_aborting_on_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

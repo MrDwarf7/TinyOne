@@ -25,7 +25,7 @@ Writing TinyLang programs:
 - [Syntax: Modules](syntax/modules.md) -- import/export and
   `tinyone.json` manifests.
 - [Standard Library](stdlib.md) -- all Phase-1 and Phase-2 builtins.
-- [Examples](examples.md) -- runnable programs by feature.
+- [Examples](EXAMPLES.md) -- runnable programs by feature.
 - [CLI Reference](cli.md) -- flags and workflow examples.
 
 # Integrators and Embedders
