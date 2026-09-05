@@ -2,7 +2,7 @@
 title: ABI Reference
 ---
 
-TinyOne\'s C ABI is the interface between the compiled `libtinyone`
+TinyOne's C ABI is the interface between the compiled `libtinyone`
 shared library and any host application. It covers the JSON response
 contract, the panic boundary, ownership rules, and the versioning
 policy.
@@ -20,11 +20,11 @@ For how to link and call the library from C, see
 
 # Documents in This Area
 
-- [contract.md](contract.md) \-- Runtime invariants callers can rely on
+- [contract.md](contract.md) -- Runtime invariants callers can rely on
   today: panic boundary, null safety, ownership, thread safety, and the
   verification guarantee.
-- [ABI versioning reference](versioning.md) \-- What constitutes a
+- [ABI versioning reference](versioning.md) -- What constitutes a
   breaking change, current stability status per area, and the v1
   stability declaration plan.
-- [schemas.md](schemas.md) \-- Exact JSON `value` schemas for every
-  entry point\'s success response.
+- [schemas.md](schemas.md) -- Exact JSON `value` schemas for every
+  entry point's success response.

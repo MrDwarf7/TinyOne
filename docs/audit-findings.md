@@ -37,7 +37,7 @@ numbers change.
 - The C smoke test requires a built debug dynamic library and may skip
   when the library is unavailable. Rust-level ABI contract tests remain
   unconditional.
-- A bare `HeapRef` does not contain its heap object\'s type.
+- A bare `HeapRef` does not contain its heap object's type.
   Consequently, `TypeKind::try_from_runtime_value` returns `None` for
   heap references; callers must resolve those through the owning heap.
   The original `TypeKind::from_runtime_value` signature is retained for

@@ -1,3 +1,7 @@
+---
+title: Authority Registry Recovery Gate
+---
+
 # Authority Registry Recovery Gate
 
 The `recovery/project-shape-integration-20260829` commit contains local WIP

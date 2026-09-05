@@ -16,15 +16,15 @@ forum](https://tl.404connernotfound.dev).
 
 # Documents in This Area
 
-- [types.md](types.md) \-- All value types: int, string, array, struct,
+- [types.md](types.md) -- All value types: int, string, array, struct,
   buffer, cell, pointer, and null; creation, mutation, runtime errors,
   and ownership.
-- [statements.md](statements.md) \-- Every statement form: let,
+- [statements.md](statements.md) -- Every statement form: let,
   assignment, print, set, if/else, while, break, continue, return,
   struct, fn, export, and import.
-- [expressions.md](expressions.md) \-- Expression grammar, the full
+- [expressions.md](expressions.md) -- Expression grammar, the full
   operator precedence table, arithmetic, comparisons, and the unsafe
   gate.
-- [modules.md](modules.md) \-- Import/export system, path resolution,
+- [modules.md](modules.md) -- Import/export system, path resolution,
   `tinyone.json` manifest, circular-import detection, and a worked
   example.

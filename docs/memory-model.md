@@ -26,7 +26,7 @@ compile time (`Function.slot_count`). Slots are stored in a flat
 contiguous frame slices.
 
 - Slots are **zero-initialized** at frame entry (value `Int(0)`).
-- Slots are **not freed** between loop iterations \-- a slot retains its
+- Slots are **not freed** between loop iterations -- a slot retains its
   last-written value until the function returns.
 - Slot count is fixed; the compiler allocates new slots for every `let`
   declaration. Block exit does not reclaim slots; names are hidden after
@@ -40,7 +40,7 @@ contiguous frame slices.
   `thread_spawn` is called. Heap references in that snapshot still
   resolve through the shared runtime heap; coordinate shared mutation
   with mutexes or atomic values.
-- Spawned threads inherit the runtime\'s system arguments and
+- Spawned threads inherit the runtime's system arguments and
   environment. Deterministic input queues are not shared between
   threads; pass input values as function arguments before spawning.
 
@@ -59,7 +59,7 @@ contiguous frame slices.
 slot if `free` is empty), increments the generation, and stores the
 object.
 
-**Deallocation (\`\`unsafe free\`\`):** Sets the slot to `None` and adds
+**Deallocation (`unsafe free`):** Sets the slot to `None` and adds
 the index to `free`. The generation increments if that slot is later
 reused.
 
@@ -72,8 +72,8 @@ Before any access to a heap object, the runtime checks:
 
     stored_generation[address] == ref.generation
 
-If they differ \-- because the slot was freed and possibly reallocated
-since `ref` was created \-- the runtime returns
+If they differ -- because the slot was freed and possibly reallocated
+since `ref` was created -- the runtime returns
 `TinyOneError::runtime("Stale heap reference ...")`.
 
 This catches **use-after-free** and prevents a new allocation at the
@@ -84,18 +84,18 @@ same address from being mistaken for the old object.
 A `RawPointer { address, kind, index, field, generation, cast }` derives
 from a `HeapRef` and adds:
 
-- `kind` \-- `"null"`, `"object"`, `"array"`, `"buffer"`, or `"field"`.
-- `index` \-- element or byte offset (for array and buffer pointers).
-- `field` \-- field name (for struct-field pointers).
-- `generation` \-- generation at pointer creation time.
-- `cast` \-- optional type annotation set by `cast_ptr`.
+- `kind` -- `"null"`, `"object"`, `"array"`, `"buffer"`, or `"field"`.
+- `index` -- element or byte offset (for array and buffer pointers).
+- `field` -- field name (for struct-field pointers).
+- `generation` -- generation at pointer creation time.
+- `cast` -- optional type annotation set by `cast_ptr`.
 
 Before any pointer use, the runtime validates, in order:
 
-1.  **Base generation** \--
+1.  **Base generation** --
     `stored_generation[address] == pointer.generation`.
-2.  **Kind** \-- the live object at `address` matches `pointer.kind`.
-3.  **Bounds** \-- `index` is within the object\'s element or byte
+2.  **Kind** -- the live object at `address` matches `pointer.kind`.
+3.  **Bounds** -- `index` is within the object's element or byte
     count.
 
 A stale base object, kind mismatch, or out-of-bounds access each produce
@@ -111,7 +111,7 @@ for the entire run.
 object. It does not clone, move, or transfer ownership.
 
 **Freeing:** `unsafe free(value)` releases the heap slot. Freeing is
-**shallow** \-- if the freed object contains references to other heap
+**shallow** -- if the freed object contains references to other heap
 objects, those referenced objects are not freed; they remain live until
 separately freed or the run ends.
 
@@ -145,9 +145,9 @@ All limits are enforced before allocation. Exceeding a limit produces a
 At program exit, the runtime drains all remaining live heap objects. The
 `TinyRunReport` includes:
 
-- `heap_before_shutdown` \-- statistics immediately before the drain.
-- `heap_after_shutdown` \-- statistics after the drain; `shutdown_frees`
+- `heap_before_shutdown` -- statistics immediately before the drain.
+- `heap_after_shutdown` -- statistics after the drain; `shutdown_frees`
   counts objects freed by the drain.
 
-The drain is not triggered by `unsafe free` \-- only by runtime
+The drain is not triggered by `unsafe free` -- only by runtime
 shutdown.

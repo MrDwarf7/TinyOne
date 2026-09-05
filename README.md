@@ -1,6 +1,8 @@
----
-title: TinyLang
----
+[![Crates.io](https://img.shields.io/crates/v/tinylang.svg)](https://crates.io/crates/tinylang)
+[![Crates.io](https://img.shields.io/crates/d/tinylang.svg)](https://crates.io/crates/tinylang)
+[![docs.rs](https://docs.rs/tinylang/badge.svg)](https://docs.rs/tinylang)
+[![CI](https://github.com/ConnerAdamsMaine/TinyOne/actions/workflows/test.yml/badge.svg)](https://github.com/ConnerAdamsMaine/TinyOne/actions/workflows/test.yml)
+[![License](https://img.shields.io/badge/license-custom-blue.svg)](#license)
 
 TinyOne is the v1 release generation of TinyLang, a portable systems
 programming language designed around a compact VM, bounded runtime
@@ -28,52 +30,67 @@ is its v1 implementation generation. TinyLang v2 is the active internal
 language roadmap: v2 features are developed on the v1 release foundation
 without creating a separate user-facing language.
 
-:::: note
-::: title
-Note
-:::
+> **Repository history note:** Multiple recent failed rebases, and
+> subsequent rebase fixes, ruined the commit history. This repository has
+> nevertheless been in active development for almost eight months.
 
-**Repository history note:** Multiple recent failed rebases, and
-subsequent rebase fixes, ruined the commit history. This repository has
-nevertheless been in active development for almost eight months.
-::::
+> **TinyLang v2 Development Update**
+>
+> With the successful v1 release line locked in, active development has
+> shifted to **TinyLang v2**. Key architectural upgrades currently
+> underway include:
+>
+> - **Deterministic Binary FFI:** Replacing JSON-over-C with a zero-copy,
+>   cross-system binary serialization protocol.
+> - **Universal Language SDKs:** First-class test crates coming for **C,
+>   Python, JavaScript (Node.js), and Rust**.
+> - **Unified Memory Determinism:** Deepening `Ralloc` integration across
+>   all VM and runtime primitives.
+>
+> _The frozen v1 ABI remains stable in `crates/tinyone_core/` while v2
+> features evolve internally._
 
-:::: note
-::: title
-Note
-:::
+---
 
-**TinyLang v2 Development Update**
+- [General Information](#general-information)
+- [What Tiny Means](#what-tiny-means)
+- [Project Goals](#project-goals)
+- [Build Instructions](#build-instructions)
+- [Command Line](#command-line)
+- [Language Overview](#language-overview)
+- [Runtime and Memory Model](#runtime-and-memory-model)
+- [Hard Resource Limits](#hard-resource-limits)
+  - [Bytecode artifacts](#bytecode-artifacts)
+  - [Artifact authority](#artifact-authority)
+  - [Runtime, source, and FFI](#runtime-source-and-ffi)
+- [VM and JIT](#vm-and-jit)
+- [C FFI](#c-ffi)
+- [Documentation](#documentation)
+- [Developer Tools](#developer-tools)
+- [Known Implementation Gaps](#known-implementation-gaps)
+  - [Documentation status](#documentation-status)
+  - [Repository and documentation drift](#repository-and-documentation-drift)
+  - [Test and verification gaps](#test-and-verification-gaps)
+  - [Language and runtime gaps](#language-and-runtime-gaps)
+  - [Allocator boundary](#allocator-boundary)
+- [Tests and Benchmarks](#tests-and-benchmarks)
+- [Repository Layout](#repository-layout)
+- [Release Direction](#release-direction)
+- [LICENSE](#license)
+- [Feedback and Community](#feedback-and-community)
 
-With the successful v1 release line locked in, active development has
-shifted to **TinyLang v2**. Key architectural upgrades currently
-underway include:
-
-- **Deterministic Binary FFI:** Replacing JSON-over-C with a zero-copy,
-  cross-system binary serialization protocol.
-- **Universal Language SDKs:** First-class test crates coming for **C,
-  Python, JavaScript (Node.js), and Rust**.
-- **Unified Memory Determinism:** Deepening `Ralloc` integration across
-  all VM and runtime primitives.
-
-*The frozen v1 ABI remains stable in `crates/tinyone_core/` while v2 features
-evolve internally.*
-::::
-
-------------------------------------------------------------------------
-
-::: contents
-:::
+<a id="general-information"></a>
 
 # General Information
 
 - Workspace manifest: `Cargo.toml`
-- Source crate: `crates/tinyone_core/`
-- Allocator crate: `crates/tinyone_ralloc/`
+- Source crate: `crates/tinyone_core/` (crate: `tinylang`)
+- Allocator crate: `crates/tinyone_ralloc/` (crate: `tinyone_ralloc`)
 - C FFI header: `tinylang.h`
 - Public documentation: `docs/`
 - Design notes and future-direction documents: `docs/planned/`
 - Developer tools: `tools/`
+- Build/orchestration: `crates/xtask/`, `Makefile.toml`, `build/`
 
 TinyLang is now in its v1 release line, but v1 and earlier are
 deliberately discovery versions. The syntax, bytecode format, builtin
@@ -97,6 +114,8 @@ window. Reaching that goal means changing the v2 ABI, FFI, allocator,
 VM, JIT, and surrounding implementation model when the evidence says we
 should.
 
+<a id="what-tiny-means"></a>
+
 # What Tiny Means
 
 TinyLang is designed to stay small at the architectural level, not
@@ -113,6 +132,8 @@ The largest implementation pieces may be the VM and memory allocator,
 but even those should remain compact, inspectable, and understandable.
 The goal is a capable language with a compact operational core that
 remains portable across systems.
+
+<a id="project-goals"></a>
 
 # Project Goals
 
@@ -131,6 +152,8 @@ TinyLang does not aim to hide unsafe operations. Operations that can
 affect memory, runtime state, pointer provenance, or host resources
 should be explicit and checked by the runtime wherever possible.
 
+<a id="build-instructions"></a>
+
 # Build Instructions
 
 Build the Rust crate and CLI executable:
@@ -142,7 +165,7 @@ Run the repo-local CI/release gate from the repository root:
     cargo run --manifest-path crates/xtask/Cargo.toml -- release-gate
 
 The gate checks the compiler/runtime, allocator, developer harness, language
-fixtures, formatting, Clippy, benchmark smoke coverage, and Python
+fixtures, formatting, Clippy, benchmark smoke coverage, ABI drift, and Python
 tooling. It requires `uv` for the Python steps. The CI-equivalent
 `cargo-make` gate is `cargo make ci-gate`; see [CI/CD](docs/CI_CD.md).
 
@@ -178,6 +201,8 @@ Run a bytecode artifact:
 
     tinylang --run-bytecode program.tobc.json
 
+<a id="command-line"></a>
+
 # Command Line
 
 The CLI supports:
@@ -201,6 +226,8 @@ The CLI supports:
       --stdin               Read input values from stdin
       --verbose             Print program metadata before running
       -h, --help            Show help
+
+<a id="language-overview"></a>
 
 # Language Overview
 
@@ -253,6 +280,8 @@ Current compiler constraints:
   do not resolve imports because they compile anonymous source without a
   resolver
 
+<a id="runtime-and-memory-model"></a>
+
 # Runtime and Memory Model
 
 TinyLang runs through this pipeline:
@@ -275,12 +304,16 @@ deallocation. Heap payloads, VM locals/globals, and allocator-side
 backing are Ralloc-owned; allocation-table bookkeeping and shutdown
 remain deterministic.
 
+<a id="hard-resource-limits"></a>
+
 # Hard Resource Limits
 
 TinyOne rejects inputs that exceed the following enforced v1 caps. These
 are current implementation limits, not sizing recommendations; users who
 generate source or bytecode should stay within them. Every loaded
 artifact is verified before VM execution or JIT lowering.
+
+<a id="bytecode-artifacts"></a>
 
 ## Bytecode artifacts
 
@@ -309,6 +342,8 @@ are rejected by verification. The decoder applies its table and
 instruction bounds before it builds each program table; the full
 verifier budget check completes before execution.
 
+<a id="artifact-authority"></a>
+
 ## Artifact authority
 
 New JSON artifacts use schema version 2 and compact binary artifacts use
@@ -321,6 +356,8 @@ authenticated the artifact bytes and accepted the recorded policy. This
 prevents a supplied artifact from adding filesystem, environment,
 thread, network, process, hardware, graphics, or unsafe-memory authority
 on its own.
+
+<a id="runtime-source-and-ffi"></a>
 
 ## Runtime, source, and FFI
 
@@ -341,6 +378,8 @@ on its own.
   Stack-resident raw pointers are not subject to this representation
   limit.
 
+<a id="vm-and-jit"></a>
+
 # VM and JIT
 
 TinyLang has two execution backends:
@@ -348,16 +387,18 @@ TinyLang has two execution backends:
 `vm`
 
 : Portable bytecode interpreter. It is the simpler backend and is the
-  main reference path for behavior checks.
+main reference path for behavior checks.
 
 `jit`
 
 : Adaptive lowered-bytecode tier. It is not a native machine-code JIT.
-  It compiles verified bytecode into internal JIT ops, caches compiled
-  programs by fingerprint, emits inspectable listings, and quickens hot
-  back edges.
+It compiles verified bytecode into internal JIT ops, caches compiled
+programs by fingerprint, emits inspectable listings, and quickens hot
+back edges.
 
 Both public run paths verify bytecode before execution.
+
+<a id="c-ffi"></a>
 
 # C FFI
 
@@ -381,6 +422,8 @@ against `TINYONE_ABI_VERSION` before using the API; expect major
 incompatibilities when TinyLang v2 introduces its new language-boundary
 design.
 
+<a id="documentation"></a>
+
 # Documentation
 
 The main documentation tree is `docs/`:
@@ -403,19 +446,19 @@ documentation-change system:
 `TLR`
 
 : TinyLang Request. A lightweight request for a change, fix,
-  clarification, or improvement.
+clarification, or improvement.
 
 `TLP`
 
 : TinyLang Proposal. A structured design proposal for significant
-  language, compiler, tooling, documentation, standard-library,
-  ecosystem, or governance changes.
+language, compiler, tooling, documentation, standard-library,
+ecosystem, or governance changes.
 
 `TLIN`
 
 : TinyLang Implementation Notice. A release-facing or pre-release notice
-  explaining what is being implemented, what changed, and how users
-  should migrate.
+explaining what is being implemented, what changed, and how users
+should migrate.
 
 The intended path is:
 
@@ -424,16 +467,29 @@ The intended path is:
 Small accepted changes may go directly from TLR to TLIN. Major language
 changes should not skip the TLP stage.
 
+<a id="developer-tools"></a>
+
 # Developer Tools
 
 `tools/hash.py`
 
 : Stdlib-only file, tree, and manifest hashing tool for release
-  manifests, audit checkpoints, and source-tree integrity checks.
+manifests, audit checkpoints, and source-tree integrity checks.
 
 `tools/loc.py`
 
 : Small line-count and audit utility for source and documentation files.
+
+`tools/abi_manifest.py`
+
+: ABI drift-check and symbol-manifest tool. Run
+`python3 tools/abi_manifest.py check` before changing FFI entry points;
+use `manifest` for a deterministic review artifact and `generate-header`
+(requires `cbindgen`) to regenerate `tinylang.h`.
+
+`tools/zip.py`
+
+: Utility for packaging release artifacts.
 
 Examples:
 
@@ -443,10 +499,14 @@ Examples:
     python3 tools/loc.py --audit --docs --json
     python3 tools/loc.py --letters
 
+<a id="known-implementation-gaps"></a>
+
 # Known Implementation Gaps
 
 This section intentionally records gaps between current implementation,
 documentation, tests, and earlier claims.
+
+<a id="documentation-status"></a>
 
 ## Documentation status
 
@@ -462,6 +522,8 @@ historical TinyLang versions available forever, or promise backward
 compatibility any time soon. Users should pin the specific source
 revision or release they need.
 
+<a id="repository-and-documentation-drift"></a>
+
 ## Repository and documentation drift
 
 - Active commands and tooling are workspace-aware: use the root `Cargo.toml`,
@@ -469,10 +531,14 @@ revision or release they need.
 - Historical references may describe pre-workspace releases, but they are not
   operational instructions for this checkout.
 
+<a id="test-and-verification-gaps"></a>
+
 ## Test and verification gaps
 
 - The C FFI smoke test depends on a built debug `cdylib` and may skip
   when that library is not present.
+
+<a id="language-and-runtime-gaps"></a>
 
 ## Language and runtime gaps
 
@@ -492,12 +558,13 @@ revision or release they need.
   program uses JIT mode. Both parent modes provide the verified program
   reference and are covered by threading parity tests.
 
+<a id="allocator-boundary"></a>
+
 ## Allocator boundary
 
 - `crates/tinyone_ralloc/` is a workspace dependency of `crates/tinyone_core/`
-  and is the backend for
-  heap payloads, VM locals/globals, and native allocator sidecar
-  entries.
+  and is the backend for heap payloads, VM locals/globals, and native allocator
+  sidecar entries.
 - Transient VM/JIT operand stacks and compiler/JIT metadata still use
   Rust collections. They are control-plane data, not addressable TinyOne
   memory; moving them to Ralloc requires a separate variable-width value
@@ -508,6 +575,8 @@ revision or release they need.
   `Clone` implementation retain conventional infallible APIs that
   document their panic behavior; embedders can use `try_new` and
   `try_clone` instead.
+
+<a id="tests-and-benchmarks"></a>
 
 # Tests and Benchmarks
 
@@ -534,7 +603,7 @@ rows are meant to make optimization work attributable: `allocator.*`
 isolates Ralloc, `compiler.file_modules_*` compares full module
 compilation with the size-aware disk-cache policy, `runtime.vm_*` and
 `runtime.jit_*` compare execution tiers, and the paired
-`runtime.jit_hot_loop_4096_*` rows isolate the adaptive JIT\'s
+`runtime.jit_hot_loop_4096_*` rows isolate the adaptive JIT's
 quickening benefit over a controlled 4,096-iteration loop. Collection
 and heap phase rows cover 16, 256, and 4,096-entry workloads, individual
 map and vector operations, generational slot reuse, and explicit frees.
@@ -576,44 +645,47 @@ Current state:
 - The default test suite and feature-gated language fixture suite are
   release gates and are expected to pass before changes are pushed.
 
+<a id="repository-layout"></a>
+
 # Repository Layout
 
     .
-    |-- Cargo.toml
+    |-- Cargo.toml                    workspace root
     |-- Cargo.lock
     |-- README.md
-    |-- LICENSE.md
-    |-- tinylang.h
+    |-- LICENSE
+    |-- build/                        cargo-make task files (ci, ffi, dist, docker, etc.)
     |-- crates/
-    |   |-- tinyone_core/
+    |   |-- tinyone_core/              compiler, VM, JIT, FFI, CLI (crate: tinylang)
     |   |   |-- src/
-    |   |   `-- tests/
-    |   |-- tinyone_ralloc/
-    |   |   |-- include/
-    |   |   |-- src/
-    |   |   `-- tests/
-    |   |-- tinyone_test_support/
-    |   `-- xtask/
-    |-- build/
-    |-- scripts/
-    |-- tools/
-    |   |-- abi_manifest.py
-    |   |-- hash.py
-    |   `-- loc.py
-    |-- docs/
-    |   |-- abi/
-    |   |-- ffi/
-    |   |-- syntax/
-    |   |-- architecture.md
-    |   |-- bytecode.md
-    |   |-- memory-model.md
-    |   |-- stdlib.md
-    |   `-- v2-roadmap.md
-    `-- .github/
-        `-- workflows/
+    |   |   |   |-- bin/              tinylang_bench.rs, tinyone-sandbox-worker.rs
+    |   |   |   |-- bytecode/         opcode, instr, program, artifact, peephole, verifier
+    |   |   |   |-- compiler/         parser, state, symbols, modules, incremental
+    |   |   |   |-- jit/              op, chunk, program, cache, vm
+    |   |   |   |-- runtime/          vm, heap, memory, value, stdlib, sync, pointers, ...
+    |   |   |   |-- syntax/           lexer, token
+    |   |   |   |-- api.rs, cli.rs, ffi.rs, runner.rs, builtins.rs, ...
+    |   |   |   `-- tests/            abi_api_soundness, runtime_parity, stdlib_parity,
+    |   |   |                         language_suite, language/, programs/, threading, ...
+    |   |-- tinyone_ralloc/           Ralloc allocator crate (crate: tinyone_ralloc)
+    |   |   |-- src/ + include/ralloc.h + tests/
+    |   |-- tinyone_test_support/     shared test-support crate
+    |   `-- xtask/                    release-gate / CI orchestrator
+    |-- docs/                         abi/, ffi/, syntax/, architecture, bytecode, ...
+    |-- scripts/                      check_abi_drift, consumer_compile/smoke
+    |-- tests/consumers/              C / C++ / Rust FFI consumer fixtures
+    |-- tools/                        hash.py, loc.py, abi_manifest.py, zip.py
+    |-- tinylang.h                    generated C header (cbindgen)
+    |-- tinyone-response-schema.json  committed JSON schema for ABI responses
+    |-- Makefile.toml, build/         cargo-make task definitions
+    |-- cbindgen.toml, cliff.toml     tool config
+    |-- rust-toolchain.toml           toolchain pin
+    `-- Config.toml                   TinyOne project policy (compile-cache deps)
 
 The user-facing language name is TinyLang. TinyOne names the v1 release
 generation of the implementation line; v2 is the active internal roadmap.
+
+<a id="release-direction"></a>
 
 # Release Direction
 
@@ -630,9 +702,13 @@ The v1 release themes include:
 - deterministic ownership and allocator integration
 - documentation cleanup after the crate path move
 
+<a id="license"></a>
+
 # License
 
-See `LICENSE.md`.
+See `LICENSE`.
+
+<a id="feedback-and-community"></a>
 
 # Feedback and Community
 
