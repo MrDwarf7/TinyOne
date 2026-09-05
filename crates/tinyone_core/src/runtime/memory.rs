@@ -18,12 +18,24 @@ impl TinyMemory {
     /// Allocates VM memory, panicking if the fixed-capacity Ralloc backend is
     /// exhausted. Execution paths should use [`TinyMemory::try_new`] so
     /// allocation failures remain recoverable runtime errors.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`TinyMemory::try_new`] fails — i.e. when
+    /// `slot_count * ENCODED_VALUE_BYTES` overflows or the Ralloc backend cannot
+    /// allocate the requested capacity.
+    #[must_use]
     pub fn new(slot_count: usize) -> Self {
         Self::try_new(slot_count).unwrap_or_else(|error| panic!("failed to allocate VM memory with Ralloc: {error}"))
     }
 
     /// Attempts to allocate VM memory without panicking on size overflow or
     /// allocator exhaustion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `slot_count * ENCODED_VALUE_BYTES` overflows or if the
+    /// Ralloc backend fails to allocate the backing storage.
     pub fn try_new(slot_count: usize) -> Result<Self> {
         let byte_len = slot_count
             .checked_mul(ENCODED_VALUE_BYTES)
@@ -41,6 +53,12 @@ impl TinyMemory {
         Ok(memory)
     }
 
+    /// Resets every slot to the encoded default [`Value`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the default [`Value`] cannot be encoded, which is unreachable
+    /// for the built-in default value.
     pub fn reset(&mut self) {
         if let Some(bytes) = &mut self.bytes {
             let encoded = value_codec::encode_value(&Value::default()).expect("default VM value must be encodable");
@@ -51,10 +69,26 @@ impl TinyMemory {
         }
     }
 
+    /// Loads the value stored in the given slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `slot` is out of range for this memory.
     pub fn load(&self, slot: usize) -> Result<Value> {
         Ok(value_codec::decode_value(self.slot_bytes(slot)?))
     }
 
+    /// Stores `value` into the given `slot`, overwriting its previous contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `slot` is out of range for this memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the total slot capacity cannot be represented as a fixed-width
+    /// region (i.e. `slot * ENCODED_VALUE_BYTES` does not fit), which is
+    /// unreachable for any slot accepted by [`TinyMemory::slot_range`].
     pub fn store(&mut self, slot: usize, value: Value) -> Result<()> {
         let range = self.slot_range(slot)?;
         let encoded = value_codec::encode_value(&value)?;
@@ -116,14 +150,25 @@ impl TinyMemory {
         self.update_int_slot(slot, value, checked_div_int)
     }
 
+    /// Creates a snapshot of the current memory state, returning a vector of all
+    ///
+    /// # Panics
+    /// If any slot cannot be loaded, which is unreachable for any slot accepted by [`TinyMemory::slot_range`].
+    #[must_use]
     pub fn snapshot(&self) -> Vec<Value> {
         (0..self.slot_count)
             .map(|slot| self.load(slot).expect("VM slot must be valid"))
             .collect()
     }
 
-    /// Attempts to clone this memory without panicking on allocator
-    /// exhaustion.
+    /// Attempts to clone this memory without panicking on allocator exhaustion.
+    ///
+    /// # Errors
+    /// If the Ralloc backend fails to allocate the backing storage for the clone.
+    ///
+    /// # Panics
+    /// If the memory cannot be cloned, which is unreachable for any memory accepted by [`TinyMemory::try_new`].
+    /// If any slot cannot be loaded, which is unreachable for any slot accepted by [`TinyMemory::slot_range`].
     pub fn try_clone(&self) -> Result<Self> {
         let mut copy = Self::try_new(self.slot_count)?;
         if self.slot_count != 0 {

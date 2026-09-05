@@ -21,7 +21,7 @@ fn assert_parity(source: &str, expected: &str) {
 
 #[test]
 fn vec_push_pop_round_trip_matches_backends() {
-    let source = r#"
+    let source = r"
     let v = vec_new()
     let ignored = push(v, 1)
     let ignored2 = push(v, 2)
@@ -35,13 +35,13 @@ fn vec_push_pop_round_trip_matches_backends() {
     print len(v)
     print vec_clear(v)
     print len(v)
-    "#;
+    ";
     assert_parity(source, "0\n3\n1\n2\n3\n3\n2\n0\n0\n");
 }
 
 #[test]
 fn map_basic_operations_match_backends() {
-    let source = r#"
+    let source = r"
     let m = map_new()
     print map_set(m, 1, 100)
     print map_set(m, 2, 200)
@@ -54,13 +54,13 @@ fn map_basic_operations_match_backends() {
     print map_del(m, 1)
     print map_len(m)
     print map_has(m, 1)
-    "#;
+    ";
     assert_parity(source, "100\n200\n111\n111\n200\n1\n0\n2\n1\n1\n0\n");
 }
 
 #[test]
 fn map_keys_and_values_preserve_insertion_order() {
-    let source = r#"
+    let source = r"
     let m = map_new()
     let ignored = map_set(m, 30, 1)
     let ignored2 = map_set(m, 10, 2)
@@ -73,7 +73,7 @@ fn map_keys_and_values_preserve_insertion_order() {
     print values[0]
     print values[1]
     print values[2]
-    "#;
+    ";
     assert_parity(source, "30\n10\n20\n1\n2\n3\n");
 }
 
@@ -140,9 +140,9 @@ fn typed_arithmetic_and_assert_helpers_match_backends() {
 
 #[test]
 fn io_read_line_consumes_the_same_input_in_both_backends() {
-    let source = r#"
+    let source = r"
     print io_read_line()
-    "#;
+    ";
     let program = compile_source(source).expect("compile");
     for mode in ["vm", "jit"] {
         let mut output = Vec::new();
@@ -168,13 +168,13 @@ fn string_byte_vs_char_indexing() {
 
 #[test]
 fn invalid_utf8_buffer_is_detected() {
-    let source = r#"
+    let source = r"
     let mem = buffer(2)
     let p = ptr(mem, 0)
     let ignored = unsafe write8(p, 255)
     let ignored2 = unsafe write8(unsafe ptr_add(p, 1), 254)
     print str_is_utf8(mem)
-    "#;
+    ";
     assert_parity(source, "0\n");
 }
 

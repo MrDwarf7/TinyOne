@@ -31,6 +31,11 @@ impl RunMode {
     }
 }
 
+/// Run `program` in `mode` (`"vm"` or `"jit"`), writing program output to `stdout`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid, verification fails, or execution fails.
 pub fn run_program(
     program: Arc<Program>,
     mode: &str,
@@ -40,6 +45,11 @@ pub fn run_program(
     run_program_with_jit_options(program, mode, stdout, inputs, JitOptions::default())
 }
 
+/// Run `program` with explicit JIT options.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid, verification fails, or execution fails.
 pub fn run_program_with_jit_options(
     program: Arc<Program>,
     mode: &str,
@@ -59,6 +69,11 @@ pub fn run_program_with_jit_options(
     )
 }
 
+/// Run `program` with system args and environment.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid, verification fails, or execution fails.
 pub fn run_program_with_env(
     program: Arc<Program>,
     mode: &str,
@@ -70,6 +85,11 @@ pub fn run_program_with_env(
     run_program_with_env_and_jit_options(program, mode, stdout, inputs, sys_args, sys_env, JitOptions::default())
 }
 
+/// Run `program` with system args, environment, and JIT options.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid, verification fails, or execution fails.
 pub fn run_program_with_env_and_jit_options(
     program: Arc<Program>,
     mode: &str,
@@ -83,6 +103,11 @@ pub fn run_program_with_env_and_jit_options(
     run_verified_program_with_env_and_jit_options(&verified, mode, stdout, inputs, sys_args, sys_env, jit_options)
 }
 
+/// Run an already-verified `program` in `mode`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid or execution fails.
 pub fn run_verified_program(
     verified: &VerifiedProgram,
     mode: &str,
@@ -92,6 +117,11 @@ pub fn run_verified_program(
     run_verified_program_with_jit_options(verified, mode, stdout, inputs, JitOptions::default())
 }
 
+/// Run an already-verified `program` with explicit JIT options.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid or execution fails.
 pub fn run_verified_program_with_jit_options(
     verified: &VerifiedProgram,
     mode: &str,
@@ -110,6 +140,11 @@ pub fn run_verified_program_with_jit_options(
     )
 }
 
+/// Run an already-verified `program` with system args and environment.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid or execution fails.
 pub fn run_verified_program_with_env(
     verified: &VerifiedProgram,
     mode: &str,
@@ -129,6 +164,12 @@ pub fn run_verified_program_with_env(
     )
 }
 
+/// Run an already-verified `program` with system args, environment, and JIT options.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid, the VM memory cannot be allocated, or
+/// execution fails.
 pub fn run_verified_program_with_env_and_jit_options(
     verified: &VerifiedProgram,
     mode: &str,
@@ -155,6 +196,11 @@ pub fn run_verified_program_with_env_and_jit_options(
     }
 }
 
+/// Run `program` in `mode`, collecting a [`TinyRunReport`].
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid, verification fails, or execution fails.
 pub fn run_program_report(
     program: Arc<Program>,
     mode: &str,
@@ -165,6 +211,12 @@ pub fn run_program_report(
     run_verified_program_report(&verified, mode, stdout, inputs)
 }
 
+/// Run an already-verified `program`, collecting a [`TinyRunReport`].
+///
+/// # Errors
+///
+/// Returns [`Err`] if `mode` is invalid, the VM memory cannot be allocated, or
+/// execution fails.
 pub fn run_verified_program_report(
     verified: &VerifiedProgram,
     mode: &str,
@@ -186,11 +238,23 @@ pub fn run_verified_program_report(
     }
 }
 
+/// Compile and run `source` in `mode`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if source compilation/verification, `mode` is invalid, or
+/// execution fails.
 pub fn run_source(source: &str, mode: &str, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyMemory> {
     let program = compile_source_verified(source)?;
     run_verified_program(&program, mode, stdout, inputs)
 }
 
+/// Compile and run `source` in `mode`, collecting a [`TinyRunReport`].
+///
+/// # Errors
+///
+/// Returns [`Err`] if source compilation/verification, `mode` is invalid, or
+/// execution fails.
 pub fn run_source_report(
     source: &str,
     mode: &str,

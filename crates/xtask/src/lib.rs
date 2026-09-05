@@ -26,9 +26,17 @@ impl Task {
         Task::ToolsTest,
         Task::ReleaseGate,
     ];
+}
 
-    pub fn as_str(self) -> &'static str {
-        match self {
+impl fmt::Display for Task {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str((*self).into())
+    }
+}
+
+impl From<Task> for &'static str {
+    fn from(task: Task) -> Self {
+        match task {
             Task::Check => "check",
             Task::Test => "test",
             Task::TestHooks => "test-hooks",
@@ -38,12 +46,6 @@ impl Task {
             Task::ToolsTest => "tools-test",
             Task::ReleaseGate => "release-gate",
         }
-    }
-}
-
-impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 
@@ -79,6 +81,7 @@ impl CommandSpec {
         }
     }
 
+    #[must_use]
     pub fn render(&self) -> String {
         let mut parts = Vec::with_capacity(self.args.len() + 1);
         parts.push(shell_word(self.program));
@@ -117,6 +120,7 @@ pub struct Plan {
 }
 
 impl Plan {
+    #[must_use]
     pub fn render_commands(&self) -> Vec<String> {
         self.steps
             .iter()
@@ -124,6 +128,11 @@ impl Plan {
             .collect()
     }
 
+    /// Run the plan in the given repo root.
+    ///
+    /// # Errors
+    /// Returns an error if any command fails or cannot be started.
+    ///
     pub fn run(&self, repo_root: &Path, dry_run: bool) -> Result<(), String> {
         for step in &self.steps {
             println!("==> {}", step.label);
@@ -143,6 +152,7 @@ impl Plan {
     }
 }
 
+#[must_use]
 pub fn plan_for(task: Task) -> Plan {
     let steps = match task {
         Task::Check => vec![check_step()],
@@ -168,6 +178,11 @@ pub fn plan_for(task: Task) -> Plan {
     Plan { task, steps }
 }
 
+/// Locate the root of the `TinyOne` repo from the current working directory.
+///
+/// # Errors
+/// Returns an error if the current working directory is not the root of the `TinyOne` repo,
+/// or if it cannot read the current working directory.
 pub fn repo_root_from_cwd() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|err| format!("cannot read cwd: {err}"))?;
     if cwd.join("crates/tinyone_core/Cargo.toml").is_file()
@@ -183,8 +198,13 @@ pub fn repo_root_from_cwd() -> Result<PathBuf, String> {
     ))
 }
 
+#[must_use]
 pub fn usage() -> String {
-    let tasks = Task::ALL.iter().map(|task| task.as_str()).collect::<Vec<_>>().join("|");
+    let tasks = Task::ALL
+        .iter()
+        .map(|task| std::string::ToString::to_string(&task))
+        .collect::<Vec<_>>()
+        .join("|");
     format!(
         "usage: cargo run --manifest-path crates/xtask/Cargo.toml -- <{tasks}> [--dry-run]\n\
          \n\

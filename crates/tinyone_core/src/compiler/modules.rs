@@ -129,11 +129,11 @@ impl ModuleResolver {
         let manifest_module = self.resolve_manifest_import(&base, import_path)?;
         let configured_capabilities = manifest_module
             .as_ref()
-            .map(|(_, module)| module.capabilities.intersection(self.config.root_capabilities()))
-            .unwrap_or_else(ModuleCapabilities::none);
-        let candidate = manifest_module
-            .map(|(directory, module)| directory.join(module.path))
-            .unwrap_or_else(|| base.join(import));
+            .map_or_else(ModuleCapabilities::none, |(_, module)| {
+                module.capabilities.intersection(self.config.root_capabilities())
+            });
+        let candidate =
+            manifest_module.map_or_else(|| base.join(import), |(directory, module)| directory.join(module.path));
         ensure_tinylang_source(&candidate)?;
         reject_native_library_import(&candidate)?;
         let path = if let Some(path) = self.canonical_resolutions.get(&candidate) {
@@ -232,10 +232,7 @@ impl ModuleResolver {
 
     fn read_manifest_modules(&mut self, manifest_path: &Path) -> Result<Option<&HashMap<String, ManifestModule>>> {
         if !self.manifests.contains_key(manifest_path) {
-            if !manifest_path.exists() {
-                self.inputs.insert(manifest_path.to_path_buf(), None);
-                self.manifests.insert(manifest_path.to_path_buf(), None);
-            } else {
+            if manifest_path.exists() {
                 let canonical_manifest = manifest_path
                     .canonicalize()
                     .map_err(|error| TinyOneError::compile(format!("Package manifest read error: {error}")))?;
@@ -260,6 +257,9 @@ impl ModuleResolver {
                     parsed.insert(name.clone(), module);
                 }
                 self.manifests.insert(manifest_path.to_path_buf(), Some(parsed));
+            } else {
+                self.inputs.insert(manifest_path.to_path_buf(), None);
+                self.manifests.insert(manifest_path.to_path_buf(), None);
             }
         }
         Ok(self.manifests.get(manifest_path).and_then(Option::as_ref))
@@ -428,9 +428,10 @@ fn reject_native_library_import(path: &Path) -> Result<()> {
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let is_native = filename.ends_with(".dll")
-        || filename.ends_with(".dylib")
-        || filename.ends_with(".so")
+    let is_native = Path::new(&filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| matches!(ext, "dll" | "dylib" | "so"))
         || filename.contains(".so.");
     if is_native {
         return Err(TinyOneError::compile(format!(
@@ -483,8 +484,7 @@ pub(crate) fn unique_module_name(state: &mut CompilerSharedState, base_name: &st
     if state
         .module_name_owners
         .get(base_name)
-        .map(|owner| owner == filename)
-        .unwrap_or(true)
+        .is_none_or(|owner| owner == filename)
     {
         state
             .module_name_owners
@@ -497,8 +497,7 @@ pub(crate) fn unique_module_name(state: &mut CompilerSharedState, base_name: &st
     while state
         .module_name_owners
         .get(&name)
-        .map(|owner| owner != filename)
-        .unwrap_or(false)
+        .is_some_and(|owner| owner != filename)
     {
         let digest = Blake2b512::digest(format!("{filename}:{suffix}").as_bytes());
         name = format!("{}_{}", base_name, hex::encode(&digest[..4]));

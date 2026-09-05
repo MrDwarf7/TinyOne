@@ -8,7 +8,7 @@ fn buffer_allocates_writable_storage_and_frees_on_drop() {
         assert!(!buffer.is_empty());
 
         for (index, byte) in buffer.as_mut_slice().iter_mut().enumerate() {
-            *byte = index as u8;
+            *byte = u8::try_from(index).expect("buffer length must fit in u8");
         }
         assert_eq!(buffer.as_slice()[17], 17);
     }
@@ -25,7 +25,7 @@ fn buffer_allocates_writable_storage_and_frees_on_drop() {
 fn buffer_resize_requires_unique_handle_and_preserves_bytes() {
     let mut buffer = RallocBuffer::new(8).expect("buffer allocation should succeed");
     for (index, byte) in buffer.as_mut_slice().iter_mut().enumerate() {
-        *byte = 0xa0u8 + index as u8;
+        *byte = 0xa0u8 + u8::try_from(index).expect("buffer length must fit in u8");
     }
 
     assert!(buffer.resize(64));
@@ -43,7 +43,7 @@ fn buffer_aligned_resize_preserves_alignment_and_bytes() {
     assert_eq!(buffer.as_ptr().addr() % 64, 0);
 
     for (index, byte) in buffer.as_mut_slice().iter_mut().enumerate() {
-        *byte = 0xb0u8 + index as u8;
+        *byte = 0xb0u8 + u8::try_from(index).expect("buffer length must fit in u8");
     }
 
     buffer.try_resize(128).expect("aligned resize should succeed");

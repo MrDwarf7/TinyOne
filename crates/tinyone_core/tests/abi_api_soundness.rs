@@ -91,7 +91,7 @@ fn take_ffi_json(ptr: *mut c_char) -> JsonValue {
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("FFI response must be valid JSON, got {text:?}: {error}"))
 }
 
-fn assert_ffi_ok(response: JsonValue) -> JsonValue {
+fn assert_ffi_ok(response: &JsonValue) -> JsonValue {
     assert_eq!(response.get("ok").and_then(JsonValue::as_bool), Some(true));
     response
         .get("value")
@@ -121,10 +121,9 @@ fn assert_runtime_value_schema(value: &JsonValue) {
         "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "fp8" | "fp16" | "fp32" | "fp64" | "bool" => {
             assert_exact_object_keys(value, &["type", "value"])
         }
-        "unit" | "null" => assert_exact_object_keys(value, &["type"]),
+        "unit" | "null" | "phantom" | "unsafe" => assert_exact_object_keys(value, &["type"]),
         "function" => assert_exact_object_keys(value, &["type", "id"]),
         "reference" => assert_exact_object_keys(value, &["type", "address"]),
-        "phantom" | "unsafe" => assert_exact_object_keys(value, &["type"]),
         "zst" => assert_exact_object_keys(value, &["type", "marker"]),
         other => panic!("unknown frozen runtime value type: {other}"),
     }
@@ -297,21 +296,21 @@ fn ffi_success_responses_are_valid_json() {
     let mode = cstring("vm");
     let inputs = cstring("[]");
 
-    let lex = assert_ffi_ok(take_ffi_json(unsafe { tinyone_lex_source_json(source.as_ptr()) }));
+    let lex = assert_ffi_ok(&take_ffi_json(unsafe { tinyone_lex_source_json(source.as_ptr()) }));
     assert!(lex.get("tokens").and_then(JsonValue::as_u64).unwrap_or(0) > 0);
 
-    let compiled = assert_ffi_ok(take_ffi_json(unsafe { tinyone_compile_source_json(source.as_ptr()) }));
+    let compiled = assert_ffi_ok(&take_ffi_json(unsafe { tinyone_compile_source_json(source.as_ptr()) }));
     assert_eq!(compiled.pointer("/artifact/format").and_then(JsonValue::as_str), Some("tinyone-bytecode"));
 
-    let file_compiled = assert_ffi_ok(take_ffi_json(unsafe { tinyone_compile_file_json(file_path.as_ptr()) }));
+    let file_compiled = assert_ffi_ok(&take_ffi_json(unsafe { tinyone_compile_file_json(file_path.as_ptr()) }));
     assert_eq!(file_compiled.pointer("/artifact/format").and_then(JsonValue::as_str), Some("tinyone-bytecode"));
 
-    let run_source = assert_ffi_ok(take_ffi_json(unsafe {
+    let run_source = assert_ffi_ok(&take_ffi_json(unsafe {
         tinyone_run_source_json(source.as_ptr(), mode.as_ptr(), inputs.as_ptr())
     }));
     assert_eq!(run_source.get("stdout").and_then(JsonValue::as_str), Some("7\n"));
 
-    let run_file = assert_ffi_ok(take_ffi_json(unsafe {
+    let run_file = assert_ffi_ok(&take_ffi_json(unsafe {
         tinyone_run_file_json(file_path.as_ptr(), mode.as_ptr(), inputs.as_ptr())
     }));
     assert_eq!(run_file.get("stdout").and_then(JsonValue::as_str), Some("11\n"));
@@ -322,12 +321,12 @@ fn ffi_success_responses_are_valid_json() {
             .to_artifact()
             .to_string(),
     );
-    let run_artifact = assert_ffi_ok(take_ffi_json(unsafe {
+    let run_artifact = assert_ffi_ok(&take_ffi_json(unsafe {
         tinyone_run_artifact_json(artifact.as_ptr(), mode.as_ptr(), inputs.as_ptr())
     }));
     assert_eq!(run_artifact.get("stdout").and_then(JsonValue::as_str), Some("13\n"));
 
-    let listing = assert_ffi_ok(take_ffi_json(unsafe { tinyone_jit_listing_json(artifact.as_ptr()) }));
+    let listing = assert_ffi_ok(&take_ffi_json(unsafe { tinyone_jit_listing_json(artifact.as_ptr()) }));
     assert!(
         listing
             .get("listing")

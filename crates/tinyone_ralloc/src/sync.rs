@@ -69,28 +69,29 @@ impl<T> SpinLock<T> {
         #[cfg(test)]
         self.metrics.record_try_lock_attempt();
 
-        match self.locked.compare_exchange(
-            false,
-            true,
-            // Acquire pairs with `unlock`'s Release store so the new guard
-            // observes all writes made by the previous guard.
-            Ordering::Acquire,
-            // Failure does not acquire the guard or read protected data, so
-            // no synchronization with the previous owner is needed.
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => {
-                Some(SpinLockGuard {
-                    lock:      self,
-                    _not_send: PhantomData,
-                })
-            }
-            Err(_) => {
-                #[cfg(test)]
-                self.metrics.record_failed_try_lock_attempt();
+        if self
+            .locked
+            .compare_exchange(
+                false,
+                true,
+                // Acquire pairs with `unlock`'s Release store so the new guard
+                // observes all writes made by the previous guard.
+                Ordering::Acquire,
+                // Failure does not acquire the guard or read protected data, so
+                // no synchronization with the previous owner is needed.
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            Some(SpinLockGuard {
+                lock:      self,
+                _not_send: PhantomData,
+            })
+        } else {
+            #[cfg(test)]
+            self.metrics.record_failed_try_lock_attempt();
 
-                None
-            }
+            None
         }
     }
 

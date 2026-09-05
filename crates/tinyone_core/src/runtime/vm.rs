@@ -68,6 +68,10 @@ fn lookup_field(fields: &[String], index: usize) -> Result<&str> {
 }
 
 impl VM {
+    /// Creates a new VM instance with the given program, memory, and inputs. The program is verified before execution.
+    ///
+    /// # Errors
+    /// Returns a `TinyOneError` if the program fails verification or if there is an error initializing the VM.
     pub fn new(program: Arc<Program>, memory: TinyMemory, inputs: Vec<String>) -> Result<Self> {
         let verified = VerifiedProgram::verify_arc(program)?;
         Ok(Self::new_unchecked(&verified, memory, inputs))
@@ -110,10 +114,18 @@ impl VM {
         self.context.set_sys_env(env);
     }
 
+    /// Runs the program and returns the final memory state after execution.
+    ///
+    /// # Errors
+    /// Returns a `TinyOneError` if the program encounters a runtime error during execution.
     pub fn run(self, stdout: &mut dyn Write) -> Result<TinyMemory> {
         Ok(self.run_report(stdout)?.memory)
     }
 
+    /// Runs the program and returns a report containing the final memory state and heap statistics.
+    ///
+    /// # Errors
+    /// Returns a `TinyOneError` if the program encounters a runtime error during execution.
     pub fn run_report(mut self, stdout: &mut dyn Write) -> Result<TinyRunReport> {
         let mut memory = std::mem::take(&mut self.memory);
         let code = self.program.code.clone();
@@ -127,7 +139,10 @@ impl VM {
         })
     }
 
-    /// Run a single function by index. Used by thread_spawn.
+    /// Run a single function by index. Used by `thread_spawn`.
+    ///
+    /// # Errors
+    /// Returns a `TinyOneError` if the function index is invalid or if the function encounters a runtime error during execution.
     pub(crate) fn run_function_by_index(
         mut self,
         fn_index: usize,
@@ -177,7 +192,7 @@ impl VM {
                     stack.push(Value::Float {
                         kind: TypeKind::Fp64,
                         bits: f64::from_bits(instr.arg as u64),
-                    })
+                    });
                 }
                 Op::PushFunction => {
                     let function_index = checked_non_negative_usize(instr.arg, "function index")?;
@@ -425,6 +440,6 @@ impl VM {
         self.call_depth += 1;
         let result = self.run_chunk(&fn_code, &mut memory, stdout, &fn_name, Some(function_index), Some(global_memory));
         self.call_depth -= 1;
-        result?.ok_or_else(|| TinyOneError::runtime(format!("Function {:?} returned no value", fn_name)))
+        result?.ok_or_else(|| TinyOneError::runtime(format!("Function {fn_name:?} returned no value")))
     }
 }

@@ -8,6 +8,7 @@ pub struct Instr {
 }
 
 impl Instr {
+    #[must_use]
     pub fn new(op: Op, arg: i64, arg2: i64) -> Self {
         Self { op, arg, arg2 }
     }

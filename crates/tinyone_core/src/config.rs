@@ -35,7 +35,7 @@ struct SigningPolicy {
     authorities:               HashMap<String, AuthorityCertificate>,
 }
 
-/// A company module-signing key that a TinyOne central root has certified.
+/// A company module-signing key that a `TinyOne` central root has certified.
 /// It is verified once while reading Config.toml, then reused for every
 /// module signed by that company.
 #[derive(Debug, Clone)]
@@ -356,6 +356,14 @@ impl ModuleManifest {
 /// after hashing it with SHA-256. The signature field itself is intentionally
 /// excluded, so an authority can create an unsigned `signature.toml`, obtain
 /// this payload/digest, and then write the resulting signature into the file.
+///
+/// # Errors
+///
+/// Returns `Err` if `module_manifest_toml` or `signature_toml` is not valid
+/// UTF-8, fails to parse as TOML, or does not satisfy the module-manifest /
+/// signature-metadata schemas (missing required tables or fields, unknown
+/// fields, oversized text, an invalid publisher id, or a malformed SHA-256
+/// hash in the signature metadata).
 pub fn canonical_module_signature_payload(module_manifest_toml: &str, signature_toml: &str) -> Result<Vec<u8>> {
     let manifest = parse_module_manifest(module_manifest_toml.as_bytes())?;
     let metadata = parse_signature_metadata(signature_toml.as_bytes(), false)?;
@@ -365,6 +373,14 @@ pub fn canonical_module_signature_payload(module_manifest_toml: &str, signature_
 /// SHA-256 digest to be signed by an Ed25519 authority for a module package.
 /// This does not access private keys and therefore is safe to use in package
 /// tooling or an offline signing request.
+///
+/// # Errors
+///
+/// Returns `Err` if `module_manifest_toml` or `signature_toml` is not valid
+/// UTF-8, fails to parse as TOML, or does not satisfy the module-manifest /
+/// signature-metadata schemas (missing required tables or fields, unknown
+/// fields, oversized text, an invalid publisher id, or a malformed SHA-256
+/// hash in the signature metadata).
 pub fn module_signature_digest(module_manifest_toml: &str, signature_toml: &str) -> Result<[u8; 32]> {
     let payload = canonical_module_signature_payload(module_manifest_toml, signature_toml)?;
     Ok(sha256_digest(&payload))
@@ -372,6 +388,7 @@ pub fn module_signature_digest(module_manifest_toml: &str, signature_toml: &str)
 
 /// Canonical `sha256:` hash for the UTF-8 source artifact named in
 /// `signature.toml [artifact].source_hash`.
+#[must_use]
 pub fn module_source_hash(source: &[u8]) -> String {
     sha256_prefixed(source)
 }
@@ -380,6 +397,13 @@ pub fn module_source_hash(source: &[u8]) -> String {
 /// `module.toml`. Package tooling writes this value into
 /// `signature.toml [artifact].dependency_lock_hash` before obtaining the
 /// Ed25519 signature.
+///
+/// # Errors
+///
+/// Returns `Err` if `module_manifest_toml` is not valid UTF-8, fails to parse
+/// as TOML, or does not satisfy the module-manifest schema (missing required
+/// tables or fields, unknown fields, oversized text, an invalid publisher id,
+/// or unparseable dependency declarations).
 pub fn module_dependency_lock_hash(module_manifest_toml: &str) -> Result<String> {
     let manifest = parse_module_manifest(module_manifest_toml.as_bytes())?;
     Ok(dependency_lock_hash(&manifest.dependencies))
@@ -857,7 +881,7 @@ fn parse_signing(value: Option<&TomlValue>) -> Result<SigningPolicy> {
     })
 }
 
-/// Decodes the TinyOne central roots pinned into this binary at build time.
+/// Decodes the `TinyOne` central roots pinned into this binary at build time.
 /// The release pipeline, not a project Config.toml, chooses these keys, so a
 /// module publisher cannot make itself trusted by editing its source tree.
 /// Multiple `id=hex` entries are comma-separated to support root rotation.
@@ -943,6 +967,12 @@ fn parse_authorities(
 /// Canonical certificate payload used to delegate module-signing authority to
 /// a company. Central roots sign the SHA-256 digest returned by
 /// [`authority_certificate_digest`], not this byte representation directly.
+///
+/// # Errors
+///
+/// Returns `Err` if `authority_id` is empty, longer than 128 bytes, or
+/// contains characters other than ASCII alphanumerics, `.`, `_`, or `-`, or if
+/// `expires` is not strictly greater than `not_before`.
 pub fn authority_certificate_payload(
     authority_id: &str,
     public_key: &[u8; 32],
@@ -963,9 +993,15 @@ pub fn authority_certificate_payload(
     Ok(payload)
 }
 
-/// SHA-256 digest signed by a TinyOne central root for an authority
+/// SHA-256 digest signed by a `TinyOne` central root for an authority
 /// delegation certificate. The root private key remains exclusively in the
 /// central authority's signing service.
+///
+/// # Errors
+///
+/// Returns `Err` if `authority_id` is empty, longer than 128 bytes, or
+/// contains characters other than ASCII alphanumerics, `.`, `_`, or `-`, or if
+/// `expires` is not strictly greater than `not_before`.
 pub fn authority_certificate_digest(
     authority_id: &str,
     public_key: &[u8; 32],

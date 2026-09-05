@@ -272,7 +272,7 @@ pub(crate) fn runtime_pointer_store(context: &mut TinyRuntimeContext, pointer: &
                 Err(TinyOneError::runtime(format!("Unknown field {:?} on struct {type_name:?}", pointer.field)))
             }
         }
-        _ => Err(TinyOneError::runtime(format!("Unknown raw pointer kind {:?}", pointer.kind))),
+        PointerKind::Null => Err(TinyOneError::runtime(format!("Unknown raw pointer kind {:?}", pointer.kind))),
     }
 }
 
@@ -325,7 +325,7 @@ pub(crate) fn runtime_pointer_eq(context: &TinyRuntimeContext, lhs: &Value, rhs:
     let rhs = expect_pointer(rhs, "ptr_eq")?;
     validate_pointer_base(context, &lhs, "ptr_eq")?;
     validate_pointer_base(context, &rhs, "ptr_eq")?;
-    Ok(Value::I64((pointer_identity(&lhs) == pointer_identity(&rhs)) as i64))
+    Ok(Value::I64(i64::from(pointer_identity(&lhs) == pointer_identity(&rhs))))
 }
 
 pub(crate) fn runtime_cast_pointer(context: &TinyRuntimeContext, pointer: &Value, type_value: &Value) -> Result<Value> {
@@ -378,7 +378,7 @@ pub(crate) fn runtime_read_uint(
         .ok_or_else(|| TinyOneError::runtime(format!("{operation} out of bounds at byte offset {offset}")))?;
     let mut value = 0u32;
     for (i, byte) in bytes.iter().enumerate() {
-        value |= (*byte as u32) << (i * 8);
+        value |= u32::from(*byte) << (i * 8);
     }
     Ok(match width {
         1 => Value::U8(value as u8),

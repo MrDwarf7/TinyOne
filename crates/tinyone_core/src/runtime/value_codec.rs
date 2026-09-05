@@ -275,7 +275,7 @@ pub(crate) fn encode_value(value: &Value) -> Result<[u8; ENCODED_VALUE_BYTES]> {
         }
         Value::Bool(b) => {
             out[0] = TAG_BOOL;
-            out[OFF_SCALAR] = *b as u8;
+            out[OFF_SCALAR] = u8::from(*b);
         }
         Value::Unit => out[0] = TAG_UNIT,
         Value::Null => out[0] = TAG_NULL,
@@ -324,7 +324,7 @@ pub(crate) fn decode_value(bytes: &[u8; ENCODED_VALUE_BYTES]) -> Value {
         TAG_U64 => Value::U64(read_u64(bytes, OFF_SCALAR)),
         TAG_FLOAT => {
             let bits = f64::from_le_bytes(bytes[OFF_SCALAR..OFF_SCALAR + 8].try_into().unwrap());
-            let kind = TypeKind::from_type_id(bytes[OFF_TYPE_KIND] as u16)
+            let kind = TypeKind::from_type_id(u16::from(bytes[OFF_TYPE_KIND]))
                 .expect("decode_value: invalid TypeKind byte for Float");
             Value::Float { kind, bits }
         }
@@ -335,7 +335,7 @@ pub(crate) fn decode_value(bytes: &[u8; ENCODED_VALUE_BYTES]) -> Value {
         TAG_REFERENCE => Value::Reference(decode_pointer(bytes)),
         TAG_PHANTOM => Value::Phantom,
         TAG_ZST => {
-            let kind = TypeKind::from_type_id(bytes[OFF_TYPE_KIND] as u16)
+            let kind = TypeKind::from_type_id(u16::from(bytes[OFF_TYPE_KIND]))
                 .expect("decode_value: invalid TypeKind byte for Zst");
             Value::Zst(kind)
         }

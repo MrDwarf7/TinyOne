@@ -1,3 +1,4 @@
+#![allow(clippy::needless_raw_string_hashes)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1712,7 +1713,7 @@ fn type_kind_runtime_value_conversion_preserves_compatibility() {
 fn compatibility_type_conversion_rejects_heap_references() {
     let program = compile_source("let value = \"heap\"").expect("heap source should compile");
     let (_, memory) = run_compiled(&program, "vm", Vec::new()).expect("heap source should run");
-    TypeKind::from_runtime_value(&memory[0]);
+    let _ = TypeKind::from_runtime_value(&memory[0]);
 }
 
 #[test]

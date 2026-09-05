@@ -1,4 +1,4 @@
-//! Memory operation log for TinyOne diagnostics.
+//! Memory operation log for `TinyOne` diagnostics.
 //!
 //! This module provides a thread-safe ring-buffer log of VM memory operations.
 //! It is intended purely for diagnostics and tooling — it does not affect the
@@ -6,10 +6,10 @@
 //!
 //! # Design constraints
 //!
-//! - All storage uses `std` allocation (Box/Vec/String), never the TinyOne heap.
+//! - All storage uses `std` allocation (Box/Vec/String), never the `TinyOne` heap.
 //! - No operation panics; every method is best-effort and silently no-ops on error.
 //! - Safe to call from allocator callbacks: the `Mutex` used here guards only
-//!   `std`-allocated memory, so it can never re-enter the TinyOne heap.
+//!   `std`-allocated memory, so it can never re-enter the `TinyOne` heap.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,6 +84,7 @@ impl MemoryLogEntry {
     ///
     /// `size` is used for both `requested_size` and `effective_size`; callers
     /// that know the effective size can overwrite the fields after construction.
+    #[must_use]
     pub fn success(seq: u64, thread_id: u64, op: OperationType, addr: usize, generation: u64, size: usize) -> Self {
         Self {
             seq,
@@ -223,6 +224,7 @@ impl MemoryLog {
     ///
     /// A capacity of `0` is normalised to `1` internally.
     /// Logging is **enabled** by default.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             inner:   Mutex::new(LogInner::new(capacity)),
@@ -233,6 +235,7 @@ impl MemoryLog {
     /// Create a new log with the default capacity of 1 024 entries.
     ///
     /// Logging is **enabled** by default.
+    #[must_use]
     pub fn with_default_capacity() -> Self {
         Self::new(DEFAULT_LOG_CAPACITY)
     }

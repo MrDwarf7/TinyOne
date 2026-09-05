@@ -51,6 +51,7 @@ pub enum TypeKind {
 }
 
 impl TypeKind {
+    #[must_use]
     pub const fn type_id(self) -> u16 {
         match self {
             TypeKind::Unit => 0,
@@ -156,6 +157,7 @@ impl TypeKind {
         })
     }
 
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             TypeKind::Unit => "unit",
@@ -206,6 +208,7 @@ impl TypeKind {
         }
     }
 
+    #[must_use]
     pub const fn is_integer(self) -> bool {
         matches!(
             self,
@@ -220,14 +223,17 @@ impl TypeKind {
         )
     }
 
+    #[must_use]
     pub const fn is_signed(self) -> bool {
         matches!(self, TypeKind::I8 | TypeKind::I16 | TypeKind::I32 | TypeKind::I64)
     }
 
+    #[must_use]
     pub const fn is_unsigned(self) -> bool {
         matches!(self, TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64)
     }
 
+    #[must_use]
     pub const fn int_bits(self) -> Option<u32> {
         Some(match self {
             TypeKind::I8 | TypeKind::U8 => 8,
@@ -238,6 +244,7 @@ impl TypeKind {
         })
     }
 
+    #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "unit" => TypeKind::Unit,
@@ -292,6 +299,7 @@ impl TypeKind {
     /// Returns the `TypeKind` carried directly by a stack-resident
     /// `RuntimeValue`. Heap references return `None` because their type must be
     /// resolved through the owning heap.
+    #[must_use]
     pub fn try_from_runtime_value(v: &crate::Value) -> Option<Self> {
         use crate::Value;
         Some(match v {
@@ -332,6 +340,7 @@ impl TypeKind {
         since = "1.2.0",
         note = "use try_from_runtime_value; heap references require heap context"
     )]
+    #[must_use]
     pub fn from_runtime_value(v: &crate::Value) -> Self {
         Self::try_from_runtime_value(v)
             .expect("from_runtime_value(Heap): resolve heap references through the owning heap")
@@ -339,11 +348,11 @@ impl TypeKind {
 }
 
 pub fn smallest_fit_unsigned(value: u64) -> TypeKind {
-    if value <= u8::MAX as u64 {
+    if u8::try_from(value).is_ok() {
         TypeKind::U8
-    } else if value <= u16::MAX as u64 {
+    } else if u16::try_from(value).is_ok() {
         TypeKind::U16
-    } else if value <= u32::MAX as u64 {
+    } else if u32::try_from(value).is_ok() {
         TypeKind::U32
     } else {
         TypeKind::U64
@@ -351,11 +360,11 @@ pub fn smallest_fit_unsigned(value: u64) -> TypeKind {
 }
 
 pub fn smallest_fit_signed(value: i64) -> TypeKind {
-    if value >= i8::MIN as i64 && value <= i8::MAX as i64 {
+    if i8::try_from(value).is_ok() {
         TypeKind::I8
-    } else if value >= i16::MIN as i64 && value <= i16::MAX as i64 {
+    } else if i16::try_from(value).is_ok() {
         TypeKind::I16
-    } else if value >= i32::MIN as i64 && value <= i32::MAX as i64 {
+    } else if i32::try_from(value).is_ok() {
         TypeKind::I32
     } else {
         TypeKind::I64
@@ -404,14 +413,14 @@ pub fn promote_integer(lhs: TypeKind, rhs: TypeKind) -> Result<TypeKind> {
 
 pub fn integer_range(kind: TypeKind) -> Option<(i128, i128)> {
     Some(match kind {
-        TypeKind::I8 => (i8::MIN as i128, i8::MAX as i128),
-        TypeKind::I16 => (i16::MIN as i128, i16::MAX as i128),
-        TypeKind::I32 => (i32::MIN as i128, i32::MAX as i128),
-        TypeKind::I64 => (i64::MIN as i128, i64::MAX as i128),
-        TypeKind::U8 => (0, u8::MAX as i128),
-        TypeKind::U16 => (0, u16::MAX as i128),
-        TypeKind::U32 => (0, u32::MAX as i128),
-        TypeKind::U64 => (0, u64::MAX as i128),
+        TypeKind::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),
+        TypeKind::I16 => (i128::from(i16::MIN), i128::from(i16::MAX)),
+        TypeKind::I32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
+        TypeKind::I64 => (i128::from(i64::MIN), i128::from(i64::MAX)),
+        TypeKind::U8 => (0, i128::from(u8::MAX)),
+        TypeKind::U16 => (0, i128::from(u16::MAX)),
+        TypeKind::U32 => (0, i128::from(u32::MAX)),
+        TypeKind::U64 => (0, i128::from(u64::MAX)),
         _ => return None,
     })
 }
@@ -485,7 +494,7 @@ mod tests {
         ];
         let ids: Vec<u16> = all.iter().map(|kind| kind.type_id()).collect();
         let mut sorted = ids.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), ids.len(), "type ids must be unique");
         for kind in all {

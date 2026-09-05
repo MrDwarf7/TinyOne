@@ -181,7 +181,7 @@ fn runtime_format_inner(context: &TinyRuntimeContext, value: &Value, seen: &mut 
                     let type_name = object.type_name.clone();
                     drop(heap);
                     if fields.is_empty() {
-                        Ok(format!("{}.{}", type_name, variant))
+                        Ok(format!("{type_name}.{variant}"))
                     } else {
                         let parts = fields
                             .iter()

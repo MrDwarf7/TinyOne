@@ -1,3 +1,21 @@
+// Clippy pedantic: benchmark harness allows these design lints (large functions,
+// struct bools, similar names) and numeric casts (timing math) — not production code.
+#![allow(
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::similar_names,
+    clippy::unnecessary_wraps,
+    clippy::needless_pass_by_value,
+    clippy::float_cmp,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_ptr_alignment,
+    clippy::checked_conversions
+)]
+
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -161,7 +179,7 @@ fn thread_cpu_time_ns() -> Option<u64> {
     };
     // SAFETY: `time` is writable and CLOCK_THREAD_CPUTIME_ID is the Linux
     // per-thread CPU clock, available without perf-event permissions.
-    let ok = unsafe { clock_gettime(CLOCK_THREAD_CPUTIME_ID, &mut time) };
+    let ok = unsafe { clock_gettime(CLOCK_THREAD_CPUTIME_ID, &raw mut time) };
     if ok != 0 || time.seconds < 0 || time.nanoseconds < 0 {
         return None;
     }
@@ -186,7 +204,7 @@ fn cycle_counter_kind() -> &'static str {
     }
 }
 
-const STRAIGHTLINE_SOURCE: &str = r#"
+const STRAIGHTLINE_SOURCE: &str = r"
 let a = 1
 let b = a + 2
 let c = b * 3
@@ -194,9 +212,9 @@ let d = c - a
 let e = d / 2
 print e
 print e >= 4
-"#;
+";
 
-const LOOP_SOURCE: &str = r#"
+const LOOP_SOURCE: &str = r"
 let i = 0
 let total = 0
 while i < 128 {
@@ -204,9 +222,9 @@ while i < 128 {
   i = i + 1
 }
 print total
-"#;
+";
 
-const HOT_LOOP_SOURCE: &str = r#"
+const HOT_LOOP_SOURCE: &str = r"
 let i = 0
 let total = 0
 while i < 4096 {
@@ -214,17 +232,17 @@ while i < 4096 {
   i = i + 1
 }
 print total
-"#;
+";
 
-const SLOT_COMPARE_SOURCE: &str = r#"
+const SLOT_COMPARE_SOURCE: &str = r"
 let i = 0
 while i < 4096 {
   i = i + 1
 }
 print i
-"#;
+";
 
-const SLOT_MUL_SOURCE: &str = r#"
+const SLOT_MUL_SOURCE: &str = r"
 let i = 0
 let value = 7
 while i < 4096 {
@@ -232,9 +250,9 @@ while i < 4096 {
   i = i + 1
 }
 print value
-"#;
+";
 
-const SLOT_DIV_SOURCE: &str = r#"
+const SLOT_DIV_SOURCE: &str = r"
 let i = 0
 let value = -7
 while i < 4096 {
@@ -242,9 +260,9 @@ while i < 4096 {
   i = i + 1
 }
 print value
-"#;
+";
 
-const FUNCTION_SOURCE: &str = r#"
+const FUNCTION_SOURCE: &str = r"
 fn mul_by_count(value, count) {
   let acc = 0
   while count > 0 {
@@ -265,9 +283,9 @@ while i <= 32 {
   i = i + 1
 }
 print total
-"#;
+";
 
-const CONTROL_INTERRUPT_SOURCE: &str = r#"
+const CONTROL_INTERRUPT_SOURCE: &str = r"
 let i = 0
 let pulses = 0
 while i < 96 {
@@ -279,7 +297,7 @@ while i < 96 {
   i = i + 1
 }
 print pulses
-"#;
+";
 
 const HEAP_SOURCE: &str = r#"
 struct Point { x, y }
@@ -296,14 +314,14 @@ print point.y
 print values
 "#;
 
-const INPUT_SOURCE: &str = r#"
+const INPUT_SOURCE: &str = r"
 let value = read_int()
 let ptr = alloc(value)
 print store(ptr, load(ptr) + 1)
 let ignored = unsafe free(ptr)
-"#;
+";
 
-const BUILTIN_HEAVY_SOURCE: &str = r#"
+const BUILTIN_HEAVY_SOURCE: &str = r"
 let arr = array(16, 0)
 let i = 0
 while i < len(arr) {
@@ -317,9 +335,9 @@ while j < len(arr) {
   j = j + 1
 }
 print total
-"#;
+";
 
-const VEC_SOURCE: &str = r#"
+const VEC_SOURCE: &str = r"
 let values = vec_new()
 let i = 0
 while i < 256 {
@@ -331,9 +349,9 @@ while len(values) > 0 {
   total = total + pop(values)
 }
 print total
-"#;
+";
 
-const MAP_SOURCE: &str = r#"
+const MAP_SOURCE: &str = r"
 let values = map_new()
 let i = 0
 while i < 128 {
@@ -347,9 +365,9 @@ while j < 128 {
   j = j + 1
 }
 print total
-"#;
+";
 
-const HEAP_CHURN_SOURCE: &str = r#"
+const HEAP_CHURN_SOURCE: &str = r"
 let i = 0
 let total = 0
 while i < 256 {
@@ -359,7 +377,7 @@ while i < 256 {
   i = i + 1
 }
 print total
-"#;
+";
 
 const MODULE_MAIN_SOURCE: &str = r#"
 import "math.to" as math
@@ -372,7 +390,7 @@ while i < 64 {
 print total
 "#;
 
-const MODULE_SOURCE: &str = r#"
+const MODULE_SOURCE: &str = r"
 fn normalize(value) {
   return value
 }
@@ -380,7 +398,7 @@ fn normalize(value) {
 export fn add(left, right) {
   return normalize(left) + right
 }
-"#;
+";
 
 fn leak_name(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
@@ -396,7 +414,7 @@ fn workload_iterations(size: usize) -> u64 {
 
 fn vec_push_pop_source(size: usize) -> String {
     format!(
-        r#"
+        r"
 let values = vec_new()
 let i = 0
 while i < {size} {{
@@ -407,13 +425,13 @@ let total = 0
 while len(values) > 0 {{
   total = total + pop(values)
 }}
-"#
+"
     )
 }
 
 fn map_set_get_source(size: usize) -> String {
     format!(
-        r#"
+        r"
 let values = map_new()
 let i = 0
 while i < {size} {{
@@ -426,7 +444,7 @@ while j < {size} {{
   total = total + map_get(values, j)
   j = j + 1
 }}
-"#
+"
     )
 }
 
@@ -434,7 +452,7 @@ fn vector_phase_source(phase: &str, size: usize) -> String {
     match phase {
         "push_in_capacity" => {
             format!(
-                r#"
+                r"
 let values = vec_new()
 let i = 0
 while i < {size} {{
@@ -449,24 +467,24 @@ while j < {size} {{
   let ignored = push(values, j)
   j = j + 1
 }}
-"#
+"
             )
         }
         "capacity_growth" => {
             format!(
-                r#"
+                r"
 let values = vec_new()
 let i = 0
 while i < {size} {{
   let ignored = push(values, i)
   i = i + 1
 }}
-"#
+"
             )
         }
         "pop" => {
             format!(
-                r#"
+                r"
 let values = vec_new()
 let i = 0
 while i < {size} {{
@@ -476,12 +494,12 @@ while i < {size} {{
 while len(values) > 0 {{
   let ignored = pop(values)
 }}
-"#
+"
             )
         }
         "clear" => {
             format!(
-                r#"
+                r"
 let values = vec_new()
 let i = 0
 while i < {size} {{
@@ -489,7 +507,7 @@ while i < {size} {{
   i = i + 1
 }}
 let ignored = vec_clear(values)
-"#
+"
             )
         }
         _ => unreachable!("unknown vector phase"),
@@ -498,19 +516,19 @@ let ignored = vec_clear(values)
 
 fn map_phase_source(phase: &str, size: usize) -> String {
     let setup = format!(
-        r#"
+        r"
 let values = map_new()
 let i = 0
 while i < {size} {{
   let ignored = map_set(values, i, i * 3)
   i = i + 1
 }}
-"#
+"
     );
     match phase {
         "hit" => {
             format!(
-                r#"{setup}
+                r"{setup}
 let key = 0
 let total = 0
 let j = 0
@@ -522,24 +540,24 @@ while j < 4096 {{
   }}
   j = j + 1
 }}
-"#
+"
             )
         }
         "miss" => {
             format!(
-                r#"{setup}
+                r"{setup}
 let misses = 0
 let j = 0
 while j < 4096 {{
   misses = misses + map_has(values, {size} + j)
   j = j + 1
 }}
-"#
+"
             )
         }
         "update" => {
             format!(
-                r#"{setup}
+                r"{setup}
 let key = 0
 let j = 0
 while j < 4096 {{
@@ -550,12 +568,12 @@ while j < 4096 {{
   }}
   j = j + 1
 }}
-"#
+"
             )
         }
         "insert_in_capacity" => {
             format!(
-                r#"{setup}
+                r"{setup}
 let j = 0
 while j < {size} {{
   let ignored = map_del(values, j)
@@ -566,24 +584,24 @@ while k < {size} {{
   let ignored = map_set(values, k, k)
   k = k + 1
 }}
-"#
+"
             )
         }
         "delete" => {
             format!(
-                r#"{setup}
+                r"{setup}
 let j = 0
 while j < {size} {{
   let ignored = map_del(values, j)
   j = j + 1
 }}
-"#
+"
             )
         }
         "capacity_growth" => setup,
         "pointer_key_validation" => {
             format!(
-                r#"
+                r"
 let values = map_new()
 let pointers = vec_new()
 let i = 0
@@ -604,7 +622,7 @@ while j < 256 {{
   }}
   j = j + 1
 }}
-"#
+"
             )
         }
         _ => unreachable!("unknown map phase"),
@@ -615,19 +633,19 @@ fn heap_phase_source(phase: &str, count: usize) -> String {
     match phase {
         "allocation" => {
             format!(
-                r#"
+                r"
 let pointers = vec_new()
 let i = 0
 while i < {count} {{
   let ignored = push(pointers, alloc(i))
   i = i + 1
 }}
-"#
+"
             )
         }
         "lookup" => {
             format!(
-                r#"
+                r"
 let values = array(1, 0)
 let total = 0
 let i = 0
@@ -635,12 +653,12 @@ while i < {count} {{
   total = total + len(values)
   i = i + 1
 }}
-"#
+"
             )
         }
         "load" => {
             format!(
-                r#"
+                r"
 let cell = alloc(7)
 let total = 0
 let i = 0
@@ -648,24 +666,24 @@ while i < {count} {{
   total = total + load(cell)
   i = i + 1
 }}
-"#
+"
             )
         }
         "store" => {
             format!(
-                r#"
+                r"
 let cell = alloc(0)
 let i = 0
 while i < {count} {{
   let ignored = store(cell, i)
   i = i + 1
 }}
-"#
+"
             )
         }
         "free" => {
             format!(
-                r#"
+                r"
 let pointers = vec_new()
 let i = 0
 while i < {count} {{
@@ -677,19 +695,19 @@ while j < {count} {{
   let ignored = unsafe free(pointers[j])
   j = j + 1
 }}
-"#
+"
             )
         }
         "slot_reuse" => {
             format!(
-                r#"
+                r"
 let i = 0
 while i < {count} {{
   let cell = alloc(i)
   let ignored = unsafe free(cell)
   i = i + 1
 }}
-"#
+"
             )
         }
         _ => unreachable!("unknown heap phase"),
@@ -722,7 +740,7 @@ impl CorrectnessCase {
     }
 
     fn inputs(mut self, inputs: &[&str]) -> Self {
-        self.inputs = inputs.iter().map(|item| item.to_string()).collect();
+        self.inputs = inputs.iter().map(std::string::ToString::to_string).collect();
         self
     }
 }
@@ -749,9 +767,7 @@ struct FileFixture {
 }
 
 fn benchmark_fixture_root() -> PathBuf {
-    env::var_os("TINYONE_BENCH_FIXTURE_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
+    env::var_os("TINYONE_BENCH_FIXTURE_ROOT").map_or_else(env::temp_dir, PathBuf::from)
 }
 
 impl FileFixture {
@@ -783,7 +799,7 @@ impl FileFixture {
         let mut inputs = Vec::with_capacity(module_count + 1);
         for index in 0..module_count {
             let module_name = format!("module_{index:03}");
-            main_source.push_str(&format!("import \"{module_name}.to\" as {module_name}\n"));
+            writeln!(main_source, "import \"{module_name}.to\" as {module_name}").unwrap();
             let module_path = directory.join(format!("{module_name}.to"));
             fs::write(&module_path, format!("export fn value(input) {{ return input + {index} }}\n"))
                 .expect("write benchmark graph module");
@@ -791,7 +807,7 @@ impl FileFixture {
         }
         main_source.push_str("let total = 0\n");
         for index in 0..module_count {
-            main_source.push_str(&format!("total = total + module_{index:03}.value({index})\n"));
+            writeln!(main_source, "total = total + module_{index:03}.value({index})").unwrap();
         }
 
         let main = directory.join("main.to");
@@ -1204,9 +1220,8 @@ fn filesystem_context_for(path: &Path) -> String {
         return "windows-native".to_string();
     }
     if cfg!(target_os = "linux") {
-        let is_wsl = fs::read_to_string("/proc/version")
-            .map(|text| text.to_ascii_lowercase().contains("microsoft"))
-            .unwrap_or(false);
+        let is_wsl =
+            fs::read_to_string("/proc/version").is_ok_and(|text| text.to_ascii_lowercase().contains("microsoft"));
         if is_wsl {
             let mounted_windows = path.starts_with("/mnt");
             return if mounted_windows {
@@ -1222,9 +1237,7 @@ fn filesystem_context_for(path: &Path) -> String {
 }
 
 fn filesystem_context() -> String {
-    env::current_dir()
-        .map(|path| filesystem_context_for(&path))
-        .unwrap_or_else(|_| "unknown".to_string())
+    env::current_dir().map_or_else(|_| "unknown".to_string(), |path| filesystem_context_for(&path))
 }
 
 fn repository_root() -> PathBuf {
@@ -1239,9 +1252,10 @@ fn git_metadata() -> (String, bool) {
     let commit = command_stdout("git", &["rev-parse", "HEAD"], Some(&root))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
-    let dirty = command_stdout("git", &["status", "--porcelain", "--untracked-files=normal"], Some(&root))
-        .map(|value| !value.is_empty())
-        .unwrap_or(true);
+    let dirty = match command_stdout("git", &["status", "--porcelain", "--untracked-files=normal"], Some(&root)) {
+        Some(value) => !value.is_empty(),
+        None => true,
+    };
     (commit, dirty)
 }
 
@@ -1249,8 +1263,7 @@ fn run_metadata(args: &Args, correctness_checked: bool, evidence_quality: &Evide
     let (git_commit, git_dirty) = git_metadata();
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |duration| duration.as_secs());
     let fixture_root = benchmark_fixture_root();
     let fixture_root = fixture_root.canonicalize().unwrap_or(fixture_root);
     json!({
@@ -1390,14 +1403,16 @@ fn run_source_mode(source: &str, mode: &str, inputs: Vec<String>) {
 }
 
 fn compile_jit(program: &Arc<Program>, cache: &mut JitCache) {
-    let compiled = cache.compile(program).expect("benchmark program should compile") as *const _;
+    let compiled = std::ptr::from_ref(cache.compile(program).expect("benchmark program should compile"));
     black_box(compiled);
 }
 
 fn compile_jit_verified(program: &VerifiedProgram, cache: &mut JitCache) {
-    let compiled = cache
-        .compile_verified(program)
-        .expect("verified benchmark program should compile") as *const _;
+    let compiled = std::ptr::from_ref(
+        cache
+            .compile_verified(program)
+            .expect("verified benchmark program should compile"),
+    );
     black_box(compiled);
 }
 
@@ -1895,7 +1910,7 @@ fn build_benchmarks() -> Vec<Benchmark> {
             let mut cache = JitCache::new();
             cache.compile_verified(&verified).expect("warm verified cache");
             move || {
-                black_box(cache.compile_verified(&verified).expect("verified cache hit") as *const _);
+                black_box(std::ptr::from_ref(cache.compile_verified(&verified).expect("verified cache hit")));
             }
         }),
         bench("jit.cache_hit_straightline", 100_000, {
@@ -2165,8 +2180,7 @@ fn print_table(results: &[BenchmarkResult]) {
             format_duration(result.mean_per_iter_ns()),
             result
                 .best_per_iter_cpu_ns()
-                .map(format_duration)
-                .unwrap_or_else(|| "-".to_string()),
+                .map_or_else(|| "-".to_string(), format_duration),
             format_cycles(result.best_per_iter_cycles()),
             result.cv_pct(),
             flag
@@ -2278,8 +2292,7 @@ fn compare_to_baseline(results: &[BenchmarkResult], items: &[JsonValue], path: &
             item.get(key)
                 .and_then(JsonValue::as_f64)
                 .zip(new)
-                .map(|(old, new)| format!("{:+.1}%", ((new - old) / old) * 100.0))
-                .unwrap_or_else(|| "-".to_string())
+                .map_or_else(|| "-".to_string(), |(old, new)| format!("{:+.1}%", ((new - old) / old) * 100.0))
         };
         let cpu_delta = metric_delta("best_cpu_time_per_iter_ns", result.best_per_iter_cpu_ns());
         let cycle_delta = metric_delta("best_cycles_per_iter", result.best_per_iter_cycles());

@@ -190,6 +190,14 @@ impl ModuleGraph {
 }
 
 impl BytecodeVerifier {
+    /// Verifies that `program` is a valid, safely executable bytecode program.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the program violates any safety or structural
+    /// invariant: a verification budget is exceeded, the module dependency
+    /// graph cannot be built, or any chunk fails its static checks (e.g.
+    /// invalid opcodes, stack/slot misuse, or capability ownership violations).
     pub fn verify(program: &Program) -> Result<()> {
         Self::verify_program_budget(program)?;
         let modules = ModuleGraph::build(program)?;
@@ -337,7 +345,7 @@ impl BytecodeVerifier {
         caller_function: Option<usize>,
     ) -> Result<()> {
         if code.last().map(|instr| instr.op) != Some(final_op) {
-            let got = code.last().map(|instr| instr.op.name()).unwrap_or("nothing");
+            let got = code.last().map_or("nothing", |instr| instr.op.name());
             return Err(TinyOneError::compile(format!(
                 "Verifier: {chunk_name} must end with {}, got {got}",
                 final_op.name()
@@ -880,8 +888,14 @@ fn verify_string_list(name: &str, values: &[String], max_count: usize) -> Result
 
 fn stack_effect(op: Op) -> Option<i64> {
     Some(match op {
-        Op::PushInt | Op::PushString | Op::PushNull | Op::PushBool | Op::PushFloat | Op::Load | Op::LoadGlobal => 1,
-        Op::PushFunction => 1,
+        Op::PushInt
+        | Op::PushString
+        | Op::PushNull
+        | Op::PushBool
+        | Op::PushFloat
+        | Op::Load
+        | Op::LoadGlobal
+        | Op::PushFunction => 1,
         Op::Store | Op::Pop => -1,
         Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Lt | Op::Lte | Op::Gt | Op::Gte | Op::Eq | Op::Ne | Op::Index => -1,
         Op::Neg | Op::GetField => 0,

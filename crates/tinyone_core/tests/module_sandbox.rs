@@ -488,13 +488,13 @@ fn config_toml_denies_root_code_and_preserves_the_policy_in_artifacts() {
     let main = project.path().join("main.to");
     fs::write(&main, "print fs_exists(\".\")\n").expect("write entrypoint");
     let program = compile_file(&main).expect("compile restricted root program");
-    assert!(program.root_capabilities().is_empty());
+    assert_eq!(program.root_capabilities(), [] as [std::string::String; 0]);
     assert_eq!(program.max_call_depth(), 1);
 
     let artifact = VerifiedProgram::from_trusted_artifact(program.to_artifact())
         .expect("trusted JSON artifact")
         .into_program();
-    assert!(artifact.root_capabilities().is_empty());
+    assert_eq!(artifact.root_capabilities(), [] as [std::string::String; 0]);
     assert_eq!(artifact.max_call_depth(), 1);
     for mode in ["vm", "jit"] {
         let error = run(Arc::new(artifact.clone()), mode).expect_err("root filesystem denied");
@@ -512,7 +512,7 @@ fn config_toml_denies_root_code_and_preserves_the_policy_in_artifacts() {
     let binary_artifact = VerifiedProgram::from_trusted_binary_artifact(&binary)
         .expect("trusted binary artifact preserves root policy")
         .into_program();
-    assert!(binary_artifact.root_capabilities().is_empty());
+    assert_eq!(binary_artifact.root_capabilities(), [] as [std::string::String; 0]);
     assert_eq!(binary_artifact.max_call_depth(), 1);
     for mode in ["vm", "jit"] {
         let error = run(Arc::new(binary_artifact.clone()), mode).expect_err("binary root filesystem denied");

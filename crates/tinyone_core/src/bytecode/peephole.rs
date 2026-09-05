@@ -5,6 +5,7 @@ use crate::{Function, Instr, Op, Program, floor_div};
 pub struct PeepholeOptimizer;
 
 impl PeepholeOptimizer {
+    #[must_use]
     pub fn optimize(program: Program) -> Program {
         Program {
             code: Self::optimize_code(&program.code),
@@ -115,12 +116,12 @@ fn fold_binop(op: Op, a: i64, b: i64) -> Option<Instr> {
         Op::Sub => Instr::new(Op::PushInt, a.checked_sub(b)?, 0),
         Op::Mul => Instr::new(Op::PushInt, a.checked_mul(b)?, 0),
         Op::Div if b != 0 => Instr::new(Op::PushInt, floor_div(a, b)?, 0),
-        Op::Lt => Instr::new(Op::PushBool, (a < b) as i64, 0),
-        Op::Lte => Instr::new(Op::PushBool, (a <= b) as i64, 0),
-        Op::Gt => Instr::new(Op::PushBool, (a > b) as i64, 0),
-        Op::Gte => Instr::new(Op::PushBool, (a >= b) as i64, 0),
-        Op::Eq => Instr::new(Op::PushBool, (a == b) as i64, 0),
-        Op::Ne => Instr::new(Op::PushBool, (a != b) as i64, 0),
+        Op::Lt => Instr::new(Op::PushBool, i64::from(a < b), 0),
+        Op::Lte => Instr::new(Op::PushBool, i64::from(a <= b), 0),
+        Op::Gt => Instr::new(Op::PushBool, i64::from(a > b), 0),
+        Op::Gte => Instr::new(Op::PushBool, i64::from(a >= b), 0),
+        Op::Eq => Instr::new(Op::PushBool, i64::from(a == b), 0),
+        Op::Ne => Instr::new(Op::PushBool, i64::from(a != b), 0),
         _ => return None,
     })
 }

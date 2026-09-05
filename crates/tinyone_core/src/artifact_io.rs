@@ -6,10 +6,24 @@ use crate::bytecode::artifact::MAX_ARTIFACT_BYTES;
 use crate::bytecode::binary::{BINARY_ARTIFACT_MAGIC, MAX_BINARY_ARTIFACT_BYTES};
 use crate::{Program, Result, TinyOneError, VerifiedProgram};
 
+/// Loads a program artifact from disk and returns the verified [`Program`].
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read from `path`, the bytes are not
+/// valid UTF-8 or JSON, the binary magic header is invalid, or bytecode
+/// verification fails.
 pub fn load_artifact(path: impl AsRef<Path>) -> Result<Program> {
     load_verified_artifact(path).map(VerifiedProgram::into_program)
 }
 
+/// Loads and verifies a program artifact from disk, returning a [`VerifiedProgram`].
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read from `path`, the bytes are not
+/// valid UTF-8 or JSON, the binary magic header is invalid, or bytecode
+/// verification fails.
 pub fn load_verified_artifact(path: impl AsRef<Path>) -> Result<VerifiedProgram> {
     load_verified_untrusted_artifact(path.as_ref())
 }
@@ -26,6 +40,12 @@ fn load_verified_untrusted_artifact(path: &Path) -> Result<VerifiedProgram> {
     VerifiedProgram::from_artifact(data)
 }
 
+/// Serializes `program` to a pretty-printed JSON artifact and writes it to `path`.
+///
+/// # Errors
+///
+/// Returns an error if `program` cannot be serialized to JSON, or if the file
+/// cannot be written to `path`.
 pub fn write_artifact(program: &Program, path: impl AsRef<Path>) -> Result<()> {
     let text = serde_json::to_string_pretty(&program.to_artifact())
         .map_err(|error| TinyOneError::compile(format!("Artifact JSON error: {error}")))?;
@@ -33,6 +53,14 @@ pub fn write_artifact(program: &Program, path: impl AsRef<Path>) -> Result<()> {
         .map_err(|error| TinyOneError::compile(format!("Artifact write error: {error}")))
 }
 
+/// Serializes `program` to its binary artifact format and writes it to `path`.
+///
+/// # Errors
+///
+/// Returns an error if `program` cannot be encoded to binary (for example if
+/// an encoded field exceeds the format's `u32` size limit, or the artifact
+/// exceeds [`MAX_BINARY_ARTIFACT_BYTES`]), or if the file cannot be written to
+/// `path`.
 pub fn write_binary_artifact(program: &Program, path: impl AsRef<Path>) -> Result<()> {
     let bytes = program.to_binary_artifact()?;
     fs::write(path, bytes).map_err(|error| TinyOneError::compile(format!("Binary artifact write error: {error}")))

@@ -1,4 +1,4 @@
-//! Internal allocation table: bridges TinyOne's generation-tagged heap slots
+//! Internal allocation table: bridges `TinyOne`'s generation-tagged heap slots
 //! to native (Ralloc) allocation handles.
 //!
 //! Every live VM heap slot has at most one [`AllocRecord`] here, keyed by
@@ -19,7 +19,7 @@ pub struct VmAllocHandle(pub u64);
 
 // ── AllocKind ─────────────────────────────────────────────────────────────────
 
-/// The kind of TinyOne heap object backed by this allocation.
+/// The kind of `TinyOne` heap object backed by this allocation.
 ///
 /// Mirrors the set of [`HeapData`][crate::HeapData] variants so the table can
 /// be inspected without holding a reference to the heap itself.
@@ -197,6 +197,7 @@ pub struct AllocTable {
 
 impl AllocTable {
     /// Creates a new, empty allocation table.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(Inner::new()),
@@ -210,6 +211,15 @@ impl AllocTable {
     /// are replaced (they represent a previous occupant of the slot).
     ///
     /// Updates the `total_allocated` counter on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocTableError::AlreadyExists`] if a **live** record already
+    /// exists for `record.vm_address`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn insert(&self, record: AllocRecord) -> Result<(), AllocTableError> {
         let mut guard = self.inner.lock().unwrap();
         // Reject if a live record already occupies this slot.
@@ -230,6 +240,16 @@ impl AllocTable {
     /// - The generation does not match ([`AllocTableError::GenerationMismatch`])
     ///
     /// Updates the `total_freed` counter on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocTableError::NotFound`] if no record exists at `vm_address`,
+    /// or [`AllocTableError::GenerationMismatch`] if `vm_generation` does not
+    /// match the stored record.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn remove(&self, vm_address: usize, vm_generation: u64) -> Result<AllocRecord, AllocTableError> {
         let mut guard = self.inner.lock().unwrap();
         let record = guard.records.get(&vm_address).ok_or(AllocTableError::NotFound)?;
@@ -249,6 +269,10 @@ impl AllocTable {
     /// Returns a clone of the record if found and the generation matches.
     /// Returns `None` if the address is unknown or the generation is stale —
     /// mirroring the `Option` semantics of `TinyHeap::get_address`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn get(&self, vm_address: usize, vm_generation: u64) -> Option<AllocRecord> {
         let guard = self.inner.lock().unwrap();
         let record = guard.records.get(&vm_address)?;
@@ -268,6 +292,16 @@ impl AllocTable {
     /// - No record exists ([`AllocTableError::NotFound`])
     /// - The generation does not match ([`AllocTableError::GenerationMismatch`])
     /// - The record is already dead ([`AllocTableError::AlreadyDead`])
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocTableError::NotFound`] if no record exists at `vm_address`,
+    /// [`AllocTableError::GenerationMismatch`] if `vm_generation` does not match,
+    /// or [`AllocTableError::AlreadyDead`] if the record is already dead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn mark_dead(&self, vm_address: usize, vm_generation: u64) -> Result<(), AllocTableError> {
         let mut guard = self.inner.lock().unwrap();
         let record = guard.records.get_mut(&vm_address).ok_or(AllocTableError::NotFound)?;
@@ -287,12 +321,20 @@ impl AllocTable {
     /// Returns clones of all currently-live records.
     ///
     /// Order is unspecified.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn all_live(&self) -> Vec<AllocRecord> {
         let guard = self.inner.lock().unwrap();
         guard.records.values().filter(|r| r.live).cloned().collect()
     }
 
     /// Returns current aggregate statistics.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn stats(&self) -> AllocTableStats {
         let guard = self.inner.lock().unwrap();
         AllocTableStats {
@@ -309,6 +351,10 @@ impl AllocTable {
     /// record that was present, in unspecified order. The `total_allocated` and
     /// `total_freed` counters are **not** reset; they represent cumulative
     /// lifetime totals.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn drain_for_shutdown(&self) -> Vec<AllocRecord> {
         let mut guard = self.inner.lock().unwrap();
         let drained: Vec<AllocRecord> = guard.records.drain().map(|(_, v)| v).collect();
@@ -316,11 +362,19 @@ impl AllocTable {
     }
 
     /// Total number of records in the table, live and dead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap().records.len()
     }
 
     /// Returns `true` if the table contains no records.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inner [`Mutex`] is poisoned.
     pub fn is_empty(&self) -> bool {
         self.inner.lock().unwrap().records.is_empty()
     }

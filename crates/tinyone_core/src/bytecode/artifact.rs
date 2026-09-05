@@ -49,6 +49,7 @@ enum JsonArtifactVersion {
 }
 
 impl Program {
+    #[must_use]
     pub fn to_artifact(&self) -> JsonValue {
         json!({
             "format": "tinyone-bytecode",
@@ -92,12 +93,26 @@ impl Program {
         })
     }
 
+    /// Decodes an untrusted JSON artifact and verifies it, returning a
+    /// [`Program`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data` is not a valid `TinyOne` artifact (wrong format
+    /// string, unsupported version, or malformed or oversized fields), or if
+    /// bytecode verification fails.
     pub fn from_artifact(data: JsonValue) -> Result<Self> {
         VerifiedProgram::from_artifact(data).map(VerifiedProgram::into_program)
     }
 
     /// Decodes policy-bearing JSON after the caller has authenticated the
     /// artifact bytes and accepted its authority as an embedding decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data` is not a valid `TinyOne` artifact (wrong format
+    /// string, unsupported version, or malformed or oversized fields), or if
+    /// bytecode verification fails.
     pub fn from_trusted_artifact(data: JsonValue) -> Result<Self> {
         VerifiedProgram::from_trusted_artifact(data).map(VerifiedProgram::into_program)
     }
@@ -281,6 +296,12 @@ impl Program {
 impl VerifiedProgram {
     /// Decodes an untrusted JSON artifact. Its serialized policy is retained
     /// for inspection but grants no host authority during execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data` is not a valid `TinyOne` artifact (wrong format
+    /// string, unsupported version, or malformed or oversized fields), or if
+    /// bytecode verification fails.
     pub fn from_artifact(data: JsonValue) -> Result<Self> {
         Self::verify(Program::decode_artifact(data)?)
     }
@@ -288,6 +309,12 @@ impl VerifiedProgram {
     /// Decodes a JSON artifact whose bytes and policy were authenticated by
     /// the embedding application. Calling this is an explicit authority
     /// decision; use [`Self::from_artifact`] for untrusted inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data` is not a valid `TinyOne` artifact (wrong format
+    /// string, unsupported version, or malformed or oversized fields), or if
+    /// bytecode verification fails.
     pub fn from_trusted_artifact(data: JsonValue) -> Result<Self> {
         Self::verify(Program::decode_artifact(data)?.trust_artifact_policy())
     }
@@ -605,7 +632,8 @@ mod tests {
     fn policy_bearing_artifacts_use_v2_and_round_trip_restrictions() {
         let artifact = v2_minimal();
         let decoded = Program::from_artifact(artifact.clone()).expect("v2 artifact decodes");
-        assert!(decoded.root_capabilities().is_empty());
+        // assert!(decoded.root_capabilities().is_empty());
+        assert_eq!(decoded.root_capabilities(), [] as [std::string::String; 0]);
         assert_eq!(decoded.max_call_depth(), 1);
 
         let emitted = decoded.to_artifact();
@@ -662,7 +690,7 @@ mod tests {
         let decoded = Program::from_artifact(artifact).expect("legacy artifact decodes");
         assert_eq!(decoded.root_capabilities(), ModuleCapabilities::all().names());
         assert_eq!(decoded.max_call_depth(), crate::MAX_CALL_DEPTH);
-        assert!(decoded.modules()[0].capabilities().is_empty());
+        assert_eq!(decoded.modules()[0].capabilities(), [] as [std::string::String; 0]);
     }
 
     #[test]

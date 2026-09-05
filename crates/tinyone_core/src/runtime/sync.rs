@@ -82,7 +82,7 @@ impl TinyThreadHandle {
         })
     }
 
-    /// Block until thread finishes. Returns (return_value, stdout_bytes).
+    /// Block until thread finishes. Returns (`return_value`, `stdout_bytes`).
     /// Runtime error if called more than once.
     pub(crate) fn join(&self) -> Result<(Value, Vec<u8>)> {
         let handle = self

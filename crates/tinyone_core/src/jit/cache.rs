@@ -26,6 +26,7 @@ pub struct JitOptions {
 }
 
 impl JitOptions {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             hot_back_edge_threshold: DEFAULT_HOT_BACK_EDGE_THRESHOLD,
@@ -33,11 +34,13 @@ impl JitOptions {
         }
     }
 
+    #[must_use]
     pub const fn with_hot_back_edge_threshold(mut self, threshold: u16) -> Self {
         self.hot_back_edge_threshold = threshold;
         self
     }
 
+    #[must_use]
     pub const fn hot_back_edge_threshold(self) -> u16 {
         self.hot_back_edge_threshold
     }
@@ -45,15 +48,18 @@ impl JitOptions {
     /// Enables per-opcode dispatch and operand-stack accounting. This is
     /// deliberately opt-in because updating the profile is not part of the
     /// normal execution fast path.
+    #[must_use]
     pub const fn with_execution_profile(mut self, enabled: bool) -> Self {
         self.execution_profile = enabled;
         self
     }
 
+    #[must_use]
     pub const fn execution_profile_enabled(self) -> bool {
         self.execution_profile
     }
 
+    #[must_use]
     pub const fn quickening_enabled(self) -> bool {
         self.hot_back_edge_threshold != 0
     }
@@ -185,10 +191,12 @@ impl Default for JitCache {
 }
 
 impl JitCache {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_options(options: JitOptions) -> Self {
         Self {
             options,
@@ -196,12 +204,14 @@ impl JitCache {
         }
     }
 
+    #[must_use]
     pub fn options(&self) -> JitOptions {
         self.options
     }
 
     /// Bound the exact-source verified-program cache. Either limit may be
     /// zero to disable source caching while retaining the compiled JIT cache.
+    #[must_use]
     pub fn with_source_cache_limits(mut self, max_entries: usize, max_source_bytes: usize) -> Self {
         self.source_cache_max_entries = max_entries;
         self.source_cache_max_bytes = max_source_bytes;
@@ -213,18 +223,22 @@ impl JitCache {
         self
     }
 
+    #[must_use]
     pub fn source_cache_max_entries(&self) -> usize {
         self.source_cache_max_entries
     }
 
+    #[must_use]
     pub fn source_cache_byte_limit(&self) -> usize {
         self.source_cache_max_bytes
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.cache.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
@@ -235,15 +249,26 @@ impl JitCache {
     }
 
     /// Exact source text bytes retained by the verified-program cache.
+    #[must_use]
     pub fn source_cache_bytes(&self) -> usize {
         self.source_cache_bytes
     }
 
+    /// Lower `program` into a cached JIT-compiled form.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if bytecode verification of `program` fails.
     pub fn compile(&mut self, program: &Program) -> crate::Result<&JitProgram> {
         let verified = VerifiedProgram::verify(program.clone())?;
         self.compile_verified(&verified)
     }
 
+    /// Lower an already-verified program into a cached JIT-compiled form.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if JIT lowering of `verified` fails.
     pub fn compile_verified(&mut self, verified: &VerifiedProgram) -> Result<&JitProgram> {
         Ok(&*self.compile_mut(verified)?)
     }
@@ -259,6 +284,7 @@ impl JitCache {
             .ok_or_else(|| crate::TinyOneError::compile("JIT cache insertion failed"))
     }
 
+    #[must_use]
     pub fn stats(&self) -> JitCacheStats {
         let mut stats = self
             .cache
@@ -287,6 +313,11 @@ impl JitCache {
         stats
     }
 
+    /// Verify `program` and run it through the JIT, writing program output to `stdout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if verification, JIT lowering, or program execution fails.
     pub fn run_program(
         &mut self,
         program: &Program,
@@ -297,6 +328,11 @@ impl JitCache {
         self.run_program_unchecked(&verified, stdout, inputs)
     }
 
+    /// Run an already-verified `program` through the JIT.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if JIT lowering or program execution fails.
     pub fn run_verified_program(
         &mut self,
         verified: &VerifiedProgram,
@@ -306,6 +342,11 @@ impl JitCache {
         self.run_program_unchecked(verified, stdout, inputs)
     }
 
+    /// Verify `program` and run it with the given system args/env.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if verification, JIT lowering, or program execution fails.
     pub fn run_program_with_env(
         &mut self,
         program: &Program,
@@ -318,6 +359,11 @@ impl JitCache {
         self.run_program_with_env_unchecked(&verified, stdout, inputs, sys_args, sys_env)
     }
 
+    /// Run an already-verified `program` with the given system args/env.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if JIT lowering or program execution fails.
     pub fn run_verified_program_with_env(
         &mut self,
         verified: &VerifiedProgram,
@@ -329,6 +375,11 @@ impl JitCache {
         self.run_program_with_env_unchecked(verified, stdout, inputs, sys_args, sys_env)
     }
 
+    /// Verify `program` and run it, collecting a [`TinyRunReport`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if verification, JIT lowering, or program execution fails.
     pub fn run_program_report(
         &mut self,
         program: &Program,
@@ -339,6 +390,11 @@ impl JitCache {
         self.run_program_report_unchecked(&verified, stdout, inputs)
     }
 
+    /// Run an already-verified `program`, collecting a [`TinyRunReport`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if JIT lowering or program execution fails.
     pub fn run_verified_program_report(
         &mut self,
         verified: &VerifiedProgram,
@@ -381,11 +437,21 @@ impl JitCache {
         compiled.run_report(stdout, inputs)
     }
 
+    /// Compile `source` (using the exact-source cache) and run it through the JIT.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if source compilation/verification or program execution fails.
     pub fn run_source(&mut self, source: &str, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyMemory> {
         let program = self.compile_source_cached(source)?;
         self.run_verified_program(&program, stdout, inputs)
     }
 
+    /// Compile `source` (using the exact-source cache) and run it, collecting a report.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Err`] if source compilation/verification or program execution fails.
     pub fn run_source_report(
         &mut self,
         source: &str,
@@ -480,13 +546,13 @@ impl JitCache {
 mod tests {
     use super::*;
 
-    const LOOP: &str = r#"
+    const LOOP: &str = r"
         let i = 0
         while i < 4 {
           i = i + 1
         }
         print i
-    "#;
+    ";
 
     fn run_source_with_digest(cache: &mut JitCache, source: &str, digest: [u8; 16]) -> Vec<u8> {
         let program = cache

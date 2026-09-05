@@ -43,18 +43,33 @@ impl RallocBuffer {
     /// Allocates a byte buffer of `len` bytes.
     ///
     /// A zero-length buffer does not allocate and always succeeds.
+    #[must_use]
     pub fn new(len: usize) -> Option<Self> {
         Self::try_new(len).ok()
     }
 
     /// Allocates a byte buffer of `len` bytes, returning an explicit error on
     /// allocation failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RallocError::OutOfMemory`] if the allocator cannot satisfy the
+    /// request, or [`RallocError::InvalidAlignment`] if Ralloc's default
+    /// alignment is unsupported by the native allocator. A zero-length buffer
+    /// never allocates and always succeeds.
     pub fn try_new(len: usize) -> Result<Self, RallocError> {
         Self::try_new_aligned(len, crate::block::ALIGNMENT)
     }
 
     /// Allocates a byte buffer of `len` bytes with at least `align` byte
     /// alignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RallocError::InvalidAlignment`] if `align` is not a supported
+    /// native alignment, or [`RallocError::OutOfMemory`] if the allocator
+    /// cannot satisfy a non-zero `len` request. A zero-length buffer never
+    /// allocates and always succeeds.
     pub fn try_new_aligned(len: usize, align: usize) -> Result<Self, RallocError> {
         if !is_supported_native_alignment(align) {
             return Err(RallocError::InvalidAlignment);
@@ -78,16 +93,19 @@ impl RallocBuffer {
     }
 
     /// Returns the number of bytes in the buffer.
+    #[must_use]
     pub const fn len(&self) -> usize {
         self.len
     }
 
     /// Returns whether the buffer has length zero.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// Returns the buffer as an immutable byte slice.
+    #[must_use]
     pub fn as_slice(&self) -> &[u8] {
         // SAFETY: `ptr` is either a live allocation of `len` bytes or a dangling
         // non-null pointer with `len == 0`.
@@ -102,6 +120,7 @@ impl RallocBuffer {
     }
 
     /// Returns the allocation pointer for identity checks and FFI handoff.
+    #[must_use]
     pub const fn as_ptr(&self) -> *const u8 {
         self.ptr.as_ptr().cast_const()
     }
@@ -117,6 +136,12 @@ impl RallocBuffer {
     /// Resizes the buffer, preserving the first `min(old_len, new_len)` bytes.
     ///
     /// On error the original buffer remains unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RallocError::OutOfMemory`] if the allocator cannot reallocate
+    /// the buffer to `new_len` bytes. The original contents and length are
+    /// preserved on failure.
     pub fn try_resize(&mut self, new_len: usize) -> Result<(), RallocError> {
         if new_len == self.len {
             return Ok(());
@@ -164,6 +189,7 @@ impl RallocBuffer {
     /// The caller becomes responsible for passing the returned parts back to
     /// `RallocBuffer::from_raw_parts` exactly once, or otherwise freeing them
     /// according to Ralloc's allocator contract.
+    #[must_use]
     pub fn into_raw_parts(self) -> (*mut u8, usize) {
         let this = ManuallyDrop::new(self);
         (this.ptr.as_ptr(), this.len)
@@ -176,6 +202,11 @@ impl RallocBuffer {
     /// `ptr` and `len` must come from a previous `RallocBuffer::into_raw_parts`
     /// call, must not have been freed, and must not already be owned by another
     /// handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RallocError::InvalidRawParts`] if `ptr` is null while `len` is
+    /// non-zero. A zero-length (`len == 0`) reclamation always succeeds.
     pub unsafe fn from_raw_parts(ptr: *mut u8, len: usize) -> Result<Self, RallocError> {
         if len == 0 {
             return Ok(Self::empty());
@@ -244,6 +275,12 @@ impl<T> RallocBox<T> {
 
     /// Allocates storage and moves `value` into it, returning an explicit error
     /// if Ralloc cannot safely store this type.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RallocError::OutOfMemory`] if the allocator cannot provide
+    /// `size_of::<T>()` bytes of storage for a non-zero-sized `T`. Zero-sized
+    /// types are never allocated and always succeed.
     pub fn try_new(value: T) -> Result<Self, RallocError> {
         if mem::size_of::<T>() == 0 {
             return Ok(Self {
@@ -270,6 +307,7 @@ impl<T> RallocBox<T> {
     }
 
     /// Returns an immutable reference to the contained value.
+    #[must_use]
     pub fn get(&self) -> &T {
         // SAFETY: `ptr` points to an initialized `T` owned by this handle.
         unsafe { self.ptr.as_ref() }
@@ -282,11 +320,13 @@ impl<T> RallocBox<T> {
     }
 
     /// Returns the owned value pointer.
+    #[must_use]
     pub const fn as_ptr(&self) -> *const T {
         self.ptr.as_ptr().cast_const()
     }
 
     /// Moves the contained value out and releases the allocation.
+    #[must_use]
     pub fn into_inner(self) -> T {
         let this = ManuallyDrop::new(self);
         // SAFETY: `ptr` points to an initialized `T`, and `ManuallyDrop`
@@ -307,6 +347,7 @@ impl<T> RallocBox<T> {
     /// The caller becomes responsible for passing the pointer back to
     /// `RallocBox::from_raw` exactly once, or otherwise dropping the value and
     /// freeing the allocation according to Ralloc's allocator contract.
+    #[must_use]
     pub fn into_raw(self) -> *mut T {
         let this = ManuallyDrop::new(self);
         this.ptr.as_ptr()
@@ -319,6 +360,10 @@ impl<T> RallocBox<T> {
     /// `ptr` must come from a previous `RallocBox<T>::into_raw` call, must point
     /// to an initialized `T`, must not have been freed, and must not already be
     /// owned by another handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RallocError::InvalidRawParts`] if `ptr` is null.
     pub unsafe fn from_raw(ptr: *mut T) -> Result<Self, RallocError> {
         let Some(ptr) = NonNull::new(ptr) else {
             return Err(RallocError::InvalidRawParts);

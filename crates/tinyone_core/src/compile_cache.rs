@@ -153,9 +153,9 @@ pub(crate) fn lookup(root: &Path, optimize: bool) -> Result<CacheLookup> {
     }
 
     let Some((path, existed, bytes, digest)) = changed else {
-        return Ok(match_cached_program(&paths.artifact, &record.fingerprint)
-            .map(CacheLookup::Hit)
-            .unwrap_or(CacheLookup::Miss));
+        return Ok(
+            match_cached_program(&paths.artifact, &record.fingerprint).map_or(CacheLookup::Miss, CacheLookup::Hit)
+        );
     };
     debug_assert!(path != root && existed);
     let (Some(bytes), Some(digest)) = (bytes, digest) else {
@@ -213,8 +213,7 @@ pub(crate) fn should_bypass_filesystem(root: &Path) -> bool {
         let is_wsl = *IS_WSL.get_or_init(|| {
             fs::read_to_string("/proc/sys/kernel/osrelease")
                 .or_else(|_| fs::read_to_string("/proc/version"))
-                .map(|text| text.to_ascii_lowercase().contains("microsoft"))
-                .unwrap_or(false)
+                .is_ok_and(|text| text.to_ascii_lowercase().contains("microsoft"))
         });
         if is_wsl {
             let path = root.to_string_lossy();
@@ -485,8 +484,7 @@ fn resolutions_match(resolutions: &[CacheResolution]) -> bool {
         resolution
             .candidate
             .canonicalize()
-            .map(|path| path == resolution.canonical)
-            .unwrap_or(false)
+            .is_ok_and(|path| path == resolution.canonical)
     })
 }
 
@@ -541,7 +539,7 @@ fn cache_paths(root: &Path, optimize: bool) -> CachePaths {
     let directory = root.parent().unwrap_or_else(|| Path::new(".")).join(".tinyone-cache");
     let mut hasher = Blake2b512::new();
     hasher.update(root.to_string_lossy().as_bytes());
-    hasher.update([optimize as u8]);
+    hasher.update([u8::from(optimize)]);
     hasher.update(CACHE_FORMAT_VERSION.to_le_bytes());
     let digest = hasher.finalize();
     let key = hex::encode(&digest[..12]);

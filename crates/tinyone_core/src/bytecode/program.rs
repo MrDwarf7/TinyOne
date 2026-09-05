@@ -508,6 +508,7 @@ pub struct Program {
 impl Program {
     /// Create a program with empty metadata. The resulting program is still
     /// unverified and must pass through `VerifiedProgram` before execution.
+    #[must_use]
     pub fn new(code: Vec<Instr>, slot_count: usize) -> Self {
         Self {
             code,
@@ -526,32 +527,39 @@ impl Program {
         }
     }
 
+    #[must_use]
     pub fn code(&self) -> &[Instr] {
         &self.code
     }
 
+    #[must_use]
     pub fn slot_count(&self) -> usize {
         self.slot_count
     }
 
+    #[must_use]
     pub fn functions(&self) -> &[Function] {
         &self.functions
     }
 
+    #[must_use]
     pub fn structs(&self) -> &[StructDef] {
         &self.structs
     }
 
+    #[must_use]
     pub fn modules(&self) -> &[ModuleDef] {
         &self.modules
     }
 
     /// Host capabilities granted to the root codebase by `Config.toml`.
+    #[must_use]
     pub fn root_capabilities(&self) -> Vec<String> {
         self.root_capabilities.names()
     }
 
-    /// Maximum nested TinyLang function calls permitted by this program.
+    /// Maximum nested `TinyLang` function calls permitted by this program.
+    #[must_use]
     pub fn max_call_depth(&self) -> usize {
         self.vm_settings.max_call_depth
     }
@@ -603,21 +611,25 @@ impl Program {
             .any(|instruction| instruction.op == crate::Op::Builtin)
     }
 
+    #[must_use]
     pub fn with_functions(mut self, functions: Vec<Function>) -> Self {
         self.functions = functions;
         self
     }
 
+    #[must_use]
     pub fn with_slot_count(mut self, slot_count: usize) -> Self {
         self.slot_count = slot_count;
         self
     }
 
+    #[must_use]
     pub fn with_names(mut self, names: Vec<String>) -> Self {
         self.names = names;
         self
     }
 
+    #[must_use]
     pub fn with_structs(mut self, structs: Vec<StructDef>) -> Self {
         self.structs = structs;
         self
@@ -680,10 +692,11 @@ impl Program {
             .is_some_and(|module| module.exported_functions.iter().any(|export| export == local_name))
     }
 
+    #[must_use]
     pub fn fingerprint(&self) -> String {
         let mut hasher = Blake2b512::new();
         hasher.update(b"tinyone-program-fingerprint-v4");
-        self.hash_code(&mut hasher, &self.code);
+        Self::hash_code(&mut hasher, &self.code);
         hasher.update((self.slot_count as u64).to_le_bytes());
         hash_module_permissions(&mut hasher, &self.root_permissions);
         hasher.update((self.vm_settings.max_call_depth as u64).to_le_bytes());
@@ -694,7 +707,7 @@ impl Program {
             hash_string_list(&mut hasher, function.generic_params.iter());
             hasher.update((function.param_count as u64).to_le_bytes());
             hasher.update((function.slot_count as u64).to_le_bytes());
-            self.hash_code(&mut hasher, &function.code);
+            Self::hash_code(&mut hasher, &function.code);
             hash_string_list(&mut hasher, function.names.iter());
         }
         hasher.update((self.strings.len() as u64).to_le_bytes());
@@ -733,12 +746,12 @@ impl Program {
         hex::encode(&digest[..16])
     }
 
-    fn hash_code(&self, hasher: &mut Blake2b512, code: &[Instr]) {
+    fn hash_code(hasher: &mut Blake2b512, code: &[Instr]) {
         hasher.update((code.len() as u64).to_le_bytes());
         for instr in code {
             hasher.update(instr.op.ordinal().to_le_bytes());
-            hasher.update((instr.arg as i128).to_le_bytes());
-            hasher.update((instr.arg2 as i128).to_le_bytes());
+            hasher.update(i128::from(instr.arg).to_le_bytes());
+            hasher.update(i128::from(instr.arg2).to_le_bytes());
         }
     }
 }
@@ -755,14 +768,17 @@ impl Function {
         }
     }
 
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub fn generic_params(&self) -> &[String] {
         &self.generic_params
     }
 
+    #[must_use]
     pub fn code(&self) -> &[Instr] {
         &self.code
     }
@@ -776,43 +792,52 @@ impl StructDef {
         }
     }
 
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub fn fields(&self) -> &[String] {
         &self.fields
     }
 }
 
 impl ModuleDef {
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub fn path(&self) -> &str {
         &self.path
     }
 
+    #[must_use]
     pub fn exported_functions(&self) -> &[String] {
         &self.exported_functions
     }
 
+    #[must_use]
     pub fn exported_structs(&self) -> &[String] {
         &self.exported_structs
     }
 
     /// Capabilities granted to this imported module by its package manifest.
+    #[must_use]
     pub fn capabilities(&self) -> Vec<String> {
         self.capabilities.names()
     }
 
     /// Fine-grained signed-manifest declarations, when present. `None` for
     /// environment access means a legacy broad environment capability grant.
+    #[must_use]
     pub fn filesystem_permissions(&self) -> (bool, bool) {
         (self.permissions.allows_filesystem_read(), self.permissions.allows_filesystem_write())
     }
 
+    #[must_use]
     pub fn environment_read_allowlist(&self) -> Option<&[String]> {
         self.permissions.environment_read_allowlist()
     }
@@ -842,8 +867,8 @@ where
 
 fn hash_module_permissions(hasher: &mut Blake2b512, permissions: &ModulePermissions) {
     hasher.update([permissions.capabilities.bits()]);
-    hasher.update([permissions.filesystem_read as u8]);
-    hasher.update([permissions.filesystem_write as u8]);
+    hasher.update([u8::from(permissions.filesystem_read)]);
+    hasher.update([u8::from(permissions.filesystem_write)]);
     match &permissions.environment_read {
         None => hasher.update([0]),
         Some(values) => {
@@ -851,15 +876,15 @@ fn hash_module_permissions(hasher: &mut Blake2b512, permissions: &ModulePermissi
             hash_string_list(hasher, values.iter());
         }
     }
-    hasher.update([permissions.network_outbound as u8]);
-    hasher.update([permissions.network_listen as u8]);
-    hasher.update([permissions.process_spawn as u8]);
-    hasher.update([permissions.ffi_allowed as u8]);
-    hasher.update([permissions.graphics_gpu as u8]);
-    hasher.update([permissions.hardware_access as u8]);
-    hasher.update([permissions.threads_allowed as u8]);
-    hasher.update([permissions.unsafe_memory_allowed as u8]);
-    hasher.update([permissions.linux_pipelines_allowed as u8]);
+    hasher.update([u8::from(permissions.network_outbound)]);
+    hasher.update([u8::from(permissions.network_listen)]);
+    hasher.update([u8::from(permissions.process_spawn)]);
+    hasher.update([u8::from(permissions.ffi_allowed)]);
+    hasher.update([u8::from(permissions.graphics_gpu)]);
+    hasher.update([u8::from(permissions.hardware_access)]);
+    hasher.update([u8::from(permissions.threads_allowed)]);
+    hasher.update([u8::from(permissions.unsafe_memory_allowed)]);
+    hasher.update([u8::from(permissions.linux_pipelines_allowed)]);
 }
 
 /// A `Program` that has been validated by `BytecodeVerifier`.
@@ -884,6 +909,12 @@ impl Eq for VerifiedProgram {}
 
 impl VerifiedProgram {
     /// Verify `program` and wrap it. Returns `Err` if verification fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `program` fails bytecode verification (e.g. invalid
+    /// opcodes, stack/slot misuse, capability ownership violations, budget
+    /// violations, or module graph errors).
     pub fn verify(program: Program) -> crate::Result<Self> {
         crate::BytecodeVerifier::verify(&program)?;
         Ok(Self::from_verified_arc(std::sync::Arc::new(program)))
@@ -902,12 +933,14 @@ impl VerifiedProgram {
     }
 
     /// Borrow the inner program.
+    #[must_use]
     pub fn program(&self) -> &Program {
         &self.program
     }
 
     /// Return the stable program fingerprint, computing it at most once for
     /// this verification token and all of its clones.
+    #[must_use]
     pub fn fingerprint(&self) -> &str {
         self.fingerprint.get_or_init(|| self.program.fingerprint()).as_str()
     }
@@ -918,6 +951,7 @@ impl VerifiedProgram {
 
     /// Consume the capability and recover an owned program. If other clones
     /// still share the program, the metadata is cloned for the caller.
+    #[must_use]
     pub fn into_program(self) -> Program {
         match std::sync::Arc::try_unwrap(self.program) {
             Ok(program) => program,

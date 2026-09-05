@@ -43,7 +43,7 @@ fn box_into_inner_moves_value_out_and_frees_storage() {
     let inner = value.into_inner();
 
     assert_eq!(inner.0, 99);
-    assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 0);
+    assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 0); // BUG: Occasional failure!
 
     drop(inner);
     assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 1);

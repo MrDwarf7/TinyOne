@@ -64,7 +64,7 @@ impl TinyRuntimeContext {
     #[inline]
     pub(crate) fn heap(&self) -> MutexGuard<'_, TinyHeap> {
         crate::runtime::instrumentation::record_heap_lock_acquisition();
-        self.heap_arc.lock().unwrap_or_else(|e| e.into_inner())
+        self.heap_arc.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub(crate) fn read_raw(&mut self) -> Result<String> {

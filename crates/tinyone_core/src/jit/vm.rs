@@ -254,7 +254,7 @@ impl<'a> JitVm<'a> {
                     stack.push(Value::Float {
                         kind: TypeKind::Fp64,
                         bits: f64::from_bits(bits),
-                    })
+                    });
                 }
                 JitOp::PushFunction(function_index) => {
                     if function_index >= self.program.verified_program.program().functions.len() {
@@ -620,8 +620,7 @@ impl<'a> JitVm<'a> {
                             .chunks
                             .get(chunk_index)
                             .and_then(Option::as_ref)
-                            .map(|chunk| chunk.name.as_str())
-                            .unwrap_or("<invalid>");
+                            .map_or("<invalid>", |chunk| chunk.name.as_str());
                         return Err(TinyOneError::runtime(format!("Internal stack imbalance at halt in {chunk_name}")));
                     }
                     return Ok(None);
@@ -690,7 +689,6 @@ impl<'a> JitVm<'a> {
             .program()
             .functions
             .get(function_index)
-            .map(|function| function.name.as_str())
-            .unwrap_or("<invalid>")
+            .map_or("<invalid>", |function| function.name.as_str())
     }
 }

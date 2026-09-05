@@ -107,7 +107,7 @@ pub(crate) fn runtime_get_field(context: &TinyRuntimeContext, target: Value, fie
         }
         HeapData::Enum(record) => {
             if field == "tag" {
-                return Ok(Value::I64(record.tag() as i64));
+                return Ok(Value::I64(i64::from(record.tag())));
             }
             record.get(field).ok_or_else(|| {
                 TinyOneError::runtime(format!(
@@ -158,7 +158,7 @@ pub(crate) fn expect_string(context: &TinyRuntimeContext, value: &Value, operati
     let heap = context.heap();
     let object = heap.get(value)?;
     match &object.data {
-        HeapData::String(text) => crate::runtime::heap::heap_str(text).map(|s| s.to_owned()),
+        HeapData::String(text) => crate::runtime::heap::heap_str(text).map(std::borrow::ToOwned::to_owned),
         _ => Err(TinyOneError::runtime(format!("{operation} expects a string"))),
     }
 }

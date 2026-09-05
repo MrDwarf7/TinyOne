@@ -235,7 +235,7 @@ impl Compiler {
             if info.finalized {
                 return Ok(());
             }
-            info.imports = self.module_imports.clone();
+            info.imports.clone_from(&self.module_imports);
             let mut exported_functions = info.function_exports.keys().cloned().collect::<Vec<_>>();
             let mut exported_structs = info.struct_exports.keys().cloned().collect::<Vec<_>>();
             exported_functions.sort();
@@ -319,7 +319,7 @@ impl Compiler {
 
     /// Consumes and discards an optional type annotation introduced by
     /// `marker` (`Colon` for `let`/parameter annotations, `Arrow` for
-    /// function return-type annotations). TinyLang has no static type
+    /// function return-type annotations). `TinyLang` has no static type
     /// checker (dynamically typed by design — see `docs/v2-roadmap.md`);
     /// annotations are syntax-only documentation with no effect on compiled
     /// bytecode.
@@ -486,11 +486,7 @@ impl Compiler {
 
         let needs_load = {
             let state = self.shared.borrow();
-            state
-                .modules
-                .get(&module_filename)
-                .map(|info| !info.finalized)
-                .unwrap_or(true)
+            state.modules.get(&module_filename).is_none_or(|info| !info.finalized)
         };
         if needs_load {
             {
@@ -787,7 +783,7 @@ impl Compiler {
     }
 
     /// Parses the v2 declaration form `fn identity<T>(value: T) -> T`.
-    /// TinyOne is dynamically typed, so generic parameters are erased from
+    /// `TinyOne` is dynamically typed, so generic parameters are erased from
     /// execution; the names remain in `Function` metadata for tooling and
     /// artifact consumers.
     fn generic_parameter_list(&mut self) -> Result<Vec<String>> {

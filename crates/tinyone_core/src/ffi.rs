@@ -63,14 +63,14 @@ enum SandboxRequest {
 }
 
 #[unsafe(no_mangle)]
-/// Return the declared stable TinyOne C ABI version.
+/// Return the declared stable `TinyOne` C ABI version.
 pub extern "C" fn tinyone_abi_version() -> u32 {
     TINYONE_ABI_VERSION
 }
 
 /// # Safety
 ///
-/// `value` must be null or a pointer returned by a TinyOne C-ABI function
+/// `value` must be null or a pointer returned by a `TinyOne` C-ABI function
 /// that has not already been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tinyone_free_string(value: *mut c_char) {
@@ -268,7 +268,6 @@ fn run_sandboxed(request: SandboxRequest) -> Result<JsonValue> {
         .unwrap_or("sandbox worker returned an invalid error response");
     match response.get("kind").and_then(JsonValue::as_str) {
         Some("compile") => Err(TinyOneError::compile(message)),
-        Some("runtime") | Some("panic") => Err(TinyOneError::runtime(message)),
         _ => Err(TinyOneError::runtime(message)),
     }
 }

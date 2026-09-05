@@ -16,7 +16,9 @@ fn measure(label: &str, source: &str, iterations: usize) {
             run_program(program.clone(), mode, &mut out, Vec::new()).expect("run");
         }
         let elapsed = start.elapsed();
-        let per = elapsed.as_secs_f64() * 1000.0 / iterations as f64;
+        // let var_name = iterations as f64;
+        let var_name: f64 = iterations as f64;
+        let per = elapsed.as_secs_f64() * 1000.0 / var_name;
         eprintln!("{label:32}  mode={mode:3}  {per:7.3} ms/iter");
     }
 }
@@ -26,7 +28,7 @@ fn stdlib_bench_smoke() {
     let iters = 20;
     measure(
         "vec_push_pop_1000",
-        r#"
+        r"
         let v = vec_new()
         let i = 0
         while i < 1000 {
@@ -37,12 +39,12 @@ fn stdlib_bench_smoke() {
           let ignored = pop(v)
         }
         print len(v)
-        "#,
+        ",
         iters,
     );
     measure(
         "map_set_get_100",
-        r#"
+        r"
         let m = map_new()
         let i = 0
         while i < 100 {
@@ -56,7 +58,7 @@ fn stdlib_bench_smoke() {
           j = j + 1
         }
         print total
-        "#,
+        ",
         iters,
     );
     measure(

@@ -21,7 +21,7 @@
 //! Field name offsets are never stored explicitly — since names are laid
 //! out contiguously in construction order, an offset is always the prefix
 //! sum of the preceding lengths. Field counts are always small (real
-//! structs/enums have a handful of fields), so the O(field_count) work this
+//! structs/enums have a handful of fields), so the `O(field_count)` work this
 //! implies for lookups is negligible.
 
 use crate::runtime::value_codec::{self, ENCODED_VALUE_BYTES};

@@ -92,7 +92,6 @@ impl Lexer {
                         };
                         text.push(ch);
                         pos += ch.len_utf8();
-                        continue;
                     }
                 }
                 if pos >= bytes.len() {

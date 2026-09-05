@@ -20,30 +20,65 @@ use crate::{
     read_source_file,
 };
 
+/// Compile `source` into a verified program and return it as a shareable `Program`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing, parsing, or bytecode verification fails.
 pub fn compile_source(source: &str) -> Result<Arc<Program>> {
     Ok(compile_source_verified(source)?.program_arc())
 }
 
+/// Compile `source` into a `VerifiedProgram`, reporting verification errors.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing, parsing, or bytecode verification fails.
 pub fn compile_source_verified(source: &str) -> Result<VerifiedProgram> {
     compile_source_verified_with_filename(source, "<source>")
 }
 
+/// Lex `source` and return the number of tokens produced.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing fails on a malformed token.
 pub fn lex_source(source: &str) -> Result<usize> {
     Ok(Lexer::new(source, "<source>").tokenize()?.len())
 }
 
+/// Compile `source` without peephole optimization.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing, parsing, or bytecode verification fails.
 pub fn compile_source_unoptimized(source: &str) -> Result<Arc<Program>> {
     Ok(compile_source_unoptimized_verified(source)?.program_arc())
 }
 
+/// Compile `source` without optimization and return a `VerifiedProgram`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing, parsing, or bytecode verification fails.
 pub fn compile_source_unoptimized_verified(source: &str) -> Result<VerifiedProgram> {
     compile_source_unoptimized_verified_with_filename(source, "<source>")
 }
 
+/// Compile `source` without optimization, tagging errors with `filename`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing, parsing, or bytecode verification fails.
 pub fn compile_source_unoptimized_with_filename(source: &str, filename: &str) -> Result<Arc<Program>> {
     Ok(compile_source_unoptimized_verified_with_filename(source, filename)?.program_arc())
 }
 
+/// Compile `source` without optimization and return a `VerifiedProgram` tagged with `filename`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing, parsing, or bytecode verification fails.
 pub fn compile_source_unoptimized_verified_with_filename(source: &str, filename: &str) -> Result<VerifiedProgram> {
     VerifiedProgram::verify(compile_source_unoptimized_program(source, filename)?)
 }
@@ -62,45 +97,98 @@ fn compile_source_unoptimized_program(source: &str, filename: &str) -> Result<Pr
     compiler.compile()
 }
 
+#[must_use]
 pub fn optimize_program(program: Arc<Program>) -> Arc<Program> {
     Arc::new(PeepholeOptimizer::optimize(Arc::try_unwrap(program).unwrap_or_else(|arc| (*arc).clone())))
 }
 
+/// Compile `source` and tag any errors with `filename`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing, parsing, or bytecode verification fails.
 pub fn compile_source_with_filename(source: &str, filename: &str) -> Result<Arc<Program>> {
     Ok(compile_source_verified_with_filename(source, filename)?.program_arc())
 }
 
+/// Compile `source` into a `VerifiedProgram` tagged with `filename`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if lexing, parsing, or bytecode verification fails.
 pub fn compile_source_verified_with_filename(source: &str, filename: &str) -> Result<VerifiedProgram> {
     let program = PeepholeOptimizer::optimize(compile_source_unoptimized_program(source, filename)?);
     VerifiedProgram::verify(program)
 }
 
+/// Compile the source file at `path`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if the file cannot be read or if lexing, parsing, or
+/// verification fails.
 pub fn compile_file(path: impl AsRef<Path>) -> Result<Arc<Program>> {
     Ok(compile_file_verified(path)?.program_arc())
 }
 
+/// Compile the source file at `path` into a `VerifiedProgram`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if the file cannot be read or if lexing, parsing, or
+/// verification fails.
 pub fn compile_file_verified(path: impl AsRef<Path>) -> Result<VerifiedProgram> {
     compile_file_verified_with_options(path, true)
 }
 
+/// Compile `path`, reusing the on-disk compile cache when valid.
+///
+/// # Errors
+///
+/// Returns [`Err`] if the file cannot be read/canonicalized, the module
+/// resolver fails to build, or lexing/parsing/verification fails.
 pub fn compile_file_cached(path: impl AsRef<Path>) -> Result<Arc<Program>> {
     Ok(compile_file_cached_verified(path)?.program_arc())
 }
 
+/// Compile `path` via the cache, returning a `VerifiedProgram`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if the file cannot be read/canonicalized, the module
+/// resolver fails to build, or lexing/parsing/verification fails.
 pub fn compile_file_cached_verified(path: impl AsRef<Path>) -> Result<VerifiedProgram> {
     compile_file_cached_verified_with_status(path).map(|(program, _)| program)
 }
 
+/// Compile `path` via the cache, also reporting whether the result was a hit.
+///
+/// # Errors
+///
+/// Returns [`Err`] if the file cannot be read/canonicalized, the module
+/// resolver fails to build, or lexing/parsing/verification fails.
 pub fn compile_file_cached_verified_with_status(
     path: impl AsRef<Path>,
 ) -> Result<(VerifiedProgram, CompileCacheStatus)> {
     compile_file_cached_verified_with_options(path, true)
 }
 
+/// Compile `path` without optimization.
+///
+/// # Errors
+///
+/// Returns [`Err`] if the file cannot be read or if lexing, parsing, or
+/// verification fails.
 pub fn compile_file_unoptimized(path: impl AsRef<Path>) -> Result<Arc<Program>> {
     Ok(compile_file_unoptimized_verified(path)?.program_arc())
 }
 
+/// Compile `path` without optimization, returning a `VerifiedProgram`.
+///
+/// # Errors
+///
+/// Returns [`Err`] if the file cannot be read or if lexing, parsing, or
+/// verification fails.
 pub fn compile_file_unoptimized_verified(path: impl AsRef<Path>) -> Result<VerifiedProgram> {
     compile_file_verified_with_options(path, false)
 }
@@ -113,6 +201,14 @@ fn compile_file_verified_with_options(path: impl AsRef<Path>, optimize: bool) ->
     compile_canonical_file(&path, optimize).map(|(program, _, _)| program)
 }
 
+/// Compile `path` via the cache with an explicit `optimize` flag, returning the
+/// program plus a [`CompileCacheStatus`] describing how the result was obtained.
+///
+/// # Errors
+///
+/// Returns [`Err`] if `path` cannot be canonicalized, the module resolver fails
+/// to build (e.g. certificate/authority checks), or lexing/parsing/verification
+/// fails. Cache-store failures are swallowed and do not produce an error.
 pub fn compile_file_cached_verified_with_options(
     path: impl AsRef<Path>,
     optimize: bool,

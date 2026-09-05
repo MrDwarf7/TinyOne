@@ -329,9 +329,7 @@ impl JitOp {
             Op::Builtin => {
                 let index = jit_operand(instr.arg, "builtin index")?;
                 let arg_count = jit_operand(instr.arg2, "builtin arity")?;
-                JitBuiltin::from_builtin(index, arg_count)
-                    .map(Self::BuiltinDirect)
-                    .unwrap_or(Self::Builtin(index, arg_count))
+                JitBuiltin::from_builtin(index, arg_count).map_or(Self::Builtin(index, arg_count), Self::BuiltinDirect)
             }
             Op::Return => Self::Return,
             Op::Print => Self::Print,
@@ -456,22 +454,13 @@ impl JitOp {
 
     pub(crate) fn remap_targets(&mut self, original_to_compiled: &[usize]) {
         match self {
-            Self::Jump(target) | Self::JumpHot(target) => {
-                if let Some(mapped) = original_to_compiled.get(*target) {
-                    *target = *mapped;
-                }
-            }
-            Self::JumpIfZero(target) | Self::JumpIfZeroHot(target) => {
-                if let Some(mapped) = original_to_compiled.get(*target) {
-                    *target = *mapped;
-                }
-            }
-            Self::JumpIfZeroSlot(_, target) | Self::JumpIfZeroSlotHot(_, target) => {
-                if let Some(mapped) = original_to_compiled.get(*target) {
-                    *target = *mapped;
-                }
-            }
-            Self::ArrayLenSlotJumpIfZero(_, target) => {
+            Self::Jump(target)
+            | Self::JumpHot(target)
+            | Self::JumpIfZero(target)
+            | Self::JumpIfZeroHot(target)
+            | Self::JumpIfZeroSlot(_, target)
+            | Self::JumpIfZeroSlotHot(_, target)
+            | Self::ArrayLenSlotJumpIfZero(_, target) => {
                 if let Some(mapped) = original_to_compiled.get(*target) {
                     *target = *mapped;
                 }

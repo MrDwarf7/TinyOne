@@ -11,7 +11,7 @@ fn run(source: &str, mode: &str) -> String {
 
 #[test]
 fn arithmetic_loops_and_functions() {
-    let source = r#"
+    let source = r"
     fn mul_by_count(value, count) {
       let acc = 0
       while count > 0 {
@@ -27,7 +27,7 @@ fn arithmetic_loops_and_functions() {
       i = i + 1
     }
     print total
-    "#;
+    ";
     assert_eq!(run(source, "vm"), "108\n");
     assert_eq!(run(source, "jit"), "108\n");
 }

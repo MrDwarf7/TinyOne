@@ -37,6 +37,14 @@ const MAX_PERMISSION_ENVIRONMENT_VARIABLES: usize = 4_096;
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 
 impl Program {
+    /// Encodes this program into its binary artifact representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any field cannot be encoded within the binary
+    /// format's size limits (for example if a string, string list, or
+    /// instruction count exceeds `u32::MAX`), or if the encoded artifact
+    /// exceeds [`MAX_BINARY_ARTIFACT_BYTES`].
     pub fn to_binary_artifact(&self) -> Result<Vec<u8>> {
         let mut writer = BinaryWriter::default();
         writer.bytes.extend_from_slice(BINARY_ARTIFACT_MAGIC);
@@ -94,12 +102,26 @@ impl Program {
         Ok(writer.bytes)
     }
 
+    /// Decodes an untrusted binary artifact and verifies it, returning a
+    /// [`Program`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` is not a valid binary artifact (exceeds the
+    /// byte size limit, has an invalid magic header or version, or is truncated
+    /// or malformed), or if bytecode verification fails.
     pub fn from_binary_artifact(bytes: &[u8]) -> Result<Self> {
         VerifiedProgram::from_binary_artifact(bytes).map(VerifiedProgram::into_program)
     }
 
     /// Decodes policy-bearing binary data after the caller has authenticated
     /// the artifact bytes and accepted its authority as an embedding decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` is not a valid binary artifact (exceeds the
+    /// byte size limit, has an invalid magic header or version, or is truncated
+    /// or malformed), or if bytecode verification fails.
     pub fn from_trusted_binary_artifact(bytes: &[u8]) -> Result<Self> {
         VerifiedProgram::from_trusted_binary_artifact(bytes).map(VerifiedProgram::into_program)
     }
@@ -217,12 +239,24 @@ impl VerifiedProgram {
     /// Decodes an untrusted binary artifact without granting its serialized
     /// host authority. Use [`Self::from_trusted_binary_artifact`] only after
     /// the embedding application authenticates the bytes and policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` is not a valid binary artifact (exceeds the
+    /// byte size limit, has an invalid magic header or version, or is truncated
+    /// or malformed), or if bytecode verification fails.
     pub fn from_binary_artifact(bytes: &[u8]) -> Result<Self> {
         Self::verify(Program::decode_binary_artifact(bytes)?)
     }
 
     /// Decodes a binary artifact whose bytes and policy were authenticated by
     /// the embedding application.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` is not a valid binary artifact (exceeds the
+    /// byte size limit, has an invalid magic header or version, or is truncated
+    /// or malformed), or if bytecode verification fails.
     pub fn from_trusted_binary_artifact(bytes: &[u8]) -> Result<Self> {
         Self::verify(Program::decode_binary_artifact(bytes)?.trust_artifact_policy())
     }
@@ -282,8 +316,8 @@ impl BinaryWriter {
     }
 
     fn permissions(&mut self, permissions: &ModulePermissions) -> Result<()> {
-        self.u8(permissions.allows_filesystem_read() as u8);
-        self.u8(permissions.allows_filesystem_write() as u8);
+        self.u8(u8::from(permissions.allows_filesystem_read()));
+        self.u8(u8::from(permissions.allows_filesystem_write()));
         match permissions.environment_read_allowlist() {
             None => self.u8(0),
             Some(values) => {
@@ -291,15 +325,15 @@ impl BinaryWriter {
                 self.string_list(values)?;
             }
         }
-        self.u8(permissions.network_outbound() as u8);
-        self.u8(permissions.network_listen() as u8);
-        self.u8(permissions.process_spawn() as u8);
-        self.u8(permissions.ffi_allowed() as u8);
-        self.u8(permissions.graphics_gpu() as u8);
-        self.u8(permissions.hardware_access() as u8);
-        self.u8(permissions.threads_allowed() as u8);
-        self.u8(permissions.unsafe_memory_allowed() as u8);
-        self.u8(permissions.linux_pipelines_allowed() as u8);
+        self.u8(u8::from(permissions.network_outbound()));
+        self.u8(u8::from(permissions.network_listen()));
+        self.u8(u8::from(permissions.process_spawn()));
+        self.u8(u8::from(permissions.ffi_allowed()));
+        self.u8(u8::from(permissions.graphics_gpu()));
+        self.u8(u8::from(permissions.hardware_access()));
+        self.u8(u8::from(permissions.threads_allowed()));
+        self.u8(u8::from(permissions.unsafe_memory_allowed()));
+        self.u8(u8::from(permissions.linux_pipelines_allowed()));
         Ok(())
     }
 }

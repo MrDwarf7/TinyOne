@@ -1,4 +1,4 @@
-//! Move-only allocation handles for VM-integrated callers (e.g. TinyOne).
+//! Move-only allocation handles for VM-integrated callers (e.g. `TinyOne`).
 //!
 //! `VmAllocator` is a thin, `Result`-returning wrapper over [`RallocBuffer`].
 //! `VmAllocation` deliberately has no `Drop` impl: ownership transfer is
@@ -20,16 +20,19 @@ pub struct VmAllocation(ManuallyDrop<RallocBuffer>);
 
 impl VmAllocation {
     /// Returns the number of bytes in the allocation.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns whether the allocation has length zero.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Returns the allocation as an immutable byte slice.
+    #[must_use]
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_slice()
     }
@@ -40,6 +43,7 @@ impl VmAllocation {
     }
 
     /// Returns the allocation pointer for identity checks and FFI handoff.
+    #[must_use]
     pub fn as_ptr(&self) -> *const u8 {
         self.0.as_ptr()
     }
@@ -54,17 +58,32 @@ pub struct VmAllocator(());
 
 impl VmAllocator {
     /// Returns the global `VmAllocator` instance.
+    #[must_use]
     pub fn global() -> &'static VmAllocator {
         static INSTANCE: VmAllocator = VmAllocator(());
         &INSTANCE
     }
 
     /// Allocates `len` bytes at Ralloc's default native alignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RallocError::OutOfMemory`] if the allocator cannot satisfy the
+    /// request, or [`RallocError::InvalidAlignment`] if Ralloc's default
+    /// alignment is unsupported by the native allocator. A zero-length
+    /// allocation always succeeds.
     pub fn allocate(&self, len: usize) -> Result<VmAllocation, RallocError> {
         RallocBuffer::try_new(len).map(|buffer| VmAllocation(ManuallyDrop::new(buffer)))
     }
 
     /// Allocates `len` bytes with at least `align` byte alignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RallocError::InvalidAlignment`] if `align` is not a supported
+    /// native alignment, or [`RallocError::OutOfMemory`] if the allocator
+    /// cannot satisfy a non-zero `len` request. A zero-length allocation always
+    /// succeeds.
     pub fn allocate_aligned(&self, len: usize, align: usize) -> Result<VmAllocation, RallocError> {
         RallocBuffer::try_new_aligned(len, align).map(|buffer| VmAllocation(ManuallyDrop::new(buffer)))
     }
@@ -86,6 +105,12 @@ impl VmAllocator {
     /// On failure, returns the original `alloc` unchanged alongside the
     /// error — matching `realloc(3)` semantics — so the caller never loses
     /// track of a live allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err((original_alloc, [``RallocError::OutOfMemory``]))` if the
+    /// allocator cannot reallocate to `new_len` bytes. The original allocation
+    /// is returned unchanged so the caller still owns it.
     pub fn reallocate(&self, alloc: VmAllocation, new_len: usize) -> Result<VmAllocation, (VmAllocation, RallocError)> {
         let VmAllocation(buffer) = alloc;
         let mut buffer = ManuallyDrop::into_inner(buffer);
@@ -99,6 +124,7 @@ impl VmAllocator {
     ///
     /// This is the hard upper bound on the sum of all live `VmAllocation`
     /// bytes at any one time, process-wide.
+    #[must_use]
     pub const fn capacity() -> usize {
         ARENA_COUNT * ARENA_BYTES
     }
@@ -108,6 +134,7 @@ impl VmAllocator {
     /// A single allocation cannot span multiple arenas, so this is the hard
     /// upper bound on the size of any one `VmAllocation`, not just on the
     /// process-wide total returned by [`VmAllocator::capacity`].
+    #[must_use]
     pub const fn max_allocation_size() -> usize {
         ARENA_BYTES
     }

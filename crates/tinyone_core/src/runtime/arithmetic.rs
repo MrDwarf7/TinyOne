@@ -21,14 +21,14 @@ pub(crate) fn runtime_integer_kind(value: &Value) -> Option<TypeKind> {
 
 pub(crate) fn runtime_integer_value(value: &Value, operation: &str) -> Result<i128> {
     match value {
-        Value::I8(v) => Ok(*v as i128),
-        Value::I16(v) => Ok(*v as i128),
-        Value::I32(v) => Ok(*v as i128),
-        Value::I64(v) => Ok(*v as i128),
-        Value::U8(v) => Ok(*v as i128),
-        Value::U16(v) => Ok(*v as i128),
-        Value::U32(v) => Ok(*v as i128),
-        Value::U64(v) => Ok(*v as i128),
+        Value::I8(v) => Ok(i128::from(*v)),
+        Value::I16(v) => Ok(i128::from(*v)),
+        Value::I32(v) => Ok(i128::from(*v)),
+        Value::I64(v) => Ok(i128::from(*v)),
+        Value::U8(v) => Ok(i128::from(*v)),
+        Value::U16(v) => Ok(i128::from(*v)),
+        Value::U32(v) => Ok(i128::from(*v)),
+        Value::U64(v) => Ok(i128::from(*v)),
         _ => Err(TinyOneError::runtime(format!("{operation} expects integer operands"))),
     }
 }
@@ -85,10 +85,10 @@ fn unsigned_from_rank(rank: u8) -> TypeKind {
 
 fn unsigned_max(kind: TypeKind) -> i128 {
     match kind {
-        TypeKind::U8 => u8::MAX as i128,
-        TypeKind::U16 => u16::MAX as i128,
-        TypeKind::U32 => u32::MAX as i128,
-        TypeKind::U64 => u64::MAX as i128,
+        TypeKind::U8 => i128::from(u8::MAX),
+        TypeKind::U16 => i128::from(u16::MAX),
+        TypeKind::U32 => i128::from(u32::MAX),
+        TypeKind::U64 => i128::from(u64::MAX),
         _ => 0,
     }
 }
@@ -151,7 +151,6 @@ fn float_rank(kind: TypeKind) -> u8 {
         TypeKind::Fp8 => 0,
         TypeKind::Fp16 => 1,
         TypeKind::Fp32 => 2,
-        TypeKind::Fp64 => 3,
         _ => 3,
     }
 }
@@ -302,7 +301,7 @@ pub(crate) fn checked_div(lhs: Value, rhs: Value) -> Result<Value> {
     let result = if kind == TypeKind::I64 {
         let lhs = i64::try_from(lhs_value).map_err(|_| TinyOneError::runtime("Division left operand is too large"))?;
         let rhs = i64::try_from(rhs_value).map_err(|_| TinyOneError::runtime("Division right operand is too large"))?;
-        floor_div(lhs, rhs).ok_or_else(|| TinyOneError::runtime("Division overflow"))? as i128
+        i128::from(floor_div(lhs, rhs).ok_or_else(|| TinyOneError::runtime("Division overflow"))?)
     } else {
         lhs_value
             .checked_div(rhs_value)
@@ -452,8 +451,7 @@ pub(crate) fn runtime_compare(op: Op, lhs: Value, rhs: Value) -> Result<Value> {
 
 pub(crate) fn runtime_is_false(value: &Value) -> bool {
     match value {
-        Value::Bool(false) => true,
-        Value::Null => true,
+        Value::Bool(false) | Value::Null => true,
         Value::Unit => false,
         Value::I8(0) | Value::I16(0) | Value::I32(0) | Value::I64(0) => true,
         Value::U8(0) | Value::U16(0) | Value::U32(0) | Value::U64(0) => true,

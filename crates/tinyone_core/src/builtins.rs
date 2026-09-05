@@ -943,7 +943,7 @@ mod tests {
     #[test]
     fn all_builtin_names_are_unique() {
         let mut names: Vec<&str> = BUILTINS.iter().map(|item| item.name).collect();
-        names.sort();
+        names.sort_unstable();
         let mut dedup = names.clone();
         dedup.dedup();
         assert_eq!(dedup, names, "builtin names must be unique: duplicates would shadow earlier slots");

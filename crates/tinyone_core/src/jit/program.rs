@@ -33,22 +33,56 @@ pub struct JitProgram {
 }
 
 impl JitProgram {
+    /// Compile a [`Program`] into a JIT-compiled [`JitProgram`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if bytecode verification of `program` fails (for example a
+    /// slot/function/struct limit exceeded, an invalid opcode, a malformed
+    /// branch target, or a stack under/overflow), or if a chunk cannot be
+    /// lowered to JIT ops because an instruction operand is out of range.
     pub fn compile(program: &Program) -> crate::Result<Self> {
         let verified = VerifiedProgram::verify(program.clone())?;
         let fingerprint = verified.fingerprint().to_owned();
         Self::compile_with_fingerprint(&verified, fingerprint, JitOptions::default())
     }
 
+    /// Compile a [`Program`] into a JIT-compiled [`JitProgram`] using the given
+    /// [`JitOptions`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if bytecode verification of `program` fails (for example a
+    /// slot/function/struct limit exceeded, an invalid opcode, a malformed
+    /// branch target, or a stack under/overflow), or if a chunk cannot be
+    /// lowered to JIT ops because an instruction operand is out of range.
     pub fn compile_with_options(program: &Program, options: JitOptions) -> crate::Result<Self> {
         let verified = VerifiedProgram::verify(program.clone())?;
         let fingerprint = verified.fingerprint().to_owned();
         Self::compile_with_fingerprint(&verified, fingerprint, options)
     }
 
+    /// Compile an already-verified [`VerifiedProgram`] into a JIT-compiled
+    /// [`JitProgram`], skipping bytecode verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if a chunk cannot be lowered to JIT ops because an
+    /// instruction operand is out of range. Bytecode verification is not
+    /// re-run, so a `verified` program that was later mutated may surface a
+    /// lowering error rather than a verification failure.
     pub fn compile_verified(verified: &VerifiedProgram) -> Result<Self> {
         Self::compile_verified_with_options(verified, JitOptions::default())
     }
 
+    /// Compile an already-verified [`VerifiedProgram`] into a JIT-compiled
+    /// [`JitProgram`] using the given [`JitOptions`], skipping bytecode
+    /// verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if a chunk cannot be lowered to JIT ops because an
+    /// instruction operand is out of range.
     pub fn compile_verified_with_options(verified: &VerifiedProgram, options: JitOptions) -> Result<Self> {
         Self::compile_with_fingerprint(verified, verified.fingerprint().to_owned(), options)
     }
@@ -83,16 +117,19 @@ impl JitProgram {
         })
     }
 
+    #[must_use]
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
     }
 
+    #[must_use]
     pub fn stats(&self) -> JitStats {
         self.stats
     }
 
     /// Returns optional dispatch and stack attribution collected when this
     /// program was compiled with `JitOptions::with_execution_profile(true)`.
+    #[must_use]
     pub fn execution_profile(&self) -> Option<&JitExecutionProfile> {
         self.execution_profile.as_ref()
     }
@@ -103,6 +140,7 @@ impl JitProgram {
         }
     }
 
+    #[must_use]
     pub fn listing(&self) -> String {
         use std::fmt::Write as _;
 
@@ -177,10 +215,27 @@ impl JitProgram {
         Ok(())
     }
 
+    /// Execute this JIT-compiled program, returning its final memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the program has no compiled main chunk, if the heap or
+    /// operand stack cannot be allocated, or if runtime execution fails (for
+    /// example a stack overflow, an illegal/unsupported operation, or another
+    /// runtime fault raised by the VM).
     pub fn run(&mut self, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyMemory> {
         JitVm::new(self, inputs).run(stdout)
     }
 
+    /// Execute this JIT-compiled program with explicit system arguments and
+    /// environment, returning its final memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the program has no compiled main chunk, if the heap or
+    /// operand stack cannot be allocated, or if runtime execution fails (for
+    /// example a stack overflow, an illegal/unsupported operation, or another
+    /// runtime fault raised by the VM).
     pub fn run_with_env(
         &mut self,
         stdout: &mut dyn Write,
@@ -194,6 +249,15 @@ impl JitProgram {
         vm.run(stdout)
     }
 
+    /// Execute this JIT-compiled program, collecting a [`TinyRunReport`] with
+    /// heap statistics in addition to the final memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the program has no compiled main chunk, if the heap or
+    /// operand stack cannot be allocated, or if runtime execution fails (for
+    /// example a stack overflow, an illegal/unsupported operation, or another
+    /// runtime fault raised by the VM).
     pub fn run_report(&mut self, stdout: &mut dyn Write, inputs: Vec<String>) -> Result<TinyRunReport> {
         JitVm::new(self, inputs).run_report(stdout)
     }
@@ -256,11 +320,27 @@ impl JitProgram {
     }
 }
 
+/// Write a human-readable JIT compilation listing for `program` to `path`.
+///
+/// # Errors
+///
+/// Returns `Err` if bytecode verification of `program` fails, if a chunk cannot
+/// be lowered to JIT ops because an instruction operand is out of range, if all
+/// chunks cannot be compiled, or if the listing file at `path` cannot be
+/// written.
 pub fn write_jit_listing(program: &Program, path: impl AsRef<Path>) -> Result<()> {
     let verified = VerifiedProgram::verify(program.clone())?;
     write_verified_jit_listing(&verified, path)
 }
 
+/// Write a human-readable JIT compilation listing for an already-verified
+/// `verified` program to `path`.
+///
+/// # Errors
+///
+/// Returns `Err` if a chunk cannot be lowered to JIT ops because an instruction
+/// operand is out of range, if all chunks cannot be compiled, or if the
+/// listing file at `path` cannot be written.
 pub fn write_verified_jit_listing(verified: &VerifiedProgram, path: impl AsRef<Path>) -> Result<()> {
     let mut compiled = JitProgram::compile_verified(verified)?;
     compiled.compile_all()?;

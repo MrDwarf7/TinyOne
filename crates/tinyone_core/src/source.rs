@@ -26,7 +26,7 @@ impl SourceMap {
         let mut low = 0usize;
         let mut high = self.line_starts.len();
         while low + 1 < high {
-            let mid = (low + high) / 2;
+            let mid = usize::midpoint(low, high);
             if self.line_starts[mid] <= pos {
                 low = mid;
             } else {

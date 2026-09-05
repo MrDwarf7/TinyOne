@@ -1,9 +1,9 @@
-//! Adversarial regression tests for TinyOne's memory-related modules.
+//! Adversarial regression tests for `TinyOne's` memory-related modules.
 //!
-//! Covers: alloc_table, memory_log, vm_hooks, tiny_allocator.
+//! Covers: `alloc_table`, `memory_log`, `vm_hooks`, `tiny_allocator`.
 //!
 //! Run with:
-//!   cargo test --test allocator_audit
+//!   cargo test --test `allocator_audit`
 //!
 //! These tests are designed to catch use-after-free risks, double-free risks,
 //! generation check bypasses, race conditions, panic paths, ring-buffer safety,
@@ -113,7 +113,7 @@ fn alloc_table_concurrent_insert_and_get() {
         let table = Arc::clone(&table);
         handles.push(thread::spawn(move || {
             // Each thread gets a distinct base address range so they don't collide.
-            let base_address = (t as usize) * 1000;
+            let base_address = (usize::try_from(t).expect("Failed to case base_address for t as a usize!")) * 1000;
             for i in 0usize..100 {
                 let addr = base_address + i;
                 let generation = (t * 100 + i as u64) + 1; // generation >= 1
@@ -201,7 +201,8 @@ fn memory_log_concurrent_log_no_deadlock() {
         let log = Arc::clone(&log);
         handles.push(thread::spawn(move || {
             for i in 0u64..1_000 {
-                log.log(MemoryLogEntry::success(t * 1_000 + i, t, OperationType::Allocate, 0x2000 + i as usize, 1, 8));
+                let ui = usize::try_from(i).expect("Failed to cast i as a usize!");
+                log.log(MemoryLogEntry::success(t * 1_000 + i, t, OperationType::Allocate, 0x2000 + ui, 1, 8));
             }
         }));
     }
@@ -586,15 +587,15 @@ fn alloc_table_stats_live_bytes_never_underflows() {
 
     // Insert and remove several records of varying sizes.
     for i in 0u64..20 {
-        let addr = i as usize;
-        let size = (i as usize + 1) * 8;
-        table.insert(make_record(addr, i + 1, size)).unwrap();
+        let ui = usize::try_from(i).expect("Failed to cast i as a usize!");
+        let size = (ui + 1) * 8;
+        table.insert(make_record(ui, i + 1, size)).unwrap();
     }
     assert!(table.stats().live_bytes > 0);
 
     for i in 0u64..20 {
-        let addr = i as usize;
-        table.remove(addr, i + 1).unwrap();
+        let ui = usize::try_from(i).expect("Failed to cast i as a usize!");
+        table.remove(ui, i + 1).unwrap();
         // After each remove live_bytes must still be >= 0 (it's usize so can't
         // go negative, but if the accounting is wrong it could panic in debug
         // mode via wrapping_sub — or in release mode silently wrap).
@@ -665,8 +666,9 @@ fn memory_error_pusher_exactly_at_capacity_no_panic() {
 
     // Push exactly 3 error events.
     for i in 0u64..3 {
+        let ui = usize::try_from(i).expect("Failed to cast i as a usize!");
         registry.dispatch(MemoryEvent::StalePointer {
-            vm_address:   i as usize,
+            vm_address:   ui,
             expected_gen: 1,
             actual_gen:   2,
         });
@@ -705,7 +707,8 @@ fn alloc_table_concurrent_mixed_operations() {
     for t in 0u64..8 {
         let table = Arc::clone(&table);
         handles.push(thread::spawn(move || {
-            let base = (t as usize) * 500;
+            let tu = usize::try_from(t).expect("Failed to cast t as a usize!");
+            let base = (tu) * 500;
             for i in 0..50usize {
                 let addr = base + i;
                 let generation = t + 1;

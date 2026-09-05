@@ -11,7 +11,7 @@
 //! `decode_value` translation.
 //!
 //! Growth is amortized doubling, matching `Vec<T>`'s own strategy — exact-
-//! size-per-push would turn every push-in-a-loop TinyLang program into
+//! size-per-push would turn every push-in-a-loop `TinyLang` program into
 //! O(n^2) real Ralloc reallocations. Callers that need to charge a heap
 //! byte budget by *logical* length (as `TinyHeap` already does via
 //! `VALUE_BYTES`-per-element accounting) should keep doing so independently

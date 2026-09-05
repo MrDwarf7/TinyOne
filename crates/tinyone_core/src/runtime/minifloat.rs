@@ -1,4 +1,4 @@
-//! Precision-rounding for TinyOne's reduced-precision float kinds.
+//! Precision-rounding for `TinyOne`'s reduced-precision float kinds.
 //!
 //! `Value::Float { kind, bits }` always stores a full `f64` — there is no
 //! native, bit-packed `f16`/`f8` storage. Precision is enforced instead by
@@ -13,7 +13,7 @@ use crate::TypeKind;
 /// Rounds `value` to the nearest `f32`-representable value. Native and
 /// exact — Rust's `f32` cast already implements round-to-nearest-even.
 pub(crate) fn round_to_fp32(value: f64) -> f64 {
-    value as f32 as f64
+    f64::from(value as f32)
 }
 
 /// Rounds `value` to the nearest IEEE-754 binary16 (half precision) value:

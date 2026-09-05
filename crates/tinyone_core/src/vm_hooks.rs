@@ -2,7 +2,7 @@
 //!
 //! This module provides a pluggable hook system that external diagnostic tools
 //! (tests, profilers, error reporters) can use to receive memory events emitted
-//! by the TinyOne VM.
+//! by the `TinyOne` VM.
 //!
 //! # Design
 //! - [`MemoryEvent`] describes every class of memory activity the VM can surface.
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, RwLock};
 // MemoryEvent
 // ---------------------------------------------------------------------------
 
-/// Describes a memory-related event that occurred inside the TinyOne VM.
+/// Describes a memory-related event that occurred inside the `TinyOne` VM.
 ///
 /// The `vm_address` and `vm_generation` fields use the VM's internal heap
 /// addressing scheme — they are not raw host pointers.
@@ -132,6 +132,7 @@ impl MemoryEvent {
     ///
     /// Non-error events (`Allocated`, `Freed`, `Reallocated`, `ShutdownDrain`)
     /// return `false`.
+    #[must_use]
     pub fn is_error(&self) -> bool {
         matches!(
             self,
@@ -146,6 +147,7 @@ impl MemoryEvent {
 
     /// Returns a short, human-readable name for the event kind, suitable for
     /// log labels and metrics tags.
+    #[must_use]
     pub fn kind_name(&self) -> &'static str {
         match self {
             MemoryEvent::Allocated { .. } => "Allocated",
@@ -166,7 +168,7 @@ impl MemoryEvent {
 // VmMemoryHook trait
 // ---------------------------------------------------------------------------
 
-/// A hook that receives memory events from the TinyOne VM.
+/// A hook that receives memory events from the `TinyOne` VM.
 ///
 /// Implementors must be `Send + Sync` so that they can be shared safely across
 /// VM threads. Register hooks with [`HookRegistry::register`].
@@ -197,6 +199,7 @@ pub struct HookRegistry {
 
 impl HookRegistry {
     /// Create a new, empty `HookRegistry`.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             hooks:      RwLock::new(Vec::new()),
@@ -209,6 +212,10 @@ impl HookRegistry {
     /// This acquires a write lock on the hook list briefly, so it is
     /// safe to call while no dispatch is in progress (or while another thread
     /// is mid-dispatch — the write will wait until all readers finish).
+    ///
+    /// # Panics
+    /// Panics if the `hooks` [`RwLock`] is poisoned (a hook panicked while a
+    /// previous `register`, `clear`, or `dispatch` held the write/read lock).
     pub fn register(&self, hook: Arc<dyn VmMemoryHook>) {
         let mut hooks = self.hooks.write().expect("HookRegistry RwLock poisoned on register");
         hooks.push(hook);
@@ -216,6 +223,10 @@ impl HookRegistry {
     }
 
     /// Remove all registered hooks.
+    ///
+    /// # Panics
+    /// Panics if the `hooks` [`RwLock`] is poisoned (a hook panicked while a
+    /// previous `register` or `dispatch` held the lock).
     pub fn clear(&self) {
         let mut hooks = self.hooks.write().expect("HookRegistry RwLock poisoned on clear");
         hooks.clear();
@@ -228,6 +239,12 @@ impl HookRegistry {
     /// Each hook is invoked inside [`std::panic::catch_unwind`]. A hook that
     /// panics is skipped for this event and a message is printed to stderr.
     /// The panic is **not** propagated — the VM remains stable.
+    ///
+    /// # Panics
+    /// Panics if the `hooks` [`RwLock`] is poisoned (a hook panicked while a
+    /// previous `register` or `clear` held the write lock). This is distinct
+    /// from hook-internal panics, which are caught by
+    /// [`std::panic::catch_unwind`].
     pub fn dispatch(&self, event: MemoryEvent) {
         if self.hook_count.load(Ordering::Acquire) == 0 {
             return;
@@ -257,6 +274,10 @@ impl HookRegistry {
     }
 
     /// Returns `true` if no hooks are currently registered.
+    ///
+    /// # Panics
+    /// Panics if the `hooks` [`RwLock`] is poisoned (a hook panicked while a
+    /// previous `register` or `dispatch` held the lock).
     pub fn is_empty(&self) -> bool {
         self.hooks
             .read()
@@ -265,6 +286,10 @@ impl HookRegistry {
     }
 
     /// Returns the number of currently registered hooks.
+    ///
+    /// # Panics
+    /// Panics if the `hooks` [`RwLock`] is poisoned (a hook panicked while a
+    /// previous `register` or `dispatch` held the lock).
     pub fn hook_count(&self) -> usize {
         self.hooks
             .read()
@@ -321,6 +346,7 @@ impl MemoryErrorPusher {
     ///
     /// When the queue reaches `capacity`, the oldest stored event is evicted
     /// before the new event is enqueued.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
@@ -329,6 +355,7 @@ impl MemoryErrorPusher {
     }
 
     /// Create a `MemoryErrorPusher` with the default capacity (256 events).
+    #[must_use]
     pub fn with_default_capacity() -> Self {
         Self::new(Self::DEFAULT_CAPACITY)
     }
@@ -336,6 +363,10 @@ impl MemoryErrorPusher {
     /// Drain all stored error events, emptying the internal queue.
     ///
     /// Returns the events in the order they were received (oldest first).
+    ///
+    /// # Panics
+    /// Panics if the internal error-queue [`Mutex`] is poisoned (a thread
+    /// panicked while holding the lock).
     pub fn drain_errors(&self) -> Vec<MemoryEvent> {
         let mut queue = self
             .queue
@@ -345,6 +376,10 @@ impl MemoryErrorPusher {
     }
 
     /// Peek at the current number of queued error events without draining.
+    ///
+    /// # Panics
+    /// Panics if the internal error-queue [`Mutex`] is poisoned (a thread
+    /// panicked while holding the lock).
     pub fn error_count(&self) -> usize {
         self.queue
             .lock()

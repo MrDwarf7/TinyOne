@@ -10,6 +10,19 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(unused_must_use)]
 #![deny(missing_docs)]
+// Clippy pedantic: cast-family and pass-by-value lints allowed crate-wide; this is a
+// pointer/allocator crate where numeric casts and by-value C-ABI types are intentional.
+// Doc-comment lints are tracked in docs/clippy_doc_lints.md for a later sweep.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_ptr_alignment,
+    clippy::checked_conversions,
+    clippy::needless_pass_by_value,
+    clippy::redundant_closure_for_method_calls
+)]
 
 mod arena;
 mod backend;

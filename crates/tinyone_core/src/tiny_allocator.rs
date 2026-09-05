@@ -1,4 +1,4 @@
-//! `TinyAllocator` — the boundary layer between TinyOne's VM heap and Ralloc.
+//! `TinyAllocator` — the boundary layer between `TinyOne`'s VM heap and Ralloc.
 //!
 //! This module owns:
 //! - An [`AllocTable`] — the live-allocation registry keyed by `vm_address`.
@@ -12,7 +12,7 @@
 //! allocation from `ralloc::VmAllocator`, stored in the `native` side table
 //! rather than inside [`AllocRecord`] itself (records stay `Clone`, and
 //! `VmAllocation` is deliberately `!Clone`). This does not change where
-//! TinyOne's heap object *bytes* live — `runtime/heap.rs` keeps owning those
+//! `TinyOne`'s heap object *bytes* live — `runtime/heap.rs` keeps owning those
 //! directly — it makes the allocator's bookkeeping shadow a real allocator
 //! instead of a placeholder counter, so native exhaustion is a real,
 //! reportable condition.
@@ -226,6 +226,7 @@ impl TinyAllocatorError {
     /// [`GenerationMismatch`]: TinyAllocatorError::GenerationMismatch
     /// [`DoubleFree`]: TinyAllocatorError::DoubleFree
     /// [`NativeAllocFailed`]: TinyAllocatorError::NativeAllocFailed
+    #[must_use]
     pub fn is_safety_violation(&self) -> bool {
         matches!(
             self,
@@ -346,7 +347,7 @@ pub struct ShutdownReport {
 
 // ── TinyAllocator ─────────────────────────────────────────────────────────────
 
-/// The boundary layer between TinyOne's VM heap and native (Ralloc) memory.
+/// The boundary layer between `TinyOne`'s VM heap and native (Ralloc) memory.
 ///
 /// `TinyAllocator` records, logs, and hooks every allocation operation while
 /// using Ralloc for native backing. Heap payloads that already own a
@@ -387,6 +388,7 @@ impl TinyAllocator {
     // ── Construction ──────────────────────────────────────────────────────────
 
     /// Create a new allocator with the given [`TinyAllocatorConfig`].
+    #[must_use]
     pub fn new(config: TinyAllocatorConfig) -> Self {
         let log = MemoryLog::new(config.log_capacity);
         if !config.enable_logging {
@@ -403,6 +405,7 @@ impl TinyAllocator {
     }
 
     /// Create a new allocator with [`TinyAllocatorConfig::default`] settings.
+    #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(TinyAllocatorConfig::default())
     }
@@ -430,6 +433,10 @@ impl TinyAllocator {
     /// been shut down, [`TinyAllocatorError::InvalidSize`] for zero sizes, or
     /// [`TinyAllocatorError::AllocationTableFull`] if the table already holds a
     /// live record at `vm_address`.
+    ///
+    /// # Panics
+    /// Panics if the `native` allocation map's mutex is poisoned (another
+    /// thread panicked while holding the lock).
     pub fn allocate(
         &self,
         vm_address: usize,
@@ -447,24 +454,21 @@ impl TinyAllocator {
 
         // Make the real native allocation before touching the table, so a
         // native OOM never leaves a record behind with nothing backing it.
-        let native_alloc = match ralloc::VmAllocator::global().allocate(size) {
-            Ok(alloc) => alloc,
-            Err(_) => {
-                self.log.log(MemoryLogEntry::failure(
-                    seq,
-                    thread_id,
-                    OperationType::Error,
-                    vm_address,
-                    vm_generation,
-                    "native_alloc_failed",
-                ));
-                self.hooks.dispatch(MemoryEvent::OutOfMemory {
-                    requested_size: size,
-                    live_bytes:     self.table.stats().live_bytes,
-                    limit_bytes:    ralloc::VmAllocator::capacity(),
-                });
-                return Err(TinyAllocatorError::NativeAllocFailed);
-            }
+        let Ok(native_alloc) = ralloc::VmAllocator::global().allocate(size) else {
+            self.log.log(MemoryLogEntry::failure(
+                seq,
+                thread_id,
+                OperationType::Error,
+                vm_address,
+                vm_generation,
+                "native_alloc_failed",
+            ));
+            self.hooks.dispatch(MemoryEvent::OutOfMemory {
+                requested_size: size,
+                live_bytes:     self.table.stats().live_bytes,
+                limit_bytes:    ralloc::VmAllocator::capacity(),
+            });
+            return Err(TinyAllocatorError::NativeAllocFailed);
         };
 
         let record = AllocRecord {
@@ -510,6 +514,12 @@ impl TinyAllocator {
     /// [`free`][Self::free] and [`shutdown_drain`][Self::shutdown_drain]
     /// already treat as "nothing to release here" — the real memory is
     /// released when the owning `RallocBytes` is dropped instead.
+    ///
+    /// # Errors
+    /// Returns [`TinyAllocatorError::ShutdownInProgress`] if the allocator has
+    /// been shut down, [`TinyAllocatorError::InvalidSize`] for zero sizes, or
+    /// [`TinyAllocatorError::AllocationTableFull`] if the table already holds a
+    /// live record at `vm_address`.
     pub fn allocate_owned(
         &self,
         vm_address: usize,
@@ -588,6 +598,10 @@ impl TinyAllocator {
     /// # Errors
     /// Returns [`TinyAllocatorError::GenerationMismatch`] or
     /// [`TinyAllocatorError::DoubleFree`] on failure.
+    ///
+    /// # Panics
+    /// Panics if the `native` allocation map's mutex is poisoned (another
+    /// thread panicked while holding the lock).
     pub fn free(&self, vm_address: usize, vm_generation: u64, thread_id: u64) -> Result<(), TinyAllocatorError> {
         let seq = self.next_seq();
 
@@ -640,7 +654,7 @@ impl TinyAllocator {
                 })
             }
 
-            Err(AllocTableError::NotFound) | Err(AllocTableError::AlreadyDead) => {
+            Err(AllocTableError::NotFound | AllocTableError::AlreadyDead) => {
                 self.log.log(MemoryLogEntry::failure(
                     seq,
                     thread_id,
@@ -677,6 +691,10 @@ impl TinyAllocator {
     /// is not a live allocation, [`TinyAllocatorError::InvalidSize`] for a
     /// zero `new_size`, or [`TinyAllocatorError::NativeAllocFailed`] if the
     /// native reallocation could not be satisfied.
+    ///
+    /// # Panics
+    /// Panics if the `native` allocation map's mutex is poisoned (another
+    /// thread panicked while holding the lock).
     pub fn reallocate(
         &self,
         vm_address: usize,
@@ -791,55 +809,52 @@ impl TinyAllocator {
         let _ = operation;
         let seq = self.next_seq();
 
-        match self.table.get(vm_address, vm_generation) {
-            Some(_record) => {
-                self.log.log(MemoryLogEntry::success(
-                    seq,
-                    thread_id,
-                    OperationType::Validate,
-                    vm_address,
-                    vm_generation,
-                    0,
-                ));
-                Ok(())
-            }
-            None => {
-                // To differentiate NotFound from GenerationMismatch we need to
-                // probe without a generation filter.  Use a raw remove-probe
-                // pattern without actually mutating the table: peek via a
-                // mismatched generation to see if the address exists at all.
-                // Since `table.get` returns None for both cases, we do a
-                // secondary generationless check by attempting to get with
-                // generation 0 (which `AllocTable::get` treats as "any").
-                // However, the AllocTable implementation compares exactly, so
-                // generation 0 is treated as the literal generation 0.
-                //
-                // Safest approach: use the same pattern as free() — treat
-                // ambiguous None as GenerationMismatch (stale pointer), which
-                // is the correct safety response in either case.
-                self.log.log(MemoryLogEntry::failure(
-                    seq,
-                    thread_id,
-                    OperationType::Error,
-                    vm_address,
-                    vm_generation,
-                    "stale_pointer",
-                ));
+        if let Some(_record) = self.table.get(vm_address, vm_generation) {
+            self.log.log(MemoryLogEntry::success(
+                seq,
+                thread_id,
+                OperationType::Validate,
+                vm_address,
+                vm_generation,
+                0,
+            ));
+            Ok(())
+        } else {
+            // To differentiate NotFound from GenerationMismatch we need to
+            // probe without a generation filter.  Use a raw remove-probe
+            // pattern without actually mutating the table: peek via a
+            // mismatched generation to see if the address exists at all.
+            // Since `table.get` returns None for both cases, we do a
+            // secondary generationless check by attempting to get with
+            // generation 0 (which `AllocTable::get` treats as "any").
+            // However, the AllocTable implementation compares exactly, so
+            // generation 0 is treated as the literal generation 0.
+            //
+            // Safest approach: use the same pattern as free() — treat
+            // ambiguous None as GenerationMismatch (stale pointer), which
+            // is the correct safety response in either case.
+            self.log.log(MemoryLogEntry::failure(
+                seq,
+                thread_id,
+                OperationType::Error,
+                vm_address,
+                vm_generation,
+                "stale_pointer",
+            ));
 
-                self.hooks.dispatch(MemoryEvent::StalePointer {
-                    vm_address,
-                    expected_gen: vm_generation,
-                    actual_gen: 0, // unknown; we can't recover it without exposing more table API
-                });
+            self.hooks.dispatch(MemoryEvent::StalePointer {
+                vm_address,
+                expected_gen: vm_generation,
+                actual_gen: 0, // unknown; we can't recover it without exposing more table API
+            });
 
-                // Return GenerationMismatch as the canonical error for any
-                // failed validate — Phase 3 can refine this with table introspection.
-                Err(TinyAllocatorError::GenerationMismatch {
-                    vm_address,
-                    expected_gen: vm_generation,
-                    actual_gen: 0,
-                })
-            }
+            // Return GenerationMismatch as the canonical error for any
+            // failed validate — Phase 3 can refine this with table introspection.
+            Err(TinyAllocatorError::GenerationMismatch {
+                vm_address,
+                expected_gen: vm_generation,
+                actual_gen: 0,
+            })
         }
     }
 
@@ -884,6 +899,10 @@ impl TinyAllocator {
     /// [`MemoryEvent::ShutdownDrain`].
     ///
     /// Returns a [`ShutdownReport`] describing what was live at shutdown.
+    ///
+    /// # Panics
+    /// Panics if the `native` allocation map's mutex is poisoned (another
+    /// thread panicked while holding the lock).
     pub fn shutdown_drain(&self, thread_id: u64) -> ShutdownReport {
         // Capture stats before we drain (drain clears the table but not the
         // lifetime counters).

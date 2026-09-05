@@ -138,9 +138,9 @@ pub(crate) fn runtime_call_builtin(
         "to_int" => {
             match &args[0] {
                 Value::I64(value) => Ok(Value::I64(*value)),
-                Value::U8(value) => Ok(Value::I64(*value as i64)),
-                Value::U16(value) => Ok(Value::I64(*value as i64)),
-                Value::U32(value) => Ok(Value::I64(*value as i64)),
+                Value::U8(value) => Ok(Value::I64(i64::from(*value))),
+                Value::U16(value) => Ok(Value::I64(i64::from(*value))),
+                Value::U32(value) => Ok(Value::I64(i64::from(*value))),
                 _ => {
                     let text = expect_string(context, &args[0], "to_int")?;
                     if !looks_like_int(&text) {

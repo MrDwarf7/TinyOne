@@ -409,7 +409,7 @@ mod tests {
             allocations.push(ptr);
         }
 
-        assert!(!allocations.is_empty());
+        assert_ne!(allocations, [] as [*mut std::ffi::c_void; 0]);
         assert!(unsafe { ralloc_malloc(8 * 1024) }.is_null());
 
         for ptr in allocations {

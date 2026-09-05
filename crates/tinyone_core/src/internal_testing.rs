@@ -189,13 +189,13 @@ mod tests {
     #[test]
     fn internal_inspection_reports_private_jit_shape() {
         let program = compile_source_fixture(
-            r#"
+            r"
             let i = 0
             while i < 3 {
               i = i + 1
             }
             print i
-            "#,
+            ",
             "internal-hook-smoke.to",
         )
         .expect("compile fixture");

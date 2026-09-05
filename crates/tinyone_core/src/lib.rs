@@ -1,3 +1,28 @@
+// Clippy pedantic: lints allowed at crate level because they conflict with this
+// codebase's intentional design (VM/pointer-heavy, FFI-facing, public API ergonomics).
+// Genuine pedantic lints elsewhere are still fixed by hand; only the categories below
+// are suppressed wholesale. Doc-comment lints (missing_errors_doc / missing_panics_doc)
+// are tracked separately in docs/clippy_doc_lints.md for a later sweep.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_ptr_alignment,
+    clippy::checked_conversions,
+    clippy::needless_pass_by_value,
+    clippy::implicit_hasher,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::fn_params_excessive_bools,
+    clippy::unnecessary_wraps,
+    clippy::similar_names,
+    clippy::float_cmp,
+    clippy::match_same_arms,
+    clippy::redundant_closure_for_method_calls,
+    clippy::needless_raw_string_hashes // TODO: fix this lint up properly!
+)]
+
 pub mod alloc_table;
 mod api;
 mod artifact_io;

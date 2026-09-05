@@ -4,7 +4,7 @@
 //! [`runtime_call_stdlib_builtin`]. They are bytecode-stable: their
 //! definitions live in [`crate::builtins::BUILTINS`] after index 34.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ fn expect_kind(value: &Value, kind: &str, operation: &str) -> Result<i64> {
 }
 
 fn parse_type_name(text: &str, operation: &str) -> Result<TypeKind> {
-    TypeKind::from_name(text).ok_or_else(|| TinyOneError::runtime(format!("{operation} unknown type name {:?}", text)))
+    TypeKind::from_name(text).ok_or_else(|| TinyOneError::runtime(format!("{operation} unknown type name {text:?}")))
 }
 
 fn runtime_integer_type_name(value: &Value) -> Option<&'static str> {
@@ -56,7 +56,7 @@ pub fn b_int_cast(value: &Value, kind: TypeKind, operation: &str) -> Result<Valu
 /// Casts `value` to a `Value::Float` of the given float `kind`, rounding to
 /// that format's precision (`round_to_kind`). Integer operands are promoted
 /// to `f64` first. This is the only way to produce a non-`Fp64` float in
-/// TinyLang source — float literals are always `Fp64` (see `Op::PushFloat`).
+/// `TinyLang` source — float literals are always `Fp64` (see `Op::PushFloat`).
 pub fn b_float_cast(value: &Value, kind: TypeKind, operation: &str) -> Result<Value> {
     let bits = match value {
         Value::Float { bits, .. } => *bits,
@@ -224,7 +224,7 @@ pub fn b_map_has(context: &TinyRuntimeContext, target: &Value, key: &Value) -> R
     let HeapData::Map(entries) = &object.data else {
         return Err(TinyOneError::runtime("map_has expects a map"));
     };
-    Ok(Value::I64(indexed_map_index(&heap, entries, lookup_key.as_ref())?.is_some() as i64))
+    Ok(Value::I64(i64::from(indexed_map_index(&heap, entries, lookup_key.as_ref())?.is_some())))
 }
 
 pub fn b_map_del(context: &mut TinyRuntimeContext, target: &Value, key: &Value) -> Result<Value> {
@@ -475,7 +475,7 @@ pub fn b_str_byte_at(context: &TinyRuntimeContext, target: &Value, index: &Value
     let byte = bytes
         .get(index)
         .ok_or_else(|| TinyOneError::runtime("str_byte_at: index out of bounds"))?;
-    Ok(Value::I64(*byte as i64))
+    Ok(Value::I64(i64::from(*byte)))
 }
 
 pub fn b_str_char_at(context: &mut TinyRuntimeContext, target: &Value, index: &Value) -> Result<Value> {
@@ -549,7 +549,7 @@ pub fn b_str_is_utf8(context: &mut TinyRuntimeContext, target: &Value) -> Result
     let HeapData::Buffer(bytes) = &object.data else {
         return Err(TinyOneError::runtime("str_is_utf8 expects a String or Buffer"));
     };
-    Ok(Value::I64(std::str::from_utf8(bytes.as_slice()).is_ok() as i64))
+    Ok(Value::I64(i64::from(std::str::from_utf8(bytes.as_slice()).is_ok())))
 }
 
 pub fn b_str_from_buffer(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -581,7 +581,7 @@ pub fn b_mutex_new(context: &mut TinyRuntimeContext) -> Result<Value> {
 }
 
 /// Acquires the mutex. MUST release the heap lock before blocking — otherwise
-/// the calling thread holds the heap Mutex while waiting on TinyMutex, which
+/// the calling thread holds the heap Mutex while waiting on `TinyMutex`, which
 /// would deadlock any other thread trying to allocate or access heap objects.
 pub fn b_mutex_lock(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
     // Step 1: extract the Arc<TinyMutex> — releases the heap guard.
@@ -693,7 +693,7 @@ pub fn b_thread_spawn(
         .callable_function_from(caller_function, &fn_name)
         .map(|(index, function)| (index, function.param_count))
         .ok_or_else(|| {
-            TinyOneError::runtime(format!("thread_spawn: function {:?} not found or not exported", fn_name))
+            TinyOneError::runtime(format!("thread_spawn: function {fn_name:?} not found or not exported"))
         })?;
 
     if fn_args.len() != fn_param_count {
@@ -807,15 +807,15 @@ fn variant_payload(context: &TinyRuntimeContext, target: &Value, type_name: &str
 }
 
 pub fn b_result_is_ok(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
-    Ok(Value::I64(
-        (variant_tag(context, target, "tinyone.result.Result", "result_is_ok")? == VARIANT_OK) as i64,
-    ))
+    Ok(Value::I64(i64::from(
+        variant_tag(context, target, "tinyone.result.Result", "result_is_ok")? == VARIANT_OK,
+    )))
 }
 
 pub fn b_result_is_err(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
-    Ok(Value::I64(
-        (variant_tag(context, target, "tinyone.result.Result", "result_is_err")? == VARIANT_ERR) as i64,
-    ))
+    Ok(Value::I64(i64::from(
+        variant_tag(context, target, "tinyone.result.Result", "result_is_err")? == VARIANT_ERR,
+    )))
 }
 
 pub fn b_result_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -855,15 +855,15 @@ pub fn b_option_none(context: &mut TinyRuntimeContext) -> Result<Value> {
 }
 
 pub fn b_option_is_some(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
-    Ok(Value::I64(
-        (variant_tag(context, target, "tinyone.option.Option", "option_is_some")? == VARIANT_SOME) as i64,
-    ))
+    Ok(Value::I64(i64::from(
+        variant_tag(context, target, "tinyone.option.Option", "option_is_some")? == VARIANT_SOME,
+    )))
 }
 
 pub fn b_option_is_none(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
-    Ok(Value::I64(
-        (variant_tag(context, target, "tinyone.option.Option", "option_is_none")? == VARIANT_NONE) as i64,
-    ))
+    Ok(Value::I64(i64::from(
+        variant_tag(context, target, "tinyone.option.Option", "option_is_none")? == VARIANT_NONE,
+    )))
 }
 
 pub fn b_option_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -920,7 +920,7 @@ pub fn b_closure_function(context: &TinyRuntimeContext, target: &Value) -> Resul
     let HeapData::Closure { function_id, .. } = &object.data else {
         return Err(TinyOneError::runtime("closure_function expects a Closure"));
     };
-    Ok(Value::I64(*function_id as i64))
+    Ok(Value::I64(i64::from(*function_id)))
 }
 
 pub fn b_closure_captures(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -946,7 +946,7 @@ pub fn b_sum_tag(context: &TinyRuntimeContext, target: &Value) -> Result<Value> 
     let HeapData::Sum { tag, .. } = &object.data else {
         return Err(TinyOneError::runtime("sum_tag expects a Sum"));
     };
-    Ok(Value::I64(*tag as i64))
+    Ok(Value::I64(i64::from(*tag)))
 }
 
 pub fn b_sum_has_payload(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -955,7 +955,7 @@ pub fn b_sum_has_payload(context: &TinyRuntimeContext, target: &Value) -> Result
     let HeapData::Sum { payload, .. } = &object.data else {
         return Err(TinyOneError::runtime("sum_has_payload expects a Sum"));
     };
-    Ok(Value::I64(payload.is_some() as i64))
+    Ok(Value::I64(i64::from(payload.is_some())))
 }
 
 pub fn b_sum_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -984,7 +984,7 @@ pub fn b_tagged_union_tag(context: &TinyRuntimeContext, target: &Value) -> Resul
     let HeapData::TaggedUnion { tag, .. } = &object.data else {
         return Err(TinyOneError::runtime("tagged_union_tag expects a TaggedUnion"));
     };
-    Ok(Value::I64(*tag as i64))
+    Ok(Value::I64(i64::from(*tag)))
 }
 
 pub fn b_tagged_union_unwrap(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
@@ -1010,9 +1010,9 @@ pub fn b_dyn_metadata(context: &TinyRuntimeContext, target: &Value, want_vtable:
         return Err(TinyOneError::runtime("dyn metadata expects a Dyn"));
     };
     Ok(Value::I64(if want_vtable {
-        *vtable_id as i64
+        i64::from(*vtable_id)
     } else {
-        *type_id as i64
+        i64::from(*type_id)
     }))
 }
 
@@ -1149,7 +1149,7 @@ pub fn b_sys_argv(context: &mut TinyRuntimeContext, index: &Value) -> Result<Val
 
 pub fn b_sys_env_has(context: &TinyRuntimeContext, name: &Value) -> Result<Value> {
     let key = expect_string(context, name, "sys_env_has")?;
-    Ok(Value::I64(context.sys_env.contains_key(&key) as i64))
+    Ok(Value::I64(i64::from(context.sys_env.contains_key(&key))))
 }
 
 pub fn b_sys_env_get(context: &mut TinyRuntimeContext, name: &Value) -> Result<Value> {
@@ -1241,12 +1241,12 @@ pub fn b_fs_write(context: &mut TinyRuntimeContext, target: &Value, buffer: &Val
 
 pub fn b_fs_exists(context: &TinyRuntimeContext, target: &Value) -> Result<Value> {
     let path = expect_string(context, target, "fs_exists")?;
-    Ok(Value::I64(std::path::Path::new(&path).exists() as i64))
+    Ok(Value::I64(i64::from(std::path::Path::new(&path).exists())))
 }
 
 pub fn b_fs_list_dir(context: &mut TinyRuntimeContext, target: &Value) -> Result<Value> {
     let path = expect_string(context, target, "fs_list_dir")?;
-    let mut sorted = BTreeMap::new();
+    let mut sorted = BTreeSet::new();
     let mut name_bytes = 0usize;
     let entries = std::fs::read_dir(&path).map_err(|error| TinyOneError::runtime(format!("fs_list_dir: {error}")))?;
     for entry in entries {
@@ -1266,10 +1266,10 @@ pub fn b_fs_list_dir(context: &mut TinyRuntimeContext, target: &Value) -> Result
                 crate::MAX_BUFFER_BYTES
             )));
         }
-        sorted.insert(name, ());
+        sorted.insert(name);
     }
     let mut names: Vec<Value> = Vec::with_capacity(sorted.len());
-    for name in sorted.into_keys() {
+    for name in sorted {
         names.push(Value::Heap(context.heap().alloc_string(name)?));
     }
     Ok(Value::Heap(context.heap().alloc_array(names)?))
@@ -1326,24 +1326,24 @@ pub fn b_math_max(lhs: &Value, rhs: &Value) -> Result<Value> {
 pub fn b_logic_and(lhs: &Value, rhs: &Value) -> Result<Value> {
     let a = expect_int(lhs, "logic_and")?;
     let b = expect_int(rhs, "logic_and")?;
-    Ok(Value::I64(((a != 0) && (b != 0)) as i64))
+    Ok(Value::I64(i64::from((a != 0) && (b != 0))))
 }
 
 pub fn b_logic_or(lhs: &Value, rhs: &Value) -> Result<Value> {
     let a = expect_int(lhs, "logic_or")?;
     let b = expect_int(rhs, "logic_or")?;
-    Ok(Value::I64(((a != 0) || (b != 0)) as i64))
+    Ok(Value::I64(i64::from((a != 0) || (b != 0))))
 }
 
 pub fn b_logic_not(value: &Value) -> Result<Value> {
     let v = expect_int(value, "logic_not")?;
-    Ok(Value::I64((v == 0) as i64))
+    Ok(Value::I64(i64::from(v == 0)))
 }
 
 pub fn b_logic_xor(lhs: &Value, rhs: &Value) -> Result<Value> {
     let a = expect_int(lhs, "logic_xor")?;
     let b = expect_int(rhs, "logic_xor")?;
-    Ok(Value::I64(((a != 0) ^ (b != 0)) as i64))
+    Ok(Value::I64(i64::from((a != 0) ^ (b != 0))))
 }
 
 // ---------------------------------------------------------------------------
@@ -1418,7 +1418,7 @@ pub fn b_type_of(context: &mut TinyRuntimeContext, value: &Value) -> Result<Valu
 pub fn b_type_id(context: &mut TinyRuntimeContext, type_name: &Value) -> Result<Value> {
     let name = expect_string(context, type_name, "type_id")?;
     let kind = parse_type_name(&name, "type_id")?;
-    Ok(Value::I64(kind.type_id() as i64))
+    Ok(Value::I64(i64::from(kind.type_id())))
 }
 
 pub fn b_smallest_fit(value: &Value, context: &mut TinyRuntimeContext) -> Result<Value> {
@@ -1457,7 +1457,7 @@ fn typed_binary(
     let rhs = expect_int(rhs, op_name)?;
     let name = expect_string(context, type_name, op_name)?;
     let kind = parse_type_name(&name, op_name)?;
-    let result = op(lhs as i128, rhs as i128)
+    let result = op(i128::from(lhs), i128::from(rhs))
         .ok_or_else(|| TinyOneError::runtime(format!("Runtime.Memory_Overflow: {op_name} intermediate overflow")))?;
     integer_value_from_kind(kind, result, op_name)
 }
@@ -1482,7 +1482,7 @@ pub fn b_typed_div(context: &TinyRuntimeContext, lhs: &Value, rhs: &Value, type_
     if rhs == 0 {
         return Err(TinyOneError::runtime("Runtime.Division_By_Zero"));
     }
-    let quotient = (lhs as i128) / (rhs as i128);
+    let quotient = i128::from(lhs) / i128::from(rhs);
     integer_value_from_kind(kind, quotient, "typed_div")
 }
 
@@ -1493,7 +1493,7 @@ pub fn b_typed_neg(context: &TinyRuntimeContext, value: &Value, type_name: &Valu
     if !kind.is_signed() {
         return Err(TinyOneError::runtime(format!("typed_neg: {} is not signed", kind.name())));
     }
-    let negated = (v as i128)
+    let negated = i128::from(v)
         .checked_neg()
         .ok_or_else(|| TinyOneError::runtime("Runtime.Memory_Overflow: typed_neg intermediate overflow"))?;
     integer_value_from_kind(kind, negated, "typed_neg")
